@@ -15,23 +15,21 @@ The library is:
 - Very easy to use, with only 5 functions in its public interface
 - Cross-platform (Windows + MacOS + Linux)
 - Compatible with x86 and ARM, with backwards compatibility for 32-bit systems
-- Features up to 80+ unique VM detection techniques
+- Features up to 90+ unique VM detection techniques ([list](https://github.com/kernelwernel/VMAware/blob/main/docs/documentation.md#flag-table))
 - Very flexible, with total fine-grained control over which techniques get executed
 - Header-only
 - Available with C++11 and above
-- Able to detect VMware, VirtualBox, QEMU, KVM, Parallels, and [much more](https://github.com/kernelwernel/VMAware/blob/v0.2/docs/documentation.md#vmbrand)
+- Able to detect VMware, VirtualBox, QEMU, KVM, Parallels, and [much more](https://github.com/kernelwernel/VMAware/blob/main/docs/documentation.md#vmbrand)
 - Able to detect semi-VM technologies like hypervisors, docker, and wine
 - Able to guess the VM brand
 - Memoized, meaning past results are cached and retrieved if ran again for performance benefits 
 - Contains separate MIT and GPL-3.0 compliant library header files
 
-- - -
 
-**IMPORTANT:** 
+> [!NOTE]
+> The library doesn't guarantee it'll be accurate. If you found a false positive or a false negative then please create an issue with information on what your VM is, what OS you're using, and other relevant details.
+>
 
-The library doesn't guarantee it'll be accurate. If you found a false positive or a false negative then please create an issue with information on what your VM is, what OS you're using, and other relevant details.
-
-- - -
 
 <br>
 
@@ -64,9 +62,9 @@ int main() {
 <br>
 
 ## CLI tool 🔧
-This project also provides a tiny, but handy CLI tool utilising the full potential of what the library can do. Also, running the CLI as root/admin would give better results.
+This project also provides a tiny, but handy CLI tool utilising the full potential of what the library can do. It'll give you all sorts of details about the environment it's running under.
 
-<img src="assets/demo.png" width="500" title="cli">
+<img src="assets/demo.jpg" width="500" title="cli">
 
 <br>
 
@@ -114,16 +112,16 @@ You can view the full docs [here](docs/documentation.md). Trust me, it's not too
 > Yes. There are some techniques that are trivially spoofable, and there's nothing the library can do about it whether it's a deliberate false positive or even a false negative. This is a problem that every VM detection project is facing, which is why the library is trying to test every technique possible to get the best result based on the environment it's running under. 
 
 - What about using this for malware?
-> This project is not soliciting the development of malware for obvious reasons. Even if you intend to use it for concealment purposes, it'll most likely be flagged by antiviruses anyway and nothing is obfuscated to begin with. You're not a slick l33t haxxor for abusing the library for malware, and good luck manually obfuscating 6000 lines of C++ code lmfao
+> This project is not soliciting the development of malware for obvious reasons. Even if you intend to use it for concealment purposes, it'll most likely be flagged by antiviruses anyway and nothing is obfuscated to begin with. 
 
 - Why GPL 3.0 and MIT? 
-> I would've made it strictly MIT so proprietary software can make use of the library, but some of the techniques employed are from GPL 3.0 projects, and I have no choice but to use the same license for legal reasons. This gave me an idea to make an MIT version without all of the GPL code so it can also be used without forcing your code to be open-source. It should be noted that the MIT version removes **10** techniques out of 85 (as of 1.3 version), and the lesser the number of mechanisms, the less accurate the overall result might be.
+> I would've made it strictly MIT so proprietary software can make use of the library, but some of the techniques employed are from GPL 3.0 projects, and I have no choice but to use the same license for legal reasons. This gave me an idea to make an MIT version without all of the GPL code so it can also be used without forcing your code to be open-source. It should be noted that the MIT version removes **10** techniques out of 85 (as of 1.4 version), and the lesser the number of mechanisms, the less accurate the overall result might be.
 
 - The tool has many false positives under a Windows 11 host, why?
 > This is because it is in fact running under a VM. More specifically, Hyper-V might be used by default for every program that's running in Windows 11. 
 
-- I have linker errors when compiling with gcc or clang
-> Either compile with the `-lm` and `-lstdc++` flags, or use g++/clang++ compilers instead.
+- I have linker errors when compiling
+> If you're compiling with gcc or clang, add the `-lm` and `-lstdc++` flags, or use g++/clang++ compilers instead. If you're receiving linker errors from a brand new VM environment on Linux, update your system with `sudo apt/dnf/yum update -y` to install the necessary C++ components.
 
 <br>
 
@@ -166,6 +164,8 @@ If you know a project, or if you're working on a project that uses VMAware, let 
 - [(S21sec) Alfredo Omella](https://www.s21sec.com/)
 - [hfiref0x](https://github.com/hfiref0x)
 - [Waleedassar](http://waleedassar.blogspot.com)
+- [一半人生](https://github.com/TimelifeCzy)
+- [Thomas Roccia (fr0gger)](https://github.com/fr0gger)
 
 <br>
 
