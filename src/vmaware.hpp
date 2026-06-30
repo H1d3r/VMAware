@@ -7567,7 +7567,6 @@ public:
      * @implements VM::FIRMWARE
      */
     [[nodiscard]] static bool firmware() {
-    #if (WINDOWS)
         struct acpi_header {
             char signature[4];
             u32 length;
@@ -7613,44 +7612,41 @@ public:
             u16 p_lvl3_lat;
         };
 
-        // "WAET" is also present as a string inside the WAET table, so there's no need to check for its table signature
-        constexpr std::array<const char*, 21> targets = { {
+        // Unified targets and brand map (merged Windows & Linux targets)
+        constexpr std::array<const char*, 24> targets = { {
             "Parallels Software", "Parallels(R)",
             "innotek",            "Oracle",   "VirtualBox", "vbox", "VBOX",
             "VMware, Inc.",       "VMware",   "VMWARE",     "VMW0003",
-            "QEMU",               "pc-q35",   "Q35 +",      "BOCHS",
-            "ovmf",               "edk ii unknown", "WAET", "S3 Corp.", "VS2005R2",
-            "Xen"
+            "QEMU",               "pc-q35",   "Q35 +",      "FWCF",     "BOCHS",
+            "ovmf",               "edk ii unknown", "WAET", "S3 Corp.", "Virtual Machine", "VS2005R2",
+            "BXPC",               "Xen"
         } };
 
-        constexpr std::array<brand_enum, 21> brands_map = { {
+        constexpr std::array<brand_enum, 24> brands_map = { {
             brand_enum::PARALLELS,  brand_enum::PARALLELS,
             brand_enum::VBOX,       brand_enum::VBOX,       brand_enum::VBOX,       brand_enum::VBOX,       brand_enum::VBOX,
             brand_enum::VMWARE,     brand_enum::VMWARE,     brand_enum::VMWARE,     brand_enum::VMWARE,
-            brand_enum::QEMU,       brand_enum::QEMU,       brand_enum::QEMU,       brand_enum::BOCHS,
-            brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND,
-            brand_enum::XEN
+            brand_enum::QEMU,       brand_enum::QEMU,       brand_enum::QEMU,       brand_enum::QEMU,       brand_enum::BOCHS,
+            brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND,
+            brand_enum::BOCHS,      brand_enum::XEN
         } };
 
-        // inside struct to not have to move out of function, constexpr this way because of c++ 11 compatibility
         struct array_validator {
-            static constexpr bool verify_no_nulls(const std::array<const char*, 21>& arr, size_t i) {
+            static constexpr bool verify_no_nulls(const std::array<const char*, 24>& arr, size_t i) {
                 return (i == arr.size())
                     ? true
                     : (arr[i] != nullptr && verify_no_nulls(arr, i + 1));
             }
         };
 
-        // ensure sizes match
         static_assert(targets.size() == brands_map.size(),
             "FIRMWARE: 'targets' and 'brands_map' must have the same size.");
 
-        // detects if you increased size but forgot strings
         static_assert(array_validator::verify_no_nulls(targets, 0),
-            "FIRMWARE: 'targets' array contains NULLs. Array size declared is larger than the number of strings provided.");
+            "FIRMWARE: 'targets' array contains NULLs.");
 
+        // Core scanning engine
         auto scan_buffer = [&](const u8* buffer, const size_t buffer_len) noexcept -> bool {
-            // faster than std::search because of a manual byte-by-byte loop, could be optimized further with Boyer-Moore-Horspool for large tables like DSDT
             auto find_pattern = [&](const char* pattern, size_t pattern_len) noexcept -> bool {
                 if (pattern_len == 0 || pattern_len > buffer_len) return false;
                 const u8 first_byte = static_cast<u8>(pattern[0]);
@@ -7663,17 +7659,54 @@ public:
                     if (!match) return false;
                     const u8* match_ptr = static_cast<const u8*>(match);
                     const size_t index = static_cast<size_t>(match_ptr - base_ptr);
-                    // ensure pattern fits
                     if (index + pattern_len > buffer_len) return false;
                     if (memcmp(match_ptr, pattern, pattern_len) == 0) return true;
-                    // advance one past this found first-byte and continue
                     search_ptr = match_ptr + 1;
                     remaining_bytes = buffer_len - static_cast<size_t>(search_ptr - base_ptr);
                 }
                 return false;
             };
 
-            // 1) VM-specific firmware signatures. It is important that vm-specific checks run first because of the hardened detection logic
+            // 1) AML Bytecode inspection
+            {
+                // OperationRegion (DBG, SystemIO, 0x0402, One)
+                // AML byte sequence: ExtOpPrefix (0x5B), OpRegionOp (0x80), 'D', 'B', 'G', '_' (0x5F padding), SystemIO (0x01), WordPrefix (0x0B), 0x02, 0x04, One (0x01)
+                constexpr u8 qemu_dbg_opregion[] = { 0x5B, 0x80, 0x44, 0x42, 0x47, 0x5F, 0x01, 0x0B, 0x02, 0x04, 0x01 };
+                if (find_pattern(reinterpret_cast<const char*>(qemu_dbg_opregion), sizeof(qemu_dbg_opregion))) {
+                    debug("FIRMWARE: Detected QEMU Debug Port OperationRegion at I/O 0x0402");
+                    return core::add(brand_enum::QEMU);
+                }
+
+                // Alternate QEMU Debug Port: matching "DBUG" method and "DBGB" field definitions together
+                if (find_pattern("DBUG", 4) && find_pattern("DBGB", 4)) {
+                    debug("FIRMWARE: Detected QEMU DBUG method and DBGB field definitions");
+                    return core::add(brand_enum::QEMU);
+                }
+
+                // QEMU virtual DRAM Controller named "DRAC" with its corresponding System Board PNPID
+                if (find_pattern("DRAC", 4) && find_pattern("PNP0C01", 7)) {
+                    debug("FIRMWARE: Detected QEMU virtual DRAM controller (DRAC)");
+                    return core::add(brand_enum::QEMU);
+                }
+
+                // QEMU System Management Interrupt Resources Reservation string
+                if (find_pattern("SMI resources", 13)) {
+                    debug("FIRMWARE: Detected QEMU SMI Resources reservation string");
+                    return core::add(brand_enum::QEMU);
+                }
+
+                // QEMU Hotplug Resource Description strings
+                if (find_pattern("CPU Hotplug resources", 21)) {
+                    debug("FIRMWARE: Detected QEMU CPU Hotplug resources string");
+                    return core::add(brand_enum::QEMU);
+                }
+                if (find_pattern("PCI Hotplug resources", 21)) {
+                    debug("FIRMWARE: Detected QEMU PCI Hotplug resources string");
+                    return core::add(brand_enum::QEMU);
+                }
+            }
+
+            // 2) Standard VM-specific firmware signature scanning
             for (size_t i = 0; i < targets.size(); ++i) {
                 const char* pattern = targets[i];
                 const size_t pattern_len = strlen(pattern);
@@ -7684,8 +7717,7 @@ public:
                     if (strcmp(pattern, "Xen") == 0) {
                         constexpr char pxen[] = "PXEN";
                         constexpr size_t pxen_len = sizeof(pxen) - 1;
-                        const bool has_pxen = find_pattern(pxen, pxen_len);
-                        if (!has_pxen)
+                        if (!find_pattern(pxen, pxen_len))
                             return core::add(brand_enum::XEN);
                         else
                             continue;
@@ -7695,8 +7727,7 @@ public:
                     if (strcmp(pattern, "BXPC") == 0) {
                         constexpr char bochs[] = "BOCHS";
                         constexpr size_t bochs_len = sizeof(bochs) - 1;
-                        const bool has_bochs = find_pattern(bochs, bochs_len);
-                        if (!has_bochs)
+                        if (!find_pattern(bochs, bochs_len))
                             return core::add(brand_enum::BOCHS);
                         else
                             continue;
@@ -7708,19 +7739,16 @@ public:
                 }
             }
 
-            // 2) known patches used by popular hardeners 
+            // 3) Known loader bypasses/patches
             {
                 constexpr char marker[] = "777777";
 
                 if (buffer_len >= 36) {
-                    // OEMID (6)
                     char oem_id[7] = { 0 };
                     memcpy(oem_id, buffer + 10, 6);
-                    // OEM Table ID (8)
                     char oem_table_id[9] = { 0 };
                     memcpy(oem_table_id, buffer + 16, 8);
 
-                    // Creator / ASL Compiler ID (4) won't contain 6-char marker because its length is 4
                     if (strstr(oem_id, marker) != nullptr) {
                         debug("FIRMWARE: VMWareHardenedLoader found in OEMID -> '", oem_id, "'");
                         return core::add(brand_enum::VMWARE_HARD);
@@ -7739,7 +7767,7 @@ public:
             acpi_header header;
             memcpy(&header, buffer, sizeof(header));
 
-            // 3) FADT specific checks
+            // 4) FADT structure limits validation
             if (memcmp(header.signature, "FACP", 4) == 0) {
                 if (header.length > buffer_len) {
                     debug("FIRMWARE: declared header length larger than fetched length (declared ", header.length, ", fetched ", buffer_len, ")");
@@ -7753,7 +7781,7 @@ public:
                 fadt_table fadt;
                 memcpy(&fadt, buffer, sizeof(fadt_table));
 
-                if (fadt.p_lvl2_lat == 0x0FFF || fadt.p_lvl3_lat == 0x0FFF) { // A value > 100 indicates the system does not support a C2/C3 state
+                if (fadt.p_lvl2_lat == 0x0FFF || fadt.p_lvl3_lat == 0x0FFF) {
                     debug("FIRMWARE: C2 and C3 latencies indicate VM");
                     return true;
                 }
@@ -7762,6 +7790,7 @@ public:
             return false;
         };
 
+    #if (WINDOWS)
         // to minimize heap allocations
         std::vector<u8> work_buffer;
         work_buffer.reserve(65536);
@@ -7769,11 +7798,11 @@ public:
         // Enumerate ACPI tables
         constexpr DWORD acpi_signature = 'ACPI';
         const DWORD acpi_enum_size = EnumSystemFirmwareTables(acpi_signature, nullptr, 0);
-        if (acpi_enum_size == 0) 
+        if (acpi_enum_size == 0)
             return false;
-        if (acpi_enum_size % sizeof(DWORD) != 0) 
+        if (acpi_enum_size % sizeof(DWORD) != 0)
             return false;
-       
+
         const size_t table_count = acpi_enum_size / sizeof(DWORD);
         std::vector<DWORD> tables(table_count);
         if (EnumSystemFirmwareTables(acpi_signature, tables.data(), acpi_enum_size) != acpi_enum_size)
@@ -7800,7 +7829,6 @@ public:
             }
         }
 
-        // helper to fetch one table into a malloc'd buffer
         auto fetch_and_scan = [&](DWORD provider, DWORD table_id) noexcept -> bool {
             const DWORD sz = GetSystemFirmwareTable(provider, table_id, nullptr, 0);
             if (sz == 0) return false;
@@ -7815,7 +7843,7 @@ public:
             return scan_buffer(work_buffer.data(), sz);
         };
 
-        // Scan every ACPI table, dont make explicit whitelisting/blacklisting because of possible bypasses
+        // Scan every ACPI table
         for (const auto table_id : tables) {
             if (fetch_and_scan(acpi_signature, table_id)) {
                 return true;
@@ -7828,8 +7856,6 @@ public:
         for (DWORD prov : smb_providers) {
             const UINT e = EnumSystemFirmwareTables(prov, nullptr, 0);
             if (!e) continue;
-
-            // even if alignment is supported on x86 its good to check if size is a multiple of DWORD
             if (e % sizeof(DWORD) != 0) continue;
 
             const size_t cnt = e / sizeof(DWORD);
@@ -7846,7 +7872,6 @@ public:
 
         return false;
     #elif (LINUX)
-        // Author: dmfrpro
         DIR* raw_dir = opendir("/sys/firmware/acpi/tables/");
         if (!raw_dir) {
             debug("FIRMWARE: could not open ACPI tables directory");
@@ -7859,24 +7884,14 @@ public:
             ~dir_closer() { if (d) { closedir(d); } }
         } dir(raw_dir);
 
-        constexpr const char* targets[] = {
-            "Parallels Software", "Parallels(R)",
-            "innotek",            "Oracle",   "VirtualBox", "vbox", "VBOX",
-            "VMware, Inc.",       "VMware",   "VMWARE",     "VMW0003",
-            "QEMU",               "pc-q35",   "Q35 +",      "FWCF",     "BOCHS",
-            "ovmf",               "edk ii unknown", "S3 Corp.", "Virtual Machine", "VS2005R2",
-            "Xen"
-        };
-
         struct dirent* entry{};
         constexpr long MAX_TABLE_SIZE = static_cast<long>(8 * 1024 * 1024);
 
         while ((entry = readdir(raw_dir)) != nullptr) {
-            // Skip "." and ".."
             if (
                 (strcmp(entry->d_name, ".") == 0) ||
                 (strcmp(entry->d_name, "..") == 0)
-            ) {
+                ) {
                 continue;
             }
 
@@ -7894,14 +7909,14 @@ public:
             const struct fd_closer {
                 int fd;
                 explicit fd_closer(int f) : fd(f) {}
-                ~fd_closer() { 
+                ~fd_closer() {
                     if (fd != -1) {
                         close(fd);
                     }
                 }
             } fdguard(fd);
 
-            struct stat statbuf{};
+            struct stat statbuf {};
             if (fstat(fd, &statbuf) != 0 || S_ISDIR(statbuf.st_mode)) {
                 debug("FIRMWARE: skipped ", entry->d_name);
                 continue;
@@ -7932,7 +7947,7 @@ public:
             while (total < file_size_u) {
                 const ssize_t n = read(fdguard.fd, buffer.data() + total, file_size_u - total);
                 if (n <= 0) {
-                    break; // error or EOF
+                    break;
                 }
 
                 total += static_cast<size_t>(n);
@@ -7943,47 +7958,9 @@ public:
                 continue;
             }
 
-            for (const char* target : targets) {
-                const size_t target_length = strlen(target);
-                if (target_length > file_size_u) {
-                    continue;
-                }
-    
-                for (size_t j = 0; j <= file_size_u - target_length; ++j) {
-                    if (memcmp(buffer.data() + j, target, target_length) == 0) {
-                        enum brand_enum brand = brand_enum::NULL_BRAND;
-    
-                        if (strcmp(target, "Parallels Software International") == 0 ||
-                            strcmp(target, "Parallels(R)") == 0) {
-                            brand = brand_enum::PARALLELS;
-                        }
-                        else if (strcmp(target, "innotek") == 0 ||
-                            strcmp(target, "Oracle") == 0 ||
-                            strcmp(target, "VirtualBox") == 0 ||
-                            strcmp(target, "vbox") == 0 ||
-                            strcmp(target, "VBOX") == 0) {
-                            brand = brand_enum::VBOX;
-                        }
-                        else if (strcmp(target, "VMware, Inc.") == 0 ||
-                            strcmp(target, "VMware") == 0 ||
-                            strcmp(target, "VMWARE") == 0) {
-                            brand = brand_enum::VMWARE;
-                        }
-                        else if (strcmp(target, "QEMU") == 0) {
-                            brand = brand_enum::QEMU;
-                        }
-                        else if (strcmp(target, "BOCHS") == 0 ||
-                            strcmp(target, "BXPC") == 0) {
-                            brand = brand_enum::BOCHS;
-                        }
-
-                        if (brand != brand_enum::NULL_BRAND) {
-                            return core::add(brand);
-                        }
-
-                        return true;
-                    }
-                }
+            // Centralized scan on Linux-sourced table buffer
+            if (scan_buffer(buffer.data(), file_size_u)) {
+                return true;
             }
         }
 
