@@ -602,6 +602,7 @@ public:
         SINGLE_STEP,
         EIP_OVERFLOW,
         SVM_EXCEPTIONS,
+        HYPERV_NESTED,
 
         // Linux and Windows
         SYSTEM_REGISTERS,
@@ -816,7 +817,9 @@ public:
         HYPERV_UNKNOWN = 0,
         HYPERV_REAL_VM,
         HYPERV_ARTIFACT_VM,
-        HYPERV_ENLIGHTENMENT
+        HYPERV_NESTED_VM,
+        HYPERV_ENLIGHTENMENT,
+        HYPERV_SPOOFED
     };
 
     // various cpu operation stuff
@@ -4145,7 +4148,7 @@ public:
 
 
         /**
-         * @brief Check whether the system is running in a Hyper-V virtual machine or if the host system has Hyper-V enabled
+         * @brief Check what kind of Hyper-V hypervisor is running on the system
          * @note Hyper-V's presence on a host system can set certain hypervisor-related CPU flags that may appear similar to those in a virtualized environment, which can make it challenging to differentiate between an actual Hyper-V virtual machine (VM) and a host system with Hyper-V enabled.
          *       This can lead to false conclusions, where the system might mistakenly be identified as running in a Hyper-V VM, when in reality, it's simply the host system with Hyper-V features active.
          *       This check aims to distinguish between these two cases by identifying specific CPU flags and hypervisor-related artifacts that are indicative of a Hyper-V VM rather than a host system with Hyper-V enabled.
@@ -4153,6 +4156,8 @@ public:
          *          - HYPERV_ARTIFACT_VM for host with Hyper-V enabled
          *          - HYPERV_REAL_VM for real Hyper-V VM
          *          - HYPERV_ENLIGHTENMENT for QEMU with Hyper-V enlightenments
+         *          - HYPERV_NESTED_VM for a hypervisor nested within a Hyper-V partition
+         *          - HYPERV_SPOOFED for a hypervisor spoofing itself as Hyper-V
          *          - HYPERV_UNKNOWN for unknown/undetected state
          */
         [[nodiscard]] static hyperx_state hyper_x() {
@@ -4160,7 +4165,6 @@ public:
             return HYPERV_UNKNOWN;
         #else
             if (memo::hyperx::is_cached()) {
-                debug("HYPER_X: returned from cache");
                 return memo::hyperx::fetch();
             }
 
@@ -4194,6 +4198,14 @@ public:
 
                 // truncation is intentional
                 return eax_reg & 0xFF;
+            };
+
+            // Check whether a hypervisor is nested within a Hyper-V partition
+            auto hyperv_nested = []() noexcept -> u32 {
+                u32 eax, ebx, ecx, edx = 0;
+                cpu::cpuid(eax, ebx, ecx, edx, 0x40000004);
+
+                return (eax & 1u << 12) != 0;
             };
 
             hyperx_state state = HYPERV_UNKNOWN;
@@ -4265,9 +4277,14 @@ public:
                     }
                     else {
                         debug("HYPER-X: Detected hypervisor trying to spoof itself as Hyper-V");
-                        state = HYPERV_UNKNOWN; // doing this is enough to trigger a VM detection, we dont need to mark a 100% vm score as our techniques will do the job for us
+                        state = HYPERV_SPOOFED; 
                     } 
                 } 
+            }
+
+            if (hyperv_nested()) {
+                debug("HYPER-X: Detected Hyper-V in nested state");
+                state = HYPERV_NESTED_VM;
             }
 
             memo::hyperx::store(state);
@@ -4976,7 +4993,7 @@ public:
         static constexpr const char* INTEL_KGT = "Intel KGT (Trusty)";
         static constexpr const char* AZURE_HYPERV = "Microsoft Azure Hyper-V";
         static constexpr const char* SIMPLEVISOR = "SimpleVisor";
-        static constexpr const char* HYPERV_ROOT = "Hyper-V root partition (host system, not an actual VM)";
+        static constexpr const char* HYPERV_ROOT = "Hyper-V root partition (host system)";
         static constexpr const char* UML = "User-mode Linux";
         static constexpr const char* POWERVM = "IBM PowerVM";
         static constexpr const char* GCE = "Google Compute Engine (KVM)";
@@ -13085,6 +13102,15 @@ public:
         return false;
     }
 
+
+    /**
+     * @brief Check whether a hypervisor is nested within a Hyper-V partition
+     * @category Windows, x86
+     * @implements VM::HYPERV_NESTED
+     */
+    [[nodiscard]] static bool hyperv_nested() {
+        return util::hyper_x() == HYPERV_NESTED_VM;
+    }
     // ADD NEW TECHNIQUE FUNCTION HERE
 
 
@@ -13866,6 +13892,7 @@ public:
             case EIP_OVERFLOW: return "EIP_OVERFLOW";
             case SVM_EXCEPTIONS: return "SVM_EXCEPTIONS";
             case CGROUP: return "CGROUP";
+            case HYPERV_NESTED: return "HYPERV_NESTED";
             // END OF TECHNIQUE LIST
             case DEFAULT: return "DEFAULT"; 
             case ALL: return "ALL"; 
@@ -14386,6 +14413,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::EIP_OVERFLOW, {100, VM::eip_overflow}},
             {VM::HYPERVISOR_HOOK, {100, VM::hypervisor_hook}},
             {VM::SINGLE_STEP, {100, VM::single_step}},
+            {VM::HYPERV_NESTED, {100, VM::hyperv_nested}},
             {VM::NVRAM, {100, VM::nvram}},
             {VM::CPU_HEURISTIC, {90, VM::cpu_heuristic}},
             {VM::ACPI_SIGNATURE, {100, VM::acpi_signature}},
