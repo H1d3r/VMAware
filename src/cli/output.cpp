@@ -736,6 +736,10 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
         }
     }
 
+    if (vm.is_hardened) {
+        summary.push_back("VMAware detected a bypass attempt, detection confidence was raised to 100% automatically.");
+    }
+
     const std::string is_bold = (vm.is_vm ? bold : "");
     const char* conclusion_color = color(vm.percentage, vm.is_hardened);
 

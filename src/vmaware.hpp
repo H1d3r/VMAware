@@ -14489,9 +14489,18 @@ public:
                 return true;
             }
 
-            // rule 4: if VM::TRAP or VM::NVRAM is detected, so should VM::HYPERVISOR_BIT or VM::HYPERVISOR_STR
-            if ((check(VM::TRAP) || check(VM::NVRAM)) && !hv_present && !has_hyper_x) {
-                debug("is_hardened(): trap/NVRAM and hypervisor bit/str are not detected together");
+            // rule 4: if VM::NVRAM is detected, so should VM::HYPERVISOR_BIT or VM::HYPERVISOR_STR
+            if ((check(VM::NVRAM)) && !hv_present && !has_hyper_x) {
+                debug("is_hardened(): NVRAM and hypervisor bit/str are not detected together");
+                return true;
+            }
+
+            // rule 5: if CPU-based techniques detect a hypervisor, the hypervisor bit must be enabled
+            if ((check(VM::TRAP) || (check(VM::KVM_INTERCEPTION) || check(VM::SVM_EXCEPTIONS) 
+               || check(VM::INTERRUPT_SHADOW) || check(VM::EIP_OVERFLOW) || check(VM::SINGLE_STEP)
+               || check(VM::MSR) || check(VM::UD) || check(VM::HYPERV_NESTED)
+               ) && !hv_present && !has_hyper_x) {
+                debug("is_hardened(): instruction-based techniques and hypervisor bit/str are not detected together");
                 return true;
             }
         #endif
