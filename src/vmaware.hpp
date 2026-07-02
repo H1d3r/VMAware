@@ -137,9 +137,7 @@
  *    - util module:
  *        This contains many utility functionalities to be used by the techniques.
  *        Examples of functionalities include file I/O, registries, permission 
- *        checks, system commands, HDD sizes, RAM sizes, debugs, process checking, 
- *        OS queries, Hyper-X, and so on. (It should be mentioned that this is 
- *        probably the least enjoyable part of the lib to read, since it's really messy)
+ *        checks, system commands, debugs, OS queries, Hyper-X, and so on. 
  * 
  * 
  * Thirdly, We'll explain in this section how all of these facets of the lib interact with 
@@ -455,85 +453,6 @@
  * Hopefully this makes sense.
  *
  */
-namespace brands { // TODO, remove this in the 2.8.0 or any release after the 2.7.0
-    #define LEGACY(name, full_name) \
-        [[deprecated("Use VM::brands::" #name " instead")]] \
-        static constexpr const char* name = full_name /* NOLINT(bugprone-macro-parentheses) */
-
-    LEGACY(NULL_BRAND, "Unknown");
-    LEGACY(VBOX, "VirtualBox");
-    LEGACY(VMWARE, "VMware");
-    LEGACY(VMWARE_EXPRESS, "VMware Express");
-    LEGACY(VMWARE_ESX, "VMware ESX");
-    LEGACY(VMWARE_GSX, "VMware GSX");
-    LEGACY(VMWARE_WORKSTATION, "VMware Workstation");
-    LEGACY(VMWARE_FUSION, "VMware Fusion");
-    LEGACY(VMWARE_HARD, "VMware (with VmwareHardenedLoader)");
-    LEGACY(BHYVE, "bhyve");
-    LEGACY(KVM, "KVM");
-    LEGACY(QEMU, "QEMU");
-    LEGACY(QEMU_KVM, "QEMU+KVM");
-    LEGACY(KVM_HYPERV, "KVM Hyper-V Enlightenment");
-    LEGACY(QEMU_KVM_HYPERV, "QEMU+KVM Hyper-V Enlightenment");
-    LEGACY(HYPERV, "Microsoft Hyper-V");
-    LEGACY(HYPERV_VPC, "Microsoft Virtual PC/Hyper-V");
-    LEGACY(PARALLELS, "Parallels");
-    LEGACY(XEN, "Xen HVM");
-    LEGACY(ACRN, "ACRN");
-    LEGACY(QNX, "QNX hypervisor");
-    LEGACY(HYBRID, "Hybrid Analysis");
-    LEGACY(SANDBOXIE, "Sandboxie");
-    LEGACY(DOCKER, "Docker");
-    LEGACY(WINE, "Wine");
-    LEGACY(VPC, "Virtual PC");
-    LEGACY(ANUBIS, "Anubis");
-    LEGACY(JOEBOX, "JoeBox");
-    LEGACY(THREATEXPERT, "ThreatExpert");
-    LEGACY(CWSANDBOX, "CWSandbox");
-    LEGACY(COMODO, "Comodo");
-    LEGACY(BOCHS, "Bochs");
-    LEGACY(NVMM, "NetBSD NVMM");
-    LEGACY(BSD_VMM, "OpenBSD VMM");
-    LEGACY(INTEL_HAXM, "Intel HAXM");
-    LEGACY(UNISYS, "Unisys s-Par");
-    LEGACY(LMHS, "Lockheed Martin LMHS");
-    LEGACY(CUCKOO, "Cuckoo");
-    LEGACY(BLUESTACKS, "BlueStacks");
-    LEGACY(JAILHOUSE, "Jailhouse");
-    LEGACY(APPLE_VZ, "Apple VZ");
-    LEGACY(INTEL_KGT, "Intel KGT (Trusty)");
-    LEGACY(AZURE_HYPERV, "Microsoft Azure Hyper-V");
-    LEGACY(SIMPLEVISOR, "SimpleVisor");
-    // not in macro due to mismatch with VM::brands and brands:: renaming this to HYPERV_ROOT
-    [[deprecated("Use VM::brands::HYPERV_ROOT instead")]] static constexpr const char* HYPERV_ARTIFACT = "Hyper-V root partition (host system)";
-    LEGACY(UML, "User-mode Linux");
-    LEGACY(POWERVM, "IBM PowerVM");
-    LEGACY(GCE, "Google Compute Engine (KVM)");
-    LEGACY(OPENSTACK, "OpenStack (KVM)");
-    LEGACY(KUBEVIRT, "KubeVirt (KVM)");
-    LEGACY(AWS_NITRO, "AWS Nitro System EC2 (KVM-based)");
-    LEGACY(PODMAN, "Podman");
-    LEGACY(WSL, "WSL");
-    LEGACY(OPENVZ, "OpenVZ");
-    LEGACY(BAREVISOR, "Barevisor");
-    LEGACY(HYPERPLATFORM, "HyperPlatform");
-    LEGACY(MINIVISOR, "MiniVisor");
-    LEGACY(INTEL_TDX, "Intel TDX");
-    LEGACY(LKVM, "LKVM");
-    LEGACY(AMD_SEV, "AMD SEV");
-    LEGACY(AMD_SEV_ES, "AMD SEV-ES");
-    LEGACY(AMD_SEV_SNP, "AMD SEV-SNP");
-    LEGACY(NEKO_PROJECT, "Neko Project II");
-    LEGACY(NOIRVISOR, "NoirVisor");
-    LEGACY(QIHOO, "Qihoo 360 Sandbox");
-    LEGACY(DBVM, "DBVM");
-    LEGACY(UTM, "UTM");
-    LEGACY(COMPAQ, "Compaq FX!32");
-    LEGACY(INSIGNIA, "Insignia RealPC");
-    LEGACY(CONNECTIX, "Connectix Virtual PC");
-    LEGACY(CONTAINERD, "Containerd");
-}
-
 #if (VMA_CPP >= 17)
     #define VMAWARE_CONSTEXPR constexpr
 #else
@@ -13331,9 +13250,6 @@ public:
     }
     // ADD NEW TECHNIQUE FUNCTION HERE
 
-
-    
-
     #if (CLANG)
         #pragma clang diagnostic pop
     #endif
@@ -14488,10 +14404,10 @@ public:
             }
 
             // rule 5: if CPU-based techniques detect a hypervisor, the hypervisor bit must be enabled
-            if ((check(VM::TRAP) || (check(VM::KVM_INTERCEPTION) || check(VM::SVM_EXCEPTIONS) 
-               || check(VM::INTERRUPT_SHADOW) || check(VM::EIP_OVERFLOW) || check(VM::SINGLE_STEP)
-               || check(VM::MSR) || check(VM::UD) || check(VM::HYPERV_NESTED)
-               ) && !hv_present && !has_hyper_x) {
+            if ((check(VM::TRAP) || check(VM::KVM_INTERCEPTION) || check(VM::SVM_EXCEPTIONS)
+                || check(VM::INTERRUPT_SHADOW) || check(VM::EIP_OVERFLOW) || check(VM::SINGLE_STEP)
+                || check(VM::MSR) || check(VM::UD) || check(VM::HYPERV_NESTED)
+                ) && !hv_present && !has_hyper_x) {
                 debug("is_hardened(): instruction-based techniques and hypervisor bit/str are not detected together");
                 return true;
             }
