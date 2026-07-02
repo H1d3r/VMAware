@@ -3209,12 +3209,10 @@ public:
             static void store(const brand_enum s) {
                 brand_cache = s;
                 cached = true;
-                debug("VM::brand(): cached brand string");
             }
 
             static bool is_cached() { return cached; }
             static brand_enum fetch() { 
-                debug("VM::brand(): returned brand from cache");
                 return brand_cache; 
             }
         };
@@ -3226,12 +3224,10 @@ public:
             static void store(const std::string& s) {
                 brand_cache = s;
                 cached = true;
-                debug("VM::brand(): cached multiple brand string");
             }
 
             static bool is_cached() { return cached; }
             static std::string fetch() { 
-                debug("VM::brand(): returned multi brand from cache");
                 return brand_cache; 
             }
         };
@@ -3243,12 +3239,10 @@ public:
             static void store(const brand_list_t& list) {
                 cache = list;
                 cached = true;
-                debug("VM::brand(): cached internal brand list");
             }
 
             static bool is_cached() { return cached; }
             static brand_list_t fetch() { 
-                debug("VM::brand(): returned internal brand list from cache");
                 return cache;
             }
         };
@@ -6156,7 +6150,6 @@ public:
             // For the median itself to exceed baremetal limits (which rarely pass 1000), an interrupt must be occurring on almost EVERY single loop iteration
             // This is the footprint of a hypervisor continuously spamming cross-core IPIs to try and pause our threads
             if (best_cpuid_l > 1000 || best_ref_l > 1000 || best_cpuid_l == 1 || best_ref_l == 1) {
-                debug("TIMER: Detected artificial interrupt delivery to timing threads");
                 hypervisor_detected = true;
             }
 
@@ -10437,7 +10430,6 @@ public:
             // First pass: QEMU-style "#ACPI(Sxx...)" and generic "ACPI(Sxx)"
             for (const wchar_t* p = ptr; p < buf_end && *p; p += (wcslen(p) + 1)) {
                 if (has_excluded_token(p)) {
-                    debug("ACPI_SIGNATURE: Valid signature -> ", p);
                     continue;
                 }
 
