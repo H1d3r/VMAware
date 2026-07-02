@@ -3114,13 +3114,6 @@ public:
             };
         }
 
-        static void uncache(u16 flag) {
-            if (flag <= enum_size) {
-                cache_table.at(flag).has_value = false;
-                cache_table.at(flag).brand_name = brand_enum::NULL_BRAND;
-            }
-        }
-
         struct single_brand {
             static brand_enum brand_cache;
             static bool cached;
@@ -6676,6 +6669,8 @@ public:
 
         char buffer[1024] = {};
         std::stringstream ss;
+        int empty_reads = 0;
+        constexpr int MAX_EMPTY_READS = 10;
 
         while (true) {
             const ssize_t bytes_read = read(fd, buffer, sizeof(buffer) - 1);
@@ -6683,19 +6678,27 @@ public:
             if (bytes_read > 0) {
                 *(buffer + bytes_read) = '\0';
                 ss << buffer;
-            } else if (bytes_read == 0) {
-                usleep(100000); // Sleep for 100 milliseconds
-            } else {
-                if (errno == EAGAIN) {
-                    usleep(100000);
-                } else {
-                    debug("KMSG: Error reading /dev/kmsg");
+                empty_reads = 0; 
+            }
+            else if (bytes_read == 0) {
+                if (++empty_reads >= MAX_EMPTY_READS) {
+                    debug("KMSG: Reached maximum empty reads (EOF), breaking.");
                     break;
                 }
+                usleep(10000); // Sleep for 10 milliseconds
             }
-
-            if (bytes_read < 0) {
-                break;
+            else {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    if (++empty_reads >= MAX_EMPTY_READS) {
+                        debug("KMSG: Reached maximum EAGAIN retries, breaking.");
+                        break;
+                    }
+                    usleep(10000);
+                }
+                else {
+                    debug("KMSG: Error reading /dev/kmsg, errno = ", errno);
+                    break;
+                }
             }
         }
 
@@ -6708,7 +6711,7 @@ public:
         }
 
         return (util::find(content, "Hypervisor detected"));
-    } 
+    }
 
 
     /**
