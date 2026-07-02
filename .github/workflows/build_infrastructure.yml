@@ -292,6 +292,26 @@ jobs:
       - name: Build (Unicode Release)
         run: cmake --build build --config Release
 
+  windows-crt-leaks:
+    runs-on: windows-2022
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (CRT leak check)
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DDEBUG_OUTPUT=ON
+
+      - name: Build (CRT Debug)
+        run: cmake --build build --config Debug
+
+      - name: Run CLI test suite (CRT)
+        shell: pwsh
+        run: |
+          $bin = "build\Debug\vmaware.exe"
+          pwsh auxiliary/test_cli.ps1 -BIN $bin -TIMEOUT_SECS 30
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   windows-asan:
     runs-on: windows-2022
     timeout-minutes: 30
