@@ -1,5 +1,11 @@
 name: vmaware build infrastructure
 
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches: ["main"]
@@ -289,6 +295,8 @@ jobs:
   windows-asan:
     runs-on: windows-2022
     timeout-minutes: 30
+    env:
+      ASAN_OPTIONS: windows_fast_fail_on_error=true:alloc_dealloc_mismatch=1
 
     steps:
       - uses: actions/checkout@v4
@@ -300,8 +308,8 @@ jobs:
       - name: Configure (ASAN x64)
         run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DENABLE_ASAN=ON -DDEBUG_OUTPUT=ON
 
-      - name: Build (ASAN Release)
-        run: cmake --build build --config Release
+      - name: Build (ASAN Debug)
+        run: cmake --build build --config Debug
 
       - name: Add ASAN runtime DLLs to PATH
         shell: pwsh
@@ -314,20 +322,21 @@ jobs:
             Sort-Object Name -Descending |
             Select-Object -First 1 -ExpandProperty Name
           $asanDir = "$vsPath\VC\Tools\MSVC\$msvcVersion\bin\Hostx64\x64"
-          Write-Host "Adding ASAN runtime path: $asanDir"
           Add-Content $env:GITHUB_PATH $asanDir
 
       - name: Full CLI output (ASAN)
         shell: pwsh
         run: |
-          $bin = "build\Release\vmaware.exe"
-          & $bin; $true | Out-Null
+          $bin = "build\Debug\vmaware.exe"
+          & $bin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run CLI test suite (ASAN)
         shell: pwsh
         run: |
-          $bin = "build\Release\vmaware.exe"
+          $bin = "build\Debug\vmaware.exe"
           pwsh auxiliary/test_cli.ps1 -BIN $bin -TIMEOUT_SECS 30
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   linux:
     needs: [linux-compilation, linux-cpp-standard, linux-compiler-compat]
