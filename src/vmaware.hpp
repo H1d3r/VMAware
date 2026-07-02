@@ -3116,14 +3116,19 @@ public:
 
         struct single_brand {
             static brand_enum brand_cache;
+            static flagset cached_flags;
             static bool cached;
 
-            static void store(const brand_enum s) {
+            static void store(const brand_enum s, const flagset& flags) {
                 brand_cache = s;
+                cached_flags = flags;
                 cached = true;
             }
 
-            static bool is_cached() { return cached; }
+            static bool is_cached(const flagset& flags) { 
+                return cached && (cached_flags == flags); 
+            }
+            
             static brand_enum fetch() { 
                 return brand_cache; 
             }
@@ -3131,30 +3136,40 @@ public:
 
         struct multi_brand {
             static std::string brand_cache;
+            static flagset cached_flags;
             static bool cached;
 
-            static void store(const std::string& s) {
+            static void store(const std::string& s, const flagset& flags) {
                 brand_cache = s;
+                cached_flags = flags;
                 cached = true;
             }
 
-            static bool is_cached() { return cached; }
-            static std::string fetch() { 
-                return brand_cache; 
+            static bool is_cached(const flagset& flags) {
+                return cached && (cached_flags == flags);
+            }
+
+            static std::string fetch() {
+                return brand_cache;
             }
         };
 
         struct brand_list {
             static brand_list_t cache;
+            static flagset cached_flags;
             static bool cached;
 
-            static void store(const brand_list_t& list) {
+            static void store(const brand_list_t& list, const flagset& flags) {
                 cache = list;
+                cached_flags = flags;
                 cached = true;
             }
 
-            static bool is_cached() { return cached; }
-            static brand_list_t fetch() { 
+            static bool is_cached(const flagset& flags) {
+                return cached && (cached_flags == flags);
+            }
+
+            static brand_list_t fetch() {
                 return cache;
             }
         };
@@ -3162,11 +3177,19 @@ public:
         // helper specifically for conclusion strings
         struct conclusion {
             static char cache[512];
+            static flagset cached_flags;
             static bool cached;
-            static void store(const char* s) {
+
+            static void store(const char* s, const flagset& flags) {
                 str_copy(cache, s, sizeof(cache));
+                cached_flags = flags;
                 cached = true;
             }
+
+            static bool is_cached(const flagset& flags) {
+                return cached && (cached_flags == flags);
+            }
+
             static const char* fetch() { return cache; }
         };
 
@@ -4929,7 +4952,7 @@ public:
         static constexpr const char* CONTAINERD = "Containerd";
 
         static brand_list_t brand_list(const flagset& flags) {
-            if (memo::brand_list::is_cached()) {
+            if (memo::brand_list::is_cached(flags)) {
                 return memo::brand_list::fetch();
             }
 
@@ -5080,7 +5103,7 @@ public:
             }
         #endif
 
-            memo::brand_list::store(active_brands);
+            memo::brand_list::store(active_brands, flags);
             return active_brands;
         }
 
@@ -5168,14 +5191,14 @@ public:
         };
     
         static std::string brand_multiple(const flagset& flags = core::generate_default()) {
-            if (memo::multi_brand::is_cached()) {
+            if (memo::multi_brand::is_cached(flags)) {
                 return memo::multi_brand::fetch();
             }
 
             const brand_list_t& list = brands::brand_list(flags);
             const std::string& buffer = brand_multiple(list);
 
-            memo::multi_brand::store(buffer);
+            memo::multi_brand::store(buffer, flags);
             return buffer;
         }
             
@@ -5192,14 +5215,14 @@ public:
         }
 
         static brand_enum brand_single(const flagset& flags = core::generate_default()) {
-            if (memo::single_brand::is_cached()) {
+            if (memo::single_brand::is_cached(flags)) {
                 return memo::single_brand::fetch();
             }
 
             const brand_list_t& list = brands::brand_list(flags);
             const enum brand_enum brand = brand_single(list);
-    
-            memo::single_brand::store(brand);
+
+            memo::single_brand::store(brand, flags);
 
             return brand;
         }
@@ -14232,8 +14255,8 @@ public:
     }
 
 
-    static std::string conclusion(const flagset &flags = core::generate_default()) {
-        if (memo::conclusion::cached) {
+    static std::string conclusion(const flagset& flags = core::generate_default()) {
+        if (memo::conclusion::is_cached(flags)) {
             return memo::conclusion::fetch();
         }
 
@@ -14310,7 +14333,7 @@ public:
                 // Hyper-V artifacts are an exception due to how unique the circumstance is
                 (first_brand == brand_enum::HYPERV_ROOT ? "" : " VM");
 
-            memo::conclusion::store(result.c_str());
+            memo::conclusion::store(result.c_str(), flags);
 
             return result;
         };
@@ -14506,12 +14529,24 @@ std::array<VM::core::brand_entry, VM::MAX_BRANDS> VM::core::brand_scoreboard = [
 }();
 
 // initial definitions for cache items because C++ forbids in-class initializations
+VM::flagset VM::memo::conclusion::cached_flags{};
+VM::flagset VM::memo::single_brand::cached_flags{};
+VM::flagset VM::memo::multi_brand::cached_flags{};
+VM::flagset VM::memo::brand_list::cached_flags{};
+VM::brand_list_t VM::memo::brand_list::cache = {};
+VM::hyperx_state VM::memo::hyperx::state = VM::HYPERV_UNKNOWN;
+VM::u32 VM::memo::threadcount::threadcount_cache = 0;
 std::array<VM::memo::cache_entry, VM::enum_size + 1> VM::memo::cache_table{};
-enum VM::brand_enum VM::memo::single_brand::brand_cache = brand_enum::NULL_BRAND;
+std::array<VM::memo::leaf_entry, VM::memo::leaf_cache::CAPACITY> VM::memo::leaf_cache::table{};
 std::string VM::memo::multi_brand::brand_cache;
+std::size_t VM::memo::leaf_cache::count = 0;
+std::size_t VM::memo::leaf_cache::next_index = 0;
+enum VM::brand_enum VM::memo::single_brand::brand_cache = brand_enum::NULL_BRAND;
 char VM::memo::cpu_brand::brand_cache[128] = { 0 };
 char VM::memo::bios_info::manufacturer[256] = { 0 };
 char VM::memo::bios_info::model[128] = { 0 };
+char VM::memo::conclusion::cache[512] = { 0 };
+bool VM::memo::conclusion::cached = false;
 bool VM::memo::single_brand::cached = false;
 bool VM::memo::multi_brand::cached = false;
 bool VM::memo::cpu_brand::cached = false;
@@ -14519,12 +14554,6 @@ bool VM::memo::bios_info::cached = false;
 bool VM::memo::hyperx::cached = false;
 bool VM::memo::hardened::result = false;
 bool VM::memo::hardened::cached = false;
-VM::u32 VM::memo::threadcount::threadcount_cache = 0;
-VM::hyperx_state VM::memo::hyperx::state = VM::HYPERV_UNKNOWN;
-std::array<VM::memo::leaf_entry, VM::memo::leaf_cache::CAPACITY> VM::memo::leaf_cache::table{};
-std::size_t VM::memo::leaf_cache::count = 0;
-std::size_t VM::memo::leaf_cache::next_index = 0;
-VM::brand_list_t VM::memo::brand_list::cache = {};
 bool VM::memo::brand_list::cached = false;
 
 thread_local enum VM::brand_enum VM::core::last_detected_brand = VM::brand_enum::NULL_BRAND;
