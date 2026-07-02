@@ -13822,7 +13822,7 @@ public:
         // this is added as a last ditch attempt to detect a VM, 
         // because if there are indications of hardening then logically 
         // it should in fact be a VM.
-        return (is_hardened());
+        return (is_hardened(flags));
     }
 
 
@@ -14339,17 +14339,26 @@ public:
 
     /**
      * @brief Returns whether it suspects the environment has anti-VM hardening
+     * @param flags The active flagset configuration
      * @return bool
      */
-    static bool is_hardened() {
+    static bool is_hardened(const flagset& flags = core::generate_default()) {
         if (memo::hardened::cached) {
             return memo::hardened::result;
         }
 
-        auto hardened_logic = []() -> bool {
+        auto hardened_logic = [&flags]() -> bool {
+            // Helper to execute techniques only if they are enabled in the active configuration
+            auto check_technique = [&flags](const enum_flags flag) -> bool {
+                if (core::is_disabled(flags, flag)) {
+                    return false;
+                }
+                return check(flag);
+            };
+
             // Helper to get the specific brand associated with a technique using the cache
-            auto detected_brand = [](const enum_flags flag) -> enum brand_enum {
-                if (!check(flag)) {
+            auto detected_brand = [check_technique](const enum_flags flag) -> enum brand_enum {
+                if (!check_technique(flag)) {
                     return brand_enum::NULL_BRAND;
                 }
                 if (memo::cache_table.at(flag).has_value) {
@@ -14358,17 +14367,19 @@ public:
                 return brand_enum::NULL_BRAND;
             };
 
-            const bool hv_present = (check(VM::HYPERVISOR_BIT) || check(VM::HYPERVISOR_STR));
-            const bool has_hyper_x = []() {
-                if (check(VM::HYPERVISOR_BIT) || check(VM::HYPERVISOR_STR)) {
+            const bool hv_present = (check_technique(VM::HYPERVISOR_BIT) || check_technique(VM::HYPERVISOR_STR));
+            const bool has_hyper_x = [check_technique]() {
+                if (check_technique(VM::HYPERVISOR_BIT) || check_technique(VM::HYPERVISOR_STR)) {
                     return false;
                 }
 
-                const brand_enum bit_brand = memo::cache_table.at(VM::HYPERVISOR_BIT).brand_name;
-                const brand_enum str_brand = memo::cache_table.at(VM::HYPERVISOR_STR).brand_name;
+                const brand_enum bit_brand = memo::cache_table.at(VM::HYPERVISOR_BIT).has_value
+                    ? memo::cache_table.at(VM::HYPERVISOR_BIT).brand_name : brand_enum::NULL_BRAND;
+                const brand_enum str_brand = memo::cache_table.at(VM::HYPERVISOR_STR).has_value
+                    ? memo::cache_table.at(VM::HYPERVISOR_STR).brand_name : brand_enum::NULL_BRAND;
 
                 return (
-                    (bit_brand == brand_enum::HYPERV_ROOT) || 
+                    (bit_brand == brand_enum::HYPERV_ROOT) ||
                     (str_brand == brand_enum::HYPERV_ROOT)
                 );
             }();
@@ -14400,15 +14411,15 @@ public:
             }
 
             // rule 4: if VM::NVRAM is detected, so should VM::HYPERVISOR_BIT or VM::HYPERVISOR_STR
-            if ((check(VM::NVRAM)) && !hv_present && !has_hyper_x) {
+            if (check_technique(VM::NVRAM) && !hv_present && !has_hyper_x) {
                 debug("is_hardened(): NVRAM and hypervisor bit/str are not detected together");
                 return true;
             }
 
             // rule 5: if CPU-based techniques detect a hypervisor, the hypervisor bit must be enabled
-            if ((check(VM::TRAP) || check(VM::KVM_INTERCEPTION) || check(VM::SVM_EXCEPTIONS)
-                || check(VM::INTERRUPT_SHADOW) || check(VM::EIP_OVERFLOW) || check(VM::SINGLE_STEP)
-                || check(VM::MSR) || check(VM::UD) || check(VM::HYPERV_NESTED)
+            if ((check_technique(VM::TRAP) || check_technique(VM::KVM_INTERCEPTION) || check_technique(VM::SVM_EXCEPTIONS)
+                || check_technique(VM::INTERRUPT_SHADOW) || check_technique(VM::EIP_OVERFLOW) || check_technique(VM::SINGLE_STEP)
+                || check_technique(VM::MSR) || check_technique(VM::UD) || check_technique(VM::HYPERV_NESTED)
                 ) && !hv_present && !has_hyper_x) {
                 debug("is_hardened(): instruction-based techniques and hypervisor bit/str are not detected together");
                 return true;
@@ -14456,7 +14467,7 @@ public:
             type = VM::type(flags);
             conclusion = VM::conclusion(flags);
             is_vm = VM::detect(flags);
-            is_hardened = VM::is_hardened();
+            is_hardened = VM::is_hardened(flags);
             percentage = VM::percentage(flags);
             detected_count = VM::detected_count(flags);
             technique_count = VM::technique_count;
