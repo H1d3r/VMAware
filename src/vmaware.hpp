@@ -6579,7 +6579,7 @@ public:
      * @implements VM::HYPERVISOR_DIR
      */
     [[nodiscard]] static bool hypervisor_dir() {
-        DIR* dir = opendir("/sys/hypervisor");
+        std::unique_ptr<DIR, decltype(&closedir)> dir(opendir("/sys/hypervisor"), closedir);
 
         if (dir == nullptr) {
             return false;
@@ -6588,11 +6588,11 @@ public:
         const struct dirent* entry{};
         int count = 0;
 
-        while ((entry = readdir(dir)) != nullptr) {
+        while ((entry = readdir(dir.get())) != nullptr) {
             if (
-                (entry->d_name[0] == '.' && entry->d_name[1] == '\0') || 
+                (entry->d_name[0] == '.' && entry->d_name[1] == '\0') ||
                 (entry->d_name[1] == '.' && entry->d_name[2] == '\0')
-            ) {
+                ) {
                 continue;
             }
 
@@ -7935,22 +7935,21 @@ public:
                     devices.push_back({ vid, did });
                 }
             }
-         #else
-            DIR* dir = opendir(pci_path.c_str());
-            if (dir) {
-                while (struct dirent* ent = readdir(dir)) {
-                    std::string name = ent->d_name;
-                    if (name == "." || name == "..") continue;
-                    std::string base = pci_path + "/" + name;
-                    std::ifstream vf(base + "/vendor"), df(base + "/device");
-                    if (!vf || !df) continue;
-                    u16 vid = 0; u32 did = 0;
-                    vf >> std::hex >> vid;
-                    df >> std::hex >> did;
-                    devices.push_back({ vid, did });
-                }
-                closedir(dir);
-            }
+        #else
+         std::unique_ptr<DIR, decltype(&closedir)> dir(opendir(pci_path.c_str()), closedir);
+         if (dir) {
+             while (struct dirent* ent = readdir(dir.get())) {
+                 std::string name = ent->d_name;
+                 if (name == "." || name == "..") continue;
+                 std::string base = pci_path + "/" + name;
+                 std::ifstream vf(base + "/vendor"), df(base + "/device");
+                 if (!vf || !df) continue;
+                 u16 vid = 0; u32 did = 0;
+                 vf >> std::hex >> vid;
+                 df >> std::hex >> did;
+                 devices.push_back({ vid, did });
+             }
+         }
         #endif
         #elif (WINDOWS)
         static constexpr const wchar_t* kroots[] = {
@@ -8674,14 +8673,14 @@ public:
             return true;
         }
     #else
-        DIR* dir = opendir("/sys/block");
+        std::unique_ptr<DIR, decltype(&closedir)> dir(opendir("/sys/block"), closedir);
         if (!dir) {
             return false;
         }
 
         struct dirent* ent{};
 
-        while ((ent = readdir(dir))) {
+        while ((ent = readdir(dir.get()))) {
             const char* name = ent->d_name;
             if (name[0] == '.') {
                 continue;
