@@ -629,7 +629,17 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     std::vector<std::string> summary;
 
 #if defined(__VMAWARE_DEBUG__)
-    std::cout << grey << "\nSHA-256: " << white << compute_self_sha256() << ansi_exit << "\n";
+    bool print_sha = true;
+
+    #if (CLI_WINDOWS)
+        print_sha = g_tui.enabled;
+    #endif
+
+    if (print_sha) {
+        std::cout << grey << "\nSHA-256: "
+            << white << compute_self_sha256()
+            << ansi_exit << "\n";
+    }
 #endif
 
     const std::string brand = vm.brand;

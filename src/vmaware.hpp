@@ -13257,6 +13257,7 @@ public:
 
                 if (pcrIndex == 0 && eventType == 0x00000008) {
                     if (eventSize == 2 && payload[0] == 0x00 && payload[1] == 0x00) {
+                        debug("TPM: Detected null payload");
                         return true;
                     }
                 }
@@ -13268,6 +13269,7 @@ public:
 
                         if ((base_addr == 0x830000 && blob_len == 0xD0000) ||
                             (base_addr == 0x900000 && blob_len == 0xE80000)) {
+                            debug("TPM: Detected OVMF's memory bounds of the SEC and PEI execution phases");
                             return true;
                         }
                     }
