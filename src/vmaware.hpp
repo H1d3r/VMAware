@@ -33,7 +33,7 @@
  * 
  *                               MIT License
  *  
- *  Copyright (c) 2026 Requiem
+ *  Copyright (c) 2026 NotRequiem
  *  
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -603,6 +603,7 @@ public:
         EIP_OVERFLOW,
         SVM_EXCEPTIONS,
         HYPERV_NESTED,
+        TPM,
 
         // Linux and Windows
         SYSTEM_REGISTERS,
@@ -3892,7 +3893,7 @@ public:
             std::string result;
             result.reserve(ws.size());
             for (const wchar_t wc : ws) {
-                result.push_back((static_cast<uint32_t>(wc) < 128)
+                result.push_back((static_cast<u32>(wc) < 128)
                     ? static_cast<char>(wc)
                     : '?');
             }
@@ -13112,6 +13113,228 @@ public:
     [[nodiscard]] static bool hyperv_nested() {
         return util::hyper_x() == HYPERV_NESTED_VM;
     }
+
+
+    /**
+     * @brief Check measured boot logs exported by the TPM
+     * @category Windows
+     * @implements VM::TPM
+     */
+    [[nodiscard]] static bool tpm() {
+        using TBS_RESULT = UINT32;
+        using TBS_HCONTEXT = void*;
+
+    #pragma pack(push, 1)
+        struct VMAWARE_TBS_CONTEXT_PARAMS {
+            UINT32 version;
+        };
+
+        struct TCG_PCR_EVENT_HEADER {
+            u32 pcrIndex;
+            u32 eventType;
+            u8  digest[20];
+            u32 eventSize;
+        };
+
+        struct alg_size {
+            u16 algId;
+            u16 digestSize;
+        };
+    #pragma pack(pop)
+
+        using pfnTbsi_Get_TCG_Log_Ex = TBS_RESULT(__stdcall*)(UINT32, PBYTE, PUINT32);
+        using pfnTbsi_Context_Create = TBS_RESULT(__stdcall*)(const VMAWARE_TBS_CONTEXT_PARAMS*, TBS_HCONTEXT*);
+        using pfnTbsip_Context_Close = TBS_RESULT(__stdcall*)(TBS_HCONTEXT);
+        using pfnTbsi_Get_TCG_Log = TBS_RESULT(__stdcall*)(TBS_HCONTEXT, PBYTE, PUINT32);
+
+        auto parse_log = [](const std::vector<u8>& logData) noexcept -> bool {
+            if (logData.size() < 32) {
+                return false;
+            }
+
+            const u8* pBuffer = logData.data();
+            size_t total_size = logData.size();
+
+            // validate the mandatory Spec ID Event header ( legacy format )
+            const auto* first_hdr = reinterpret_cast<const TCG_PCR_EVENT_HEADER*>(pBuffer);
+            if (first_hdr->pcrIndex != 0 || first_hdr->eventType != 0x00000003 /* EV_NO_ACTION */) {
+                return false;
+            }
+
+            size_t first_event_data_offset = sizeof(TCG_PCR_EVENT_HEADER);
+            if (total_size < first_event_data_offset + first_hdr->eventSize) {
+                return false;
+            }
+
+            const u8* spec_id_payload = pBuffer + first_event_data_offset;
+            u32 spec_id_size = first_hdr->eventSize;
+
+            if (spec_id_size < 28 || memcmp(spec_id_payload, "Spec ID Event03", 15) != 0) {
+                return false;
+            }
+
+            // map agile active crypto hashing algorithms to their digest sizes
+            u32 num_algs = *reinterpret_cast<const u32*>(spec_id_payload + 24);
+            if (spec_id_size < 28 + (num_algs * sizeof(alg_size))) {
+                return false;
+            }
+
+            std::vector<alg_size> active_algs(num_algs);
+            const u8* alg_ptr = spec_id_payload + 28;
+            for (u32 i = 0; i < num_algs; ++i) {
+                active_algs[i] = *reinterpret_cast<const alg_size*>(alg_ptr + (i * sizeof(alg_size)));
+            }
+
+            auto get_digest_size = [&active_algs](u16 algId) -> u16 {
+                for (const auto& alg : active_algs) {
+                    if (alg.algId == algId) return alg.digestSize;
+                }
+                switch (algId) {
+                    case 0x0004: return 20; // SHA-1
+                    case 0x000B: return 32; // SHA-256
+                    case 0x000C: return 48; // SHA-384
+                    case 0x000D: return 64; // SHA-512
+                    default:     return 0;
+                }
+            };
+
+            // move pointer to sequential crypto-agile TCG_PCR_EVENT2 items
+            size_t current_offset = first_event_data_offset + spec_id_size;
+
+            while (current_offset < total_size) {
+                if (total_size - current_offset < 12) {
+                    break;
+                }
+
+                const u8* event_ptr = pBuffer + current_offset;
+
+                u32 pcrIndex = *reinterpret_cast<const u32*>(event_ptr);
+                u32 eventType = *reinterpret_cast<const u32*>(event_ptr + 4);
+                u32 digestCount = *reinterpret_cast<const u32*>(event_ptr + 8);
+
+                size_t local_offset = 12;
+
+                // Skip digests based on algo ID boundaries
+                bool parse_error = false;
+                for (u32 i = 0; i < digestCount; ++i) {
+                    if (total_size - (current_offset + local_offset) < 2) {
+                        parse_error = true;
+                        break;
+                    }
+                    u16 algId = *reinterpret_cast<const u16*>(event_ptr + local_offset);
+                    local_offset += 2;
+
+                    u16 digest_size = get_digest_size(algId);
+                    if (digest_size == 0) {
+                        parse_error = true;
+                        break;
+                    }
+
+                    if (total_size - (current_offset + local_offset) < digest_size) {
+                        parse_error = true;
+                        break;
+                    }
+                    local_offset += digest_size;
+                }
+
+                if (parse_error) {
+                    break;
+                }
+
+                // final event size
+                if (total_size - (current_offset + local_offset) < 4) {
+                    break;
+                }
+                u32 eventSize = *reinterpret_cast<const u32*>(event_ptr + local_offset);
+                local_offset += 4;
+
+                // bounds checks on remaining payload space
+                if (total_size - (current_offset + local_offset) < eventSize) {
+                    break;
+                }
+
+                const u8* payload = event_ptr + local_offset;
+
+                if (pcrIndex == 0 && eventType == 0x00000008) {
+                    if (eventSize == 2 && payload[0] == 0x00 && payload[1] == 0x00) {
+                        return true;
+                    }
+                }
+
+                if (pcrIndex == 0 && eventType == 0x0000000F) {
+                    if (eventSize >= 16) {
+                        u64 base_addr = *reinterpret_cast<const u64*>(payload);
+                        u64 blob_len = *reinterpret_cast<const u64*>(payload + 8);
+
+                        if ((base_addr == 0x830000 && blob_len == 0xD0000) ||
+                            (base_addr == 0x900000 && blob_len == 0xE80000)) {
+                            return true;
+                        }
+                    }
+                }
+
+                current_offset += local_offset + eventSize;
+            }
+
+            return false;
+        };
+
+        const HMODULE hTbs = LoadLibraryA("tbs.dll");
+        if (hTbs == nullptr) {
+            return false;
+        }
+
+        const char* names[] = {
+            "Tbsi_Get_TCG_Log_Ex",
+            "Tbsi_Context_Create",
+            "Tbsip_Context_Close",
+            "Tbsi_Get_TCG_Log"
+        };
+        void* funcs[ARRAYSIZE(names)] = {};
+
+        util::get_function_address(hTbs, names, funcs, 4);
+
+        pfnTbsi_Get_TCG_Log_Ex pTbsi_Get_TCG_Log_Ex = reinterpret_cast<pfnTbsi_Get_TCG_Log_Ex>(funcs[0]);
+        pfnTbsi_Context_Create pTbsi_Context_Create = reinterpret_cast<pfnTbsi_Context_Create>(funcs[1]);
+        pfnTbsip_Context_Close pTbsip_Context_Close = reinterpret_cast<pfnTbsip_Context_Close>(funcs[2]);
+        pfnTbsi_Get_TCG_Log    pTbsi_Get_TCG_Log = reinterpret_cast<pfnTbsi_Get_TCG_Log>(funcs[3]);
+
+        bool vm_detected = false;
+
+        // latest API
+        if (pTbsi_Get_TCG_Log_Ex) {
+            for (UINT32 logType : { 0, 2 }) { // 0: SRTM_CURRENT, 2: SRTM_BOOT
+                UINT32 logSize = 512 * 1024;
+                std::vector<u8> buffer(logSize);
+                if (pTbsi_Get_TCG_Log_Ex(logType, buffer.data(), &logSize) == 0) {
+                    buffer.resize(logSize);
+                    if (parse_log(buffer)) {
+                        vm_detected = true;
+                        break;
+                    }
+                }
+            }
+        }
+        // legacy API
+        else if (pTbsi_Context_Create && pTbsip_Context_Close && pTbsi_Get_TCG_Log) {
+            VMAWARE_TBS_CONTEXT_PARAMS params{ 1 };
+            TBS_HCONTEXT hContext = nullptr;
+            if (pTbsi_Context_Create(&params, &hContext) == 0) {
+                UINT32 logSize = 512 * 1024;
+                std::vector<u8> buffer(logSize);
+                if (pTbsi_Get_TCG_Log(hContext, buffer.data(), &logSize) == 0) {
+                    buffer.resize(logSize);
+                    if (parse_log(buffer)) {
+                        vm_detected = true;
+                    }
+                }
+                pTbsip_Context_Close(hContext);
+            }
+        }
+
+        FreeLibrary(hTbs);
+        return vm_detected;
+    }
     // ADD NEW TECHNIQUE FUNCTION HERE
 
 
@@ -13894,6 +14117,7 @@ public:
             case SVM_EXCEPTIONS: return "SVM_EXCEPTIONS";
             case CGROUP: return "CGROUP";
             case HYPERV_NESTED: return "HYPERV_NESTED";
+            case TPM: return "TPM";
             // END OF TECHNIQUE LIST
             case DEFAULT: return "DEFAULT"; 
             case ALL: return "ALL"; 
@@ -14410,6 +14634,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::TRAP, {100, VM::trap}},
             {VM::KVM_INTERCEPTION, {150, VM::kvm_interception}},
             {VM::SVM_EXCEPTIONS, {150, VM::svm_exceptions}},
+            {VM::TPM, {100, VM::tpm}},
             {VM::INTERRUPT_SHADOW, {100, VM::interrupt_shadow}},
             {VM::EIP_OVERFLOW, {100, VM::eip_overflow}},
             {VM::HYPERVISOR_HOOK, {100, VM::hypervisor_hook}},

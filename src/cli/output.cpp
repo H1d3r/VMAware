@@ -622,6 +622,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::CGROUP, "cgroup namespace");
     checker(VM::TIMER, "timing anomalies");
     checker(VM::HYPERV_NESTED, "nested virtualization");
+    checker(VM::TPM, "TPM");
 
     const auto t2 = std::chrono::high_resolution_clock::now();
     const VM::vmaware vm(VM::MULTIPLE, high_thresh_arg, all_arg, dynamic_arg);
