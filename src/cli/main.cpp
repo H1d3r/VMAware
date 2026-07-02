@@ -22,6 +22,13 @@
  *  - License: MIT
  */
 
+#ifndef __VMAWARE_DEBUG__
+    #if defined(_DEBUG)    /* MSVC Debug */       \
+        || defined(DEBUG)     /* user or build-system */
+        #define __VMAWARE_DEBUG__
+    #endif
+#endif
+
 #include <vector>
 #include <fstream>
 #include <iostream>
@@ -35,13 +42,17 @@
 #include "wagner_fischer.hpp"
 
 #if (CLI_WINDOWS)
-#include "windows_tui.hpp"
-#include <windows.h>
-#include <shellapi.h>
+    #include "windows_tui.hpp"
+    #include <windows.h>
+    #include <shellapi.h>
+    #if (__VMAWARE_DEBUG__)
+        #define _CRTDBG_MAP_ALLOC
+        #include <crtdbg.h>
+    #endif
 #endif
 
 constexpr const char* ver = "2.7.0";
-constexpr const char* date = "June 2026";
+constexpr const char* date = "July 2026";
 
 [[noreturn]] static void help() {
     std::cout <<
@@ -169,8 +180,23 @@ Containerd
     std::exit(0);
 }
 
+#if (CLI_WINDOWS && __VMAWARE_DEBUG__)
+    static void enable_crt_leak_check()
+    {
+        int flags = _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG);
+        flags |= _CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF;
+        _CrtSetDbgFlag(flags);
+
+        _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
+        _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+    }
+#endif
+
 int main(int argc, char* argv[]) {
 #if (CLI_WINDOWS)
+    #if (__VMAWARE_DEBUG__) 
+        enable_crt_leak_check();
+    #endif
     bool rich_requested = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--rich") == 0) {
