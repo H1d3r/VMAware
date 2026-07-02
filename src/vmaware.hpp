@@ -4986,7 +4986,7 @@ public:
             // if all brands have a point of 0, return "Unknown"
             if (active_brands.empty()) {                        
                 active_brands.emplace_back(brand_enum::NULL_BRAND, 1);
-                memo::brand_list::store(active_brands);
+                memo::brand_list::store(active_brands, flags);
                 return active_brands;
             }
 
@@ -5002,7 +5002,7 @@ public:
                     remove(brand_enum::HYPERV_ROOT);
                 }
 
-                memo::brand_list::store(active_brands);
+                memo::brand_list::store(active_brands, flags);
                 return active_brands;
             }
 
@@ -14545,8 +14545,6 @@ enum VM::brand_enum VM::memo::single_brand::brand_cache = brand_enum::NULL_BRAND
 char VM::memo::cpu_brand::brand_cache[128] = { 0 };
 char VM::memo::bios_info::manufacturer[256] = { 0 };
 char VM::memo::bios_info::model[128] = { 0 };
-char VM::memo::conclusion::cache[512] = { 0 };
-bool VM::memo::conclusion::cached = false;
 bool VM::memo::single_brand::cached = false;
 bool VM::memo::multi_brand::cached = false;
 bool VM::memo::cpu_brand::cached = false;
