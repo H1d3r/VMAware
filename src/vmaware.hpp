@@ -26,6 +26,7 @@
  *      - Lorenzo Rizzotti (https://github.com/Dreaming-Codes) 
  *      - virtfunc (https://github.com/virtfunc)
  *      - Wiisus (https://github.com/wiisus)
+ *      - Max Ufer (https://github.com/Manny684)
  *  - Repository: https://github.com/NotRequiem/VMAware
  *  - Docs: https://github.com/NotRequiem/VMAware/docs/documentation.md
  *  - Full credits: https://github.com/NotRequiem/VMAware#credits-and-contributors-%EF%B8%8F
@@ -1027,8 +1028,17 @@ public:
             const std::string brand_str = cpu_manufacturer(p_leaf);
 
             if (brand_str == "Microsoft Hv") {
-                if (util::hyper_x() == HYPERV_HOST) {
+                const auto hyperx = util::hyper_x();
+
+                // A Hyper-V *host* (root partition) is not itself a guest VM, and a QEMU/KVM guest
+                // running with Hyper-V enlightenments is already attributed to QEMU_KVM_HYPERV by
+                // hyper_x(). In neither case should the "Microsoft Hv" vendor string be taken to
+                // mean the guest is genuine Microsoft Hyper-V.
+                if (hyperx == HYPERV_HOST) {
                     return false;
+                }
+                if (hyperx == HYPERV_ENLIGHTENMENT) {
+                    return true; // VM detected via the vendor string; brand already set by hyper_x()
                 }
                 return core::add(brand_enum::HYPERV);
             }
@@ -4085,7 +4095,21 @@ public:
             }
             else {
                 if (!is_root_partition()) {
-                    if (eax() == 11 && is_hyperv_present()) {
+                    // A QEMU/KVM guest running with Hyper-V enlightenments presents "Microsoft Hv" at
+                    // leaf 0x40000000 (so the Windows guest uses the fast Hyper-V ABI) while KVM relocates
+                    // its own "KVMKVMKVM" signature to leaf 0x40000100. That secondary signature is an
+                    // unambiguous tell of QEMU/KVM. A guest is not a root partition, so this must be
+                    // checked here -- otherwise the enlightenment check exists only in the
+                    // is_root_partition() branch below, leaving enlightened guests (the common
+                    // case) misdetected as genuine Hyper-V.
+                    const std::string enlightenment_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor + 0x100); // 0x40000100
+
+                    if (util::find(enlightenment_str, "KVM")) {
+                        debug("HYPER-X: Detected Hyper-V enlightenments");
+                        core::add(brand_enum::QEMU_KVM_HYPERV);
+                        state = HYPERV_ENLIGHTENMENT;
+                    }
+                    else if (eax() == 11 && is_hyperv_present()) {
                         // Windows machine running under Hyper-V type 2
                         debug("HYPER-X: Detected Hyper-V guest VM");
                         core::add(brand_enum::HYPERV);
