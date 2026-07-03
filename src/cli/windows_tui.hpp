@@ -4,23 +4,23 @@
 #include <sstream>
 
 #if (CLI_WINDOWS)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
+    #define WIN32_LEAN_AND_MEAN
+    #define NOMINMAX
 
-#include <windows.h>
-#include <winternl.h>
-#include <intrin.h>
-#include <mutex>
-#include <deque>
-#include <conio.h>
-#include <iomanip>
-#include <vector>
-#include <string>
+    #include "globals.hpp"
+    #include "sha256.hpp"
 
-#include "globals.hpp"
-#include "sha256.hpp"
+    #include <windows.h>
+    #include <winternl.h>
+    #include <intrin.h>
+    #include <mutex>
+    #include <deque>
+    #include <conio.h>
+    #include <iomanip>
+    #include <vector>
+    #include <string>
 
-#pragma comment(lib, "ntdll.lib")
+    #pragma comment(lib, "ntdll.lib")
 
     class win_ansi_enabler_t
     {
@@ -105,7 +105,7 @@
     }
 
     // UI Manager: Dynamic scaling boxes with aggressive dark/white sync theme
-    class TuiManager {
+    class tui_manager {
     public:
         SHORT start_y = 0;
         SHORT left_y = 0;
@@ -137,39 +137,39 @@
         u32 g_max_hyp = 0;
         u32 g_max_ext = 0;
 
-        bool setCursorSafe(SHORT x, SHORT y);
-        bool updateBoxWidth(size_t incoming_len);
+        bool set_cursor(SHORT x, SHORT y) const;
+        bool update_box_width(size_t incoming_len);
         void init();
-        ~TuiManager();
-        void printHeader();
-        void printLeft(const std::string& str);
-        void clearBoxes();
-        void redrawAllBoxes();
-        SHORT drawBoxInternal(SHORT startY, size_t box_width, const std::string& title, const std::vector<std::string>& items, size_t scroll_idx, const std::string& controls);
-        void addException(const std::vector<std::string>& lines);
-        void addCycle(const std::string& line);
-        void addDebug(const std::string& line);
-        void scrollExceptionsUp();
-        void scrollExceptionsDown();
-        void scrollCyclesUp();
-        void scrollCyclesDown();
-        void scrollDebugUp();
-        void scrollDebugDown();
-        void drawSummaryBox(const std::vector<std::string>& lines);
+        ~tui_manager();
+        void print_header();
+        void print_left(const std::string& str);
+        void clear_boxes();
+        void redraw_all_boxes();
+        SHORT draw_box_internal(SHORT startY, size_t box_width, const std::string& title, const std::vector<std::string>& items, size_t scroll_idx, const std::string& controls);
+        void add_exception(const std::vector<std::string>& lines);
+        void add_cycle(const std::string& line);
+        void add_debug(const std::string& line);
+        void scroll_exceptions_up();
+        void scroll_exceptions_down();
+        void scroll_cycles_up();
+        void scroll_cycles_down();
+        void scroll_debug_up();
+        void scroll_debug_down();
+        void draw_summary_box(const std::vector<std::string>& lines);
         void finalize();
     };
 
-    extern TuiManager g_tui;
+    extern tui_manager g_tui;
 
     // Aggressive stream interceptor. ALL output sent through std::cout that doesn't explicitly bypass
     // into g_tui.raw_out gets captured and sent to the Debug Log UI. No layout escapes possible
-    class DebugInterceptor : public std::streambuf {
+    class debug_interceptor : public std::streambuf {
         std::string buffer;
     public:
         std::streambuf* original;
 
-        DebugInterceptor(std::streambuf* orig) : original(orig) {}
-        ~DebugInterceptor();
+        debug_interceptor(std::streambuf* orig) : original(orig) {}
+        ~debug_interceptor();
     protected:
         virtual int_type overflow(int_type c) override;
         virtual std::streamsize xsputn(const char* s, std::streamsize n) override;
@@ -179,7 +179,7 @@
         do { \
             std::ostringstream _oss; \
             _oss << msg; \
-            g_tui.printLeft(_oss.str()); \
+            g_tui.print_left(_oss.str()); \
         } while(0)
 
     template<typename... Args>
@@ -189,14 +189,14 @@
         (void)dummy;
 
         if (g_tui.enabled) {
-            g_tui.addDebug(oss.str());
+            g_tui.add_debug(oss.str());
         }
         else {
             std::cout << "[DEBUG] " << oss.str() << "\n";
         }
     }
 
-    LONG WINAPI VehLogger(PEXCEPTION_POINTERS ep);
+    LONG WINAPI exception_handler_logger(PEXCEPTION_POINTERS ep);
 
 #else
 

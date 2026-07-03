@@ -4,15 +4,16 @@
 #include "globals.hpp"
 #include "sha256.hpp"
 #include "windows_tui.hpp"
+
 #include <cstdlib>
 #include <algorithm>
 
-TuiManager g_tui;
+tui_manager g_tui;
 
 // Tracks the deepest Y coordinate the right-hand boxes reach to prevent overlapping text at the end
 static SHORT g_right_bottom_y = 0;
 
-bool TuiManager::setCursorSafe(SHORT x, SHORT y) {
+bool tui_manager::set_cursor(SHORT x, SHORT y) const {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     GetConsoleScreenBufferInfo(hOut, &csbi);
 
@@ -38,7 +39,7 @@ bool TuiManager::setCursorSafe(SHORT x, SHORT y) {
     return true;
 }
 
-void TuiManager::clearBoxes() {
+void tui_manager::clear_boxes() {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     GetConsoleScreenBufferInfo(hOut, &csbi);
 
@@ -54,7 +55,7 @@ void TuiManager::clearBoxes() {
     }
 }
 
-bool TuiManager::updateBoxWidth(size_t incoming_len) {
+bool tui_manager::update_box_width(size_t incoming_len) {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     GetConsoleScreenBufferInfo(hOut, &csbi);
     console_width = csbi.dwSize.X;
@@ -68,13 +69,13 @@ bool TuiManager::updateBoxWidth(size_t incoming_len) {
 
     if (incoming_len > global_box_width) {
         global_box_width = incoming_len;
-        clearBoxes(); // wipe old ghost boundaries before redrawing
+        clear_boxes(); // wipe old ghost boundaries before redrawing
         return true;
     }
     return false;
 }
 
-void TuiManager::init() {
+void tui_manager::init() {
     hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     SetConsoleOutputCP(CP_UTF8);
     enabled = true;
@@ -127,17 +128,17 @@ void TuiManager::init() {
         debugs.push_back(dim + std::string("Compile in debug mode to view detailed logs.") + ansi_exit);
     #endif
 
-    setCursorSafe(0, start_y);
-    printHeader();
+    set_cursor(0, start_y);
+    print_header();
 }
 
-TuiManager::~TuiManager() {
+tui_manager::~tui_manager() {
     if (raw_out) {
         delete raw_out;
     }
 }
 
-void TuiManager::printHeader() {
+void tui_manager::print_header() {
     std::string arch, vendor, ucode, os;
     int family = 0, model = 0, stepping = 0;
 
@@ -253,21 +254,21 @@ void TuiManager::printHeader() {
     left_y = csbi.dwCursorPosition.Y;
     exception_y = left_y;
 
-    redrawAllBoxes();
+    redraw_all_boxes();
 }
 
-void TuiManager::printLeft(const std::string& str) {
+void tui_manager::print_left(const std::string& str) {
     if (!enabled) {
         std::cout << str << "\n";
         return;
     }
     std::lock_guard<std::mutex> lock(mtx);
-    setCursorSafe(left_margin, left_y);
+    set_cursor(left_margin, left_y);
     *raw_out << str << "\x1B[K" << std::flush;
     left_y++;
 }
 
-void TuiManager::redrawAllBoxes() {
+void tui_manager::redraw_all_boxes() {
     if (!enabled) return;
 
     CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -278,88 +279,88 @@ void TuiManager::redrawAllBoxes() {
     size_t content_w = global_box_width - 4;
 
     // 1. Exceptions Box
-    setCursorSafe(right_x, draw_y++);
+    set_cursor(right_x, draw_y++);
     *raw_out << dim << "┌─ " << white << "Exceptions" << dim << " " << repeat_str("─", global_box_width >= 15 ? global_box_width - 15 : 0) << "┐" << ansi_exit << "\x1B[K";
 
     if (!exceptions.empty()) {
         const auto& lines = exceptions[exc_scroll_index];
         for (size_t i = 0; i < lines.size(); i++) {
-            setCursorSafe(right_x, draw_y++);
+            set_cursor(right_x, draw_y++);
             *raw_out << dim << "│ " << ansi_exit << pad(lines[i], content_w) << dim << " │" << ansi_exit << "\x1B[K";
         }
     } else {
         for (size_t i = 0; i < (size_t)box_height - 2; i++) {
-            setCursorSafe(right_x, draw_y++);
+            set_cursor(right_x, draw_y++);
             *raw_out << dim << "│ " << ansi_exit << pad("", content_w) << dim << " │" << ansi_exit << "\x1B[K";
         }
     }
 
-    setCursorSafe(right_x, draw_y++);
+    set_cursor(right_x, draw_y++);
     *raw_out << dim << "└" << repeat_str("─", global_box_width >= 2 ? global_box_width - 2 : 0) << "┘" << ansi_exit << "\x1B[K";
 
-    setCursorSafe(right_x, draw_y++);
+    set_cursor(right_x, draw_y++);
     std::string exc_controls = "Use Left/Right arrows to scroll (" +
         std::to_string(exceptions.empty() ? 0 : exc_scroll_index + 1) + "/" +
         std::to_string(exceptions.size()) + ")";
     *raw_out << dim << " " << exc_controls << " " << ansi_exit << "\x1B[K";
 
-    setCursorSafe(right_x, draw_y++);
+    set_cursor(right_x, draw_y++);
     *raw_out << ansi_exit << "\x1B[K"; // gap
 
     // 2. Timings Box
-    draw_y = drawBoxInternal(draw_y, global_box_width, "Timings", cycles, cyc_scroll_index, "Use Up/Down arrows to scroll");
+    draw_y = draw_box_internal(draw_y, global_box_width, "Timings", cycles, cyc_scroll_index, "Use Up/Down arrows to scroll");
 
-    setCursorSafe(right_x, draw_y++);
+    set_cursor(right_x, draw_y++);
     *raw_out << ansi_exit << "\x1B[K"; // gap
 
     // 3. Debug Box
-    draw_y = drawBoxInternal(draw_y, global_box_width, "Debug", debugs, dbg_scroll_index, "Use PgUp/PgDn to scroll");
+    draw_y = draw_box_internal(draw_y, global_box_width, "Debug", debugs, dbg_scroll_index, "Use PgUp/PgDn to scroll");
 
     SHORT bottom_y = draw_y - 1; // Ends exactly at the Debug control text line
     SHORT bracket_x = right_x + static_cast<SHORT>(global_box_width) + 4;
 
     if (bracket_x + 15 < console_width) {
-        setCursorSafe(bracket_x, exception_y);
+        set_cursor(bracket_x, exception_y);
         *raw_out << white << "┐" << ansi_exit;
 
         for (SHORT y = static_cast<SHORT>(exception_y + 1); y < bottom_y; y++) {
-            setCursorSafe(bracket_x, y);
+            set_cursor(bracket_x, y);
             *raw_out << white << "│" << ansi_exit;
         }
 
-        setCursorSafe(bracket_x, bottom_y);
+        set_cursor(bracket_x, bottom_y);
         *raw_out << white << "┘" << ansi_exit;
 
         SHORT mid_y = exception_y + (bottom_y - exception_y) / 2;
         SHORT text_x = bracket_x + 3;
 
-        setCursorSafe(text_x, static_cast<SHORT>(mid_y - 1));
+        set_cursor(text_x, static_cast<SHORT>(mid_y - 1));
         *raw_out << dim << "s: " << white << "0x" << std::hex << std::setfill('0') << std::setw(8) << g_max_std << ansi_exit << "\x1B[K";
-        setCursorSafe(text_x, mid_y);
+        set_cursor(text_x, mid_y);
         *raw_out << dim << "h: " << white << "0x" << std::hex << std::setfill('0') << std::setw(8) << g_max_hyp << ansi_exit << "\x1B[K";
-        setCursorSafe(text_x, static_cast<SHORT>(mid_y + 1));
+        set_cursor(text_x, static_cast<SHORT>(mid_y + 1));
         *raw_out << dim << "e: " << white << "0x" << std::hex << std::setfill('0') << std::setw(8) << g_max_ext << ansi_exit << "\x1B[K";
     }
 
     g_right_bottom_y = draw_y;
 
     // Re-align to primary drawing coords safely
-    setCursorSafe(left_margin, left_y);
+    set_cursor(left_margin, left_y);
     *raw_out << std::flush;
 }
 
-SHORT TuiManager::drawBoxInternal(SHORT startY, size_t box_width, const std::string& title, const std::vector<std::string>& items, size_t scroll_idx, const std::string& controls_base) {
+SHORT tui_manager::draw_box_internal(SHORT startY, size_t box_width, const std::string& title, const std::vector<std::string>& items, size_t scroll_idx, const std::string& controls_base) {
     SHORT draw_y = startY;
     size_t content_w = box_width - 4;
     size_t title_len = visible_length(title);
     size_t dash_count = (box_width >= 5 + title_len) ? (box_width - 5 - title_len) : 0;
 
-    setCursorSafe(right_x, draw_y++);
+    set_cursor(right_x, draw_y++);
     *raw_out << dim << "┌─ " << white << title << " " << dim << repeat_str("─", dash_count) << "┐" << ansi_exit << "\x1B[K" << std::flush;
 
     size_t limit = box_height - 2;
     for (size_t i = 0; i < limit; i++) {
-        setCursorSafe(right_x, draw_y++);
+        set_cursor(right_x, draw_y++);
         if (scroll_idx + i < items.size()) {
             *raw_out << dim << "│ " << ansi_exit << pad(items[scroll_idx + i], content_w) << dim << " │" << ansi_exit << "\x1B[K" << std::flush;
         } else {
@@ -367,10 +368,10 @@ SHORT TuiManager::drawBoxInternal(SHORT startY, size_t box_width, const std::str
         }
     }
 
-    setCursorSafe(right_x, draw_y++);
+    set_cursor(right_x, draw_y++);
     *raw_out << dim << "└" << repeat_str("─", box_width >= 2 ? box_width - 2 : 0) << "┘" << ansi_exit << "\x1B[K" << std::flush;
 
-    setCursorSafe(right_x, draw_y++);
+    set_cursor(right_x, draw_y++);
     std::string controls = controls_base + " (" +
         std::to_string(items.empty() ? 0 : scroll_idx + 1) + "/" +
         std::to_string(items.size()) + ")";
@@ -379,7 +380,7 @@ SHORT TuiManager::drawBoxInternal(SHORT startY, size_t box_width, const std::str
     return draw_y;
 }
 
-void TuiManager::addException(const std::vector<std::string>& lines) {
+void tui_manager::add_exception(const std::vector<std::string>& lines) {
     if (!enabled) return;
     bool resized = false;
     {
@@ -388,17 +389,17 @@ void TuiManager::addException(const std::vector<std::string>& lines) {
         exc_scroll_index = exceptions.size() - 1;
 
         for (const auto& l : lines) {
-            if (this->updateBoxWidth(visible_length(l) + 4)) {
+            if (this->update_box_width(visible_length(l) + 4)) {
                 resized = true;
             }
         }
     }
     std::lock_guard<std::mutex> draw_lock(mtx);
-    if (resized) clearBoxes();
-    redrawAllBoxes();
+    if (resized) clear_boxes();
+    redraw_all_boxes();
 }
 
-void TuiManager::addCycle(const std::string& line) {
+void tui_manager::add_cycle(const std::string& line) {
     if (!enabled) return;
     bool resized = false;
     {
@@ -408,16 +409,16 @@ void TuiManager::addCycle(const std::string& line) {
             cyc_scroll_index = cycles.size() - static_cast<size_t>(box_height - 2);
         }
 
-        if (this->updateBoxWidth(visible_length(line) + 4)) {
+        if (this->update_box_width(visible_length(line) + 4)) {
             resized = true;
         }
     }
     std::lock_guard<std::mutex> draw_lock(mtx);
-    if (resized) clearBoxes();
-    redrawAllBoxes();
+    if (resized) clear_boxes();
+    redraw_all_boxes();
 }
 
-void TuiManager::addDebug(const std::string& line) {
+void tui_manager::add_debug(const std::string& line) {
     if (!enabled) return;
     bool resized = false;
 
@@ -437,17 +438,17 @@ void TuiManager::addDebug(const std::string& line) {
             dbg_scroll_index = debugs.size() - static_cast<size_t>(box_height - 2);
         }
 
-        if (this->updateBoxWidth(visible_length(colored_line) + 4)) {
+        if (this->update_box_width(visible_length(colored_line) + 4)) {
             resized = true;
         }
     }
 
     std::lock_guard<std::mutex> draw_lock(mtx);
-    if (resized) clearBoxes();
-    redrawAllBoxes();
+    if (resized) clear_boxes();
+    redraw_all_boxes();
 }
 
-void TuiManager::scrollExceptionsUp() {
+void tui_manager::scroll_exceptions_up() {
     {
         std::lock_guard<std::mutex> lock(mtx);
         if (exc_scroll_index > 0) {
@@ -455,10 +456,10 @@ void TuiManager::scrollExceptionsUp() {
         }
     }
     std::lock_guard<std::mutex> draw_lock(mtx);
-    redrawAllBoxes();
+    redraw_all_boxes();
 }
 
-void TuiManager::scrollExceptionsDown() {
+void tui_manager::scroll_exceptions_down() {
     {
         std::lock_guard<std::mutex> lock(mtx);
         if (exc_scroll_index + 1 < exceptions.size()) {
@@ -466,10 +467,10 @@ void TuiManager::scrollExceptionsDown() {
         }
     }
     std::lock_guard<std::mutex> draw_lock(mtx);
-    redrawAllBoxes();
+    redraw_all_boxes();
 }
 
-void TuiManager::scrollCyclesUp() {
+void tui_manager::scroll_cycles_up() {
     {
         std::lock_guard<std::mutex> lock(mtx);
         if (cyc_scroll_index > 0) {
@@ -477,10 +478,10 @@ void TuiManager::scrollCyclesUp() {
         }
     }
     std::lock_guard<std::mutex> draw_lock(mtx);
-    redrawAllBoxes();
+    redraw_all_boxes();
 }
 
-void TuiManager::scrollCyclesDown() {
+void tui_manager::scroll_cycles_down() {
     {
         std::lock_guard<std::mutex> lock(mtx);
         if (cyc_scroll_index + static_cast<size_t>(box_height - 2) < cycles.size()) {
@@ -488,10 +489,10 @@ void TuiManager::scrollCyclesDown() {
         }
     }
     std::lock_guard<std::mutex> draw_lock(mtx);
-    redrawAllBoxes();
+    redraw_all_boxes();
 }
 
-void TuiManager::scrollDebugUp() {
+void tui_manager::scroll_debug_up() {
     {
         std::lock_guard<std::mutex> lock(mtx);
         if (dbg_scroll_index > 0) {
@@ -499,10 +500,10 @@ void TuiManager::scrollDebugUp() {
         }
     }
     std::lock_guard<std::mutex> draw_lock(mtx);
-    redrawAllBoxes();
+    redraw_all_boxes();
 }
 
-void TuiManager::scrollDebugDown() {
+void tui_manager::scroll_debug_down() {
     {
         std::lock_guard<std::mutex> lock(mtx);
         if (dbg_scroll_index + static_cast<size_t>(box_height - 2) < debugs.size()) {
@@ -510,10 +511,10 @@ void TuiManager::scrollDebugDown() {
         }
     }
     std::lock_guard<std::mutex> draw_lock(mtx);
-    redrawAllBoxes();
+    redraw_all_boxes();
 }
 
-void TuiManager::drawSummaryBox(const std::vector<std::string>& lines) {
+void tui_manager::draw_summary_box(const std::vector<std::string>& lines) {
     if (!enabled) return;
     SHORT draw_y = left_y + 1;
 
@@ -528,37 +529,37 @@ void TuiManager::drawSummaryBox(const std::vector<std::string>& lines) {
         box_width = std::max<SHORT>(40, console_width - 2);
     }
 
-    setCursorSafe(left_margin, draw_y++);
+    set_cursor(left_margin, draw_y++);
     *raw_out << dim << "┌" << repeat_str("─", static_cast<size_t>(box_width)) << "┐" << ansi_exit << "\n";
 
     for (const auto& line : lines) {
-        setCursorSafe(left_margin, draw_y++);
+        set_cursor(left_margin, draw_y++);
         *raw_out << dim << "│ " << ansi_exit << pad(line, static_cast<size_t>(box_width - 2)) << dim << " │" << ansi_exit << "\n";
     }
 
-    setCursorSafe(left_margin, draw_y++);
+    set_cursor(left_margin, draw_y++);
     *raw_out << dim << "└" << repeat_str("─", static_cast<size_t>(box_width)) << "┘" << ansi_exit << "\n";
 
     left_y = draw_y;
 }
 
-void TuiManager::finalize() {
+void tui_manager::finalize() {
     if (!enabled) return;
 
     // position terminal exit prompt below EVERYTHING drawn 
     SHORT final_y = std::max<SHORT>(left_y, g_right_bottom_y + 1);
-    setCursorSafe(0, final_y);
+    set_cursor(0, final_y);
     *raw_out << ansi_exit << "\n" << std::flush;
 }
 
-DebugInterceptor::~DebugInterceptor() {
+debug_interceptor::~debug_interceptor() {
     if (!buffer.empty()) {
         std::ostream os(original);
         os << buffer;
     }
 }
 
-DebugInterceptor::int_type DebugInterceptor::overflow(int_type c) {
+debug_interceptor::int_type debug_interceptor::overflow(int_type c) {
     if (c == EOF) {
         return c;
     }
@@ -599,11 +600,11 @@ DebugInterceptor::int_type DebugInterceptor::overflow(int_type c) {
         while (!msg.empty() && (msg.back() == '\r' || msg.back() == ' ')) {
             msg.pop_back();
         }
-        g_tui.addDebug(msg);
+        g_tui.add_debug(msg);
     }
     else {
         if (g_tui.raw_out) {
-            g_tui.setCursorSafe(g_tui.left_margin, g_tui.left_y);
+            g_tui.set_cursor(g_tui.left_margin, g_tui.left_y);
             *(g_tui.raw_out) << buffer << "\x1B[K" << std::flush;
             g_tui.left_y++;
         }
@@ -617,14 +618,14 @@ DebugInterceptor::int_type DebugInterceptor::overflow(int_type c) {
     return c;
 }
 
-std::streamsize DebugInterceptor::xsputn(const char* s, std::streamsize n) {
+std::streamsize debug_interceptor::xsputn(const char* s, std::streamsize n) {
     for (std::streamsize i = 0; i < n; ++i) {
         overflow(static_cast<unsigned char>(s[i]));
     }
     return n;
 }
 
-LONG WINAPI VehLogger(PEXCEPTION_POINTERS ep) {
+LONG WINAPI exception_handler_logger(PEXCEPTION_POINTERS ep) {
     if (!g_tui.enabled) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
@@ -677,7 +678,7 @@ LONG WINAPI VehLogger(PEXCEPTION_POINTERS ep) {
     lines.push_back(c_grey + "EDI: " + c_white + hex_pad(ep->ContextRecord->Edi, 10) + c_grey + " EFL: " + c_white + to_hex(ep->ContextRecord->EFlags) + c_rst);
 #endif
 
-    g_tui.addException(lines);
+    g_tui.add_exception(lines);
 
     return EXCEPTION_CONTINUE_SEARCH;
 }

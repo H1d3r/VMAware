@@ -4,13 +4,13 @@
 #include <string>
 #include "types.hpp"
 
-struct SHA256 {
+struct sha256 {
     u8 buf[64] = {};
     u32 len = 0;
     u64 bits = 0;
     u32 s[8] = {};
 
-    SHA256();
+    sha256();
 
     static u32 rotr(const u32 x, const u32 n);
     static u32 ch(const u32 x, const u32 y, const u32 z);

@@ -1,9 +1,10 @@
 #pragma once
 
+#include "types.hpp"
+
 #include <array>
 #include <string>
 #include <bitset>
-#include "types.hpp"
 
 extern std::string dim;
 extern std::string bright;

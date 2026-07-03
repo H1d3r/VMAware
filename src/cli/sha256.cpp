@@ -15,7 +15,7 @@
     #include <cstdlib>
 #endif
 
-SHA256::SHA256() {
+sha256::sha256() {
     s[0] = 0x6a09e667;
     s[1] = 0xbb67ae85;
     s[2] = 0x3c6ef372;
@@ -26,35 +26,35 @@ SHA256::SHA256() {
     s[7] = 0x5be0cd19;
 }
 
-u32 SHA256::rotr(const u32 x, const u32 n) {
+u32 sha256::rotr(const u32 x, const u32 n) {
     return (x >> n) | (x << (32 - n));
 }
 
-u32 SHA256::ch(const u32 x, const u32 y, const u32 z) {
+u32 sha256::ch(const u32 x, const u32 y, const u32 z) {
     return (x & y) ^ (~x & z);
 }
 
-u32 SHA256::maj(const u32 x, const u32 y, const u32 z) {
+u32 sha256::maj(const u32 x, const u32 y, const u32 z) {
     return (x & y) ^ (x & z) ^ (y & z);
 }
 
-u32 SHA256::ep0(const u32 x) {
+u32 sha256::ep0(const u32 x) {
     return rotr(x, 2) ^ rotr(x, 13) ^ rotr(x, 22);
 }
 
-u32 SHA256::ep1(const u32 x) {
+u32 sha256::ep1(const u32 x) {
     return rotr(x, 6) ^ rotr(x, 11) ^ rotr(x, 25);
 }
 
-u32 SHA256::sig0(const u32 x) {
+u32 sha256::sig0(const u32 x) {
     return rotr(x, 7) ^ rotr(x, 18) ^ (x >> 3);
 }
 
-u32 SHA256::sig1(const u32 x) {
+u32 sha256::sig1(const u32 x) {
     return rotr(x, 17) ^ rotr(x, 19) ^ (x >> 10);
 }
 
-void SHA256::transform() {
+void sha256::transform() {
     static const u32 k[64] = {
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
         0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -116,7 +116,7 @@ void SHA256::transform() {
     s[7] += h;
 }
 
-void SHA256::update(const u8* data, const size_t n) {
+void sha256::update(const u8* data, const size_t n) {
     for (size_t i = 0; i < n; ++i) {
         buf[len++] = data[i];
         if (len == 64) {
@@ -127,7 +127,7 @@ void SHA256::update(const u8* data, const size_t n) {
     }
 }
 
-void SHA256::final(u8 out[32]) {
+void sha256::final(u8 out[32]) {
     size_t i = len;
 
     if (len < 56) {
@@ -221,7 +221,7 @@ std::string compute_self_sha256() {
         return {};
     }
 
-    SHA256 sha;
+    sha256 sha;
 
     std::vector<char> chunk(static_cast<size_t>(64 * 1024));
 

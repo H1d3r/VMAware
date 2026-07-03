@@ -871,13 +871,14 @@ public:
         }
 
         [[nodiscard]] static bool is_amd() {
-            constexpr u32 amd_ecx = 0x444d4163; // "cAMD"
+            constexpr u32 authentic_amd_ecx = 0x444d4163; // "cAMD"
+            constexpr u32 amdisbetter_ecx = 0x21726574; // "ter!"
 
             u32 unused = 0;
             u32 ecx = 0;
             cpuid(unused, unused, ecx, unused, 0);
 
-            return (ecx == amd_ecx);
+            return ecx == authentic_amd_ecx || ecx == amdisbetter_ecx;
         }
 
         [[nodiscard]] static bool is_intel() {
@@ -6034,7 +6035,7 @@ public:
                         r_pre = state.counter;
                         std::atomic_signal_fence(std::memory_order_seq_cst);
                         LFENCE_8
-                            std::atomic_signal_fence(std::memory_order_seq_cst);
+                        std::atomic_signal_fence(std::memory_order_seq_cst);
                         r_post = state.counter;
 
                         sync = state.counter;
@@ -13069,9 +13070,7 @@ public:
      */
     [[nodiscard]] static bool hyperv_nested() {
     #if (x86)
-        u32 a = 0, b = 0, c = 0, d = 0;
-        cpu::cpuid(a, b, c, d, 1);       
-        return (c & (1u << 3)) != 0 || util::hyper_x() == HYPERV_NESTED_VM;
+        return util::hyper_x() == HYPERV_NESTED_VM;
     #else
         return false;
     #endif

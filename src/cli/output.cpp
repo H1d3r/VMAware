@@ -286,7 +286,7 @@ static void checker(const VM::enum_flags flag, const char* message) {
     std::ostringstream cycle_oss;
     cycle_oss << dim << message << " | " << white << std::fixed << std::setprecision(4) << ms << " ms" << ansi_exit;
     #if (CLI_WINDOWS)
-        g_tui.addCycle(cycle_oss.str());
+        g_tui.add_cycle(cycle_oss.str());
     #endif
 
     std::ostringstream msg_oss;
@@ -497,20 +497,20 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     }
 
     #if (CLI_WINDOWS)
-        std::unique_ptr<DebugInterceptor> interceptor;
+        std::unique_ptr<debug_interceptor> interceptor;
         std::streambuf* old_cout = nullptr;
         std::streambuf* old_cerr = nullptr;
         std::streambuf* old_clog = nullptr;
         if (!arg_bitset.test(NO_ANSI) && arg_bitset.test(RICH)) {
             std::string tui_tag_grey = "\x1B[38;2;110;110;110m";
 
-            tag_detected = bold + "[" + white + "  DETECTED  " + bold + "]" + ansi_exit;
+            tag_detected = bold + "[" + red + "  DETECTED  " + bold + "]" + ansi_exit;
             tag_not_detected = "[" + tui_tag_grey + "NOT DETECTED" + ansi_exit + "]";
 
             grey = "\x1B[38;2;85;85;85m";
 
             g_tui.init();
-            interceptor = std::make_unique<DebugInterceptor>(std::cout.rdbuf());
+            interceptor = std::make_unique<debug_interceptor>(std::cout.rdbuf());
             old_cout = std::cout.rdbuf(interceptor.get());
             old_cerr = std::cerr.rdbuf(interceptor.get());
             old_clog = std::clog.rdbuf(interceptor.get());
@@ -526,7 +526,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
             do {
                 std::ostringstream _oss;
                 _oss << red << "Not running as administrator, NVRAM checks will not run.\n";
-                g_tui.printLeft(_oss.str());
+                g_tui.print_left(_oss.str());
             } while (0);
         }
     #endif
@@ -561,7 +561,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::AUDIO, "audio devices");
     checker(VM::HANDLES, "device handles");
     checker(VM::VPC_INVALID, "VPC invalid instructions");
-    checker(VM::SYSTEM_REGISTERS, "Task segment and descriptor tables");
+    checker(VM::SYSTEM_REGISTERS, "task segment and descriptor tables");
     checker(VM::VMWARE_IOMEM, "/proc/iomem file");
     checker(VM::VMWARE_IOPORTS, "/proc/ioports file");
     checker(VM::VMWARE_SCSI, "/proc/scsi/scsi file");
@@ -736,10 +736,6 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
         }
     }
 
-    if (vm.is_hardened) {
-        summary.push_back("VMAware detected a bypass attempt, detection confidence was raised to 100% automatically.");
-    }
-
     const std::string is_bold = (vm.is_vm ? bold : "");
     const char* conclusion_color = color(vm.percentage, vm.is_hardened);
 
@@ -747,8 +743,8 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
         bold + 
         "===== CONCLUSION: " + 
         ansi_exit + 
-        conclusion_color + 
         is_bold + 
+        conclusion_color +
         vm.conclusion + 
         ansi_exit + 
         bold + 
@@ -758,7 +754,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
 
 #if (CLI_WINDOWS)
     if (!arg_bitset.test(NO_ANSI) && arg_bitset.test(RICH)) {
-        g_tui.drawSummaryBox(summary);
+        g_tui.draw_summary_box(summary);
 
         g_tui.finalize();
 
@@ -786,25 +782,25 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
                 ch = _getch();
 
                 switch (ch) {
-                case KEY_UP: g_tui.scrollCyclesUp(); continue;
-                case KEY_DOWN: g_tui.scrollCyclesDown(); continue;
-                case KEY_PAGE_UP: g_tui.scrollDebugUp(); continue;
-                case KEY_PAGE_DOWN: g_tui.scrollDebugDown(); continue;
-                case KEY_LEFT: g_tui.scrollExceptionsUp(); continue;
-                case KEY_RIGHT: g_tui.scrollExceptionsDown(); continue;
-                default: continue;
+                    case KEY_UP: g_tui.scroll_cycles_up(); continue;
+                    case KEY_DOWN: g_tui.scroll_cycles_down(); continue;
+                    case KEY_PAGE_UP: g_tui.scroll_debug_up(); continue;
+                    case KEY_PAGE_DOWN: g_tui.scroll_debug_down(); continue;
+                    case KEY_LEFT: g_tui.scroll_exceptions_up(); continue;
+                    case KEY_RIGHT: g_tui.scroll_exceptions_down(); continue;
+                    default: continue;
                 }
             }
 
             bool should_break = false;
 
             switch (ch) {
-            case '\r':
-            case '\n':
-            case 'q':
-            case 'Q':
-            case KEY_CTRL_C:
-                should_break = true;
+                case '\r':
+                case '\n':
+                case 'q':
+                case 'Q':
+                case KEY_CTRL_C:
+                    should_break = true;
             }
 
             if (should_break) {
@@ -822,7 +818,9 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
         }
     }
 
-    console_pause();
+    if (!g_tui.enabled) {
+        console_pause();
+    }
 
 #else
 
