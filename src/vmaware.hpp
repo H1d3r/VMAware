@@ -13068,7 +13068,13 @@ public:
      * @implements VM::HYPERV_NESTED
      */
     [[nodiscard]] static bool hyperv_nested() {
-        return util::hyper_x() == HYPERV_NESTED_VM;
+    #if (x86)
+        u32 a = 0, b = 0, c = 0, d = 0;
+        cpu::cpuid(a, b, c, d, 1);       
+        return (c & (1u << 3)) != 0 || util::hyper_x() == HYPERV_NESTED_VM;
+    #else
+        return false;
+    #endif
     }
 
 
