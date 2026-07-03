@@ -10370,12 +10370,6 @@ public:
             const size_t total_wchars = required_size / sizeof(wchar_t);
             const wchar_t* buf_end = ptr + (total_wchars ? total_wchars : 0);
 
-        #ifdef __VMAWARE_DEBUG__
-            for (const wchar_t* p = ptr; p < buf_end && *p; p += (wcslen(p) + 1)) {
-                debug("ACPI_SIGNATURE: ", p);
-            }
-        #endif
-
             static const wchar_t acpi_prefix[] = L"#ACPI(S";
             static const wchar_t acpi_paren[] = L"ACPI(";
 
