@@ -10303,8 +10303,8 @@ public:
             return (c >= L'0' && c <= L'9') || (c >= L'A' && c <= L'F');
         };
 
-        // enumerate all DISPLAY devices
-        const HDEVINFO handle_dev_info = SetupDiGetClassDevsW(&GUID_DEVCLASS_DISPLAY, nullptr, nullptr, DIGCF_PRESENT);
+        // enumerate all devices
+        const HDEVINFO handle_dev_info = SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
         if (handle_dev_info == INVALID_HANDLE_VALUE) {
             debug("ACPI_SIGNATURE: No display device detected");
             return true;
@@ -10333,6 +10333,14 @@ public:
         };
 
         for (DWORD idx = 0; SetupDiEnumDeviceInfo(handle_dev_info, idx, &dev_info); ++idx) {
+            wchar_t inst_id[MAX_PATH] = { 0 };
+            SetupDiGetDeviceInstanceIdW(handle_dev_info, &dev_info, inst_id, MAX_PATH, nullptr);
+            if (wcsstr(inst_id, L"PNP0A06") && (wcsstr(inst_id, L"HOTPLUG") || wcsstr(inst_id, L"GPE0") || wcsstr(inst_id, L"SMI"))) {
+                debug("ACPI_SIGNATURE: Synthetic QEMU ACPI device detected (PNP0A06)");
+                SetupDiDestroyDeviceInfoList(handle_dev_info);
+                return core::add(brand_enum::QEMU);
+            }
+
             DEVPROPTYPE prop_type = 0;
             DWORD required_size = 0;
 
@@ -10341,8 +10349,7 @@ public:
             if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || required_size == 0) {
                 if (GetLastError() == ERROR_NOT_FOUND) {
                     debug("ACPI_SIGNATURE: No dedicated display/GPU detected");
-                    SetupDiDestroyDeviceInfoList(handle_dev_info);
-                    return false;
+                    continue;
                 }
                 else {
                     continue;
@@ -10373,6 +10380,20 @@ public:
 
             // First pass: QEMU-style "#ACPI(Sxx...)" and generic "ACPI(Sxx)"
             for (const wchar_t* p = ptr; p < buf_end && *p; p += (wcslen(p) + 1)) {
+                if (wcsstr(p, L"ACPI(DRAC)")) {
+                    debug("ACPI_SIGNATURE: QEMU virtual DRAM Controller (DRAC) ACPI node detected");
+                    SetupDiDestroyDeviceInfoList(handle_dev_info);
+                    return core::add(brand_enum::QEMU);
+                }
+
+                if (wcsstr(inst_id, L"VEN_1022")) {
+                    if (wcsstr(p, L"PCI(1F00)") || wcsstr(p, L"PCI(1F02)") || wcsstr(p, L"PCI(1F03)")) {
+                        debug("ACPI_SIGNATURE: Impossible AMD Vendor ID mapped to Intel Q35 PCI slot");
+                        SetupDiDestroyDeviceInfoList(handle_dev_info);
+                        return core::add(brand_enum::QEMU);
+                    }
+                }
+
                 if (has_excluded_token(p)) {
                     continue;
                 }
