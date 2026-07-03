@@ -632,7 +632,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     bool print_sha = true;
 
     #if (CLI_WINDOWS)
-        print_sha = g_tui.enabled;
+        print_sha = !g_tui.enabled;
     #endif
 
     if (print_sha) {
@@ -644,7 +644,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
 
     const std::string brand = vm.brand;
     const bool is_red = ((brand == VM::brands::NULL_BRAND) || (brand == VM::brands::HYPERV_ROOT));
-    summary.push_back(bold + "\nVM brand: " + ansi_exit + (is_red ? red : green) + brand + ansi_exit);
+    summary.push_back(bold + "VM brand: " + ansi_exit + (is_red ? red : green) + brand + ansi_exit);
 
     if (!is_vm_brand_multiple(vm.brand)) {
         const std::string current_color = (vm.type == "Unknown" || vm.type == "Host machine") ? red : green;
@@ -740,15 +740,15 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     const char* conclusion_color = color(vm.percentage, vm.is_hardened);
 
     summary.push_back(
-        bold + 
-        "===== CONCLUSION: " + 
-        ansi_exit + 
-        is_bold + 
+        bold +
+        "===== CONCLUSION: " +
+        ansi_exit +
+        is_bold +
         conclusion_color +
-        vm.conclusion + 
-        ansi_exit + 
-        bold + 
-        " =====\n" + 
+        vm.conclusion +
+        ansi_exit +
+        bold +
+        " =====" +
         ansi_exit
     );
 
@@ -813,9 +813,11 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
         if (old_clog) std::clog.rdbuf(old_clog);
     }
     else {
+        std::cout << "\n";
         for (const auto& l : summary) {
             std::cout << l << "\n";
         }
+        std::cout << "\n";
     }
 
     if (!g_tui.enabled) {
@@ -824,9 +826,11 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
 
 #else
 
+    std::cout << "\n";
     for (const auto& line : summary) {
         std::cout << line << "\n";
     }
+    std::cout << "\n";
 
     #if defined(__VMAWARE_DEBUG__)
         std::cout << grey << "SHA-256: " << white << compute_self_sha256() << ansi_exit << "\n";

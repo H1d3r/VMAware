@@ -47,7 +47,7 @@
 
     // safely trims and pads a string ensuring it fits perfectly within bounds
     // without leaking unclosed ANSI tags or overflowing text visually
-    inline std::string pad(const std::string& str, size_t target_len) {
+    inline std::string pad(const std::string& str, size_t target_len) noexcept {
         size_t vlen = 0;
         bool in_ansi = false;
         std::string result;

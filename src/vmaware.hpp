@@ -3585,7 +3585,7 @@ public:
             #endif
         #else
             i32 dummy[4];
-            __cpuidex(dummy, 0x0, 0); // leaf 0 because it's the most stable one for making ratio checks, even if at first glance it may be abusable because it's the fastest one
+            __cpuidex(dummy, 0x0, 0); // leaf 0 instead of invalid ones like 0x20000000 because it's the most stable, even if it's the fastest one (we target context switch latency only)
         #endif
         }
 

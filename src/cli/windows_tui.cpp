@@ -30,7 +30,7 @@ bool tui_manager::set_cursor(SHORT x, SHORT y) const {
     // scroll the user's viewport downwards if we draw below the visible area
     if (y > csbi.srWindow.Bottom) {
         SMALL_RECT sr = csbi.srWindow;
-        SHORT diff = y - sr.Bottom;
+        const SHORT diff = y - sr.Bottom;
         sr.Top += diff;
         sr.Bottom += diff;
         SetConsoleWindowInfo(hOut, TRUE, &sr);
@@ -43,10 +43,10 @@ void tui_manager::clear_boxes() {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     GetConsoleScreenBufferInfo(hOut, &csbi);
 
-    int wipe_len = static_cast<int>(csbi.dwSize.X) - right_x;
+    const int wipe_len = static_cast<int>(csbi.dwSize.X) - right_x;
     if (wipe_len <= 0) return;
 
-    std::string wipe_str(static_cast<size_t>(wipe_len), ' ');
+    const std::string wipe_str(static_cast<size_t>(wipe_len), ' ');
     // clear vertically over the maximum theoretical height of the 3 boxes
     for (SHORT i = 0; i < 70; i++) {
         if (exception_y + i >= csbi.dwSize.Y) break; // Don't expand the buffer just to clear empty space
@@ -61,7 +61,7 @@ bool tui_manager::update_box_width(size_t incoming_len) {
     console_width = csbi.dwSize.X;
 
     // leaves room for the big right-side bracket (24 chars)
-    size_t max_allowed = static_cast<size_t>(std::max<int>(10, console_width - right_x - 24));
+    const size_t max_allowed = static_cast<size_t>(std::max<int>(10, console_width - right_x - 24));
 
     if (incoming_len > max_allowed) {
         incoming_len = max_allowed;
@@ -84,7 +84,7 @@ void tui_manager::init() {
     raw_out = new std::ostream(orig_buf);
 
     // maximize window ASYNCHRONOUSLY to avoid Windows Terminal DWM freezes
-    HWND hwnd = GetForegroundWindow();
+    const HWND hwnd = GetForegroundWindow();
     char className[256];
     if (GetClassNameA(hwnd, className, sizeof(className))) {
         if (strcmp(className, "CASCADIA_HOSTING_WINDOW_CLASS") == 0 ||
@@ -93,19 +93,19 @@ void tui_manager::init() {
             Sleep(150);
         }
     } else {
-        HWND hCon = GetConsoleWindow();
+        const HWND hCon = GetConsoleWindow();
         if (hCon) PostMessage(hCon, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
     }
 
     // ANSI fallback maximize for Windows Terminal
     *raw_out << "\x1B[9;1t" << std::flush;
-    Sleep(50);
+    SleepEx(50, FALSE);
 
     // pre-allocate buffer space downwards for subsequent runs
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     GetConsoleScreenBufferInfo(hOut, &csbi);
 
-    SHORT safe_height = csbi.dwCursorPosition.Y + 200;
+    const SHORT safe_height = csbi.dwCursorPosition.Y + 200;
     if (safe_height > csbi.dwSize.Y) {
         SetConsoleScreenBufferSize(hOut, { csbi.dwSize.X, safe_height });
     }
@@ -222,9 +222,9 @@ void tui_manager::print_header() {
         }
     }
 
-    std::string hash_display = compute_self_sha256();
+    const std::string hash_display = compute_self_sha256();
 
-    std::string raw_header_text = "arch: " + arch + " / vendor: " + vendor + " / family: " + std::to_string(family) +
+    const std::string raw_header_text = "arch: " + arch + " / vendor: " + vendor + " / family: " + std::to_string(family) +
         " / model: " + std::to_string(model) + " / stepping: " + std::to_string(stepping) +
         " / microcode: " + ucode + " / os: " + os + " / sha256: " + hash_display;
 
@@ -233,7 +233,7 @@ void tui_manager::print_header() {
         padding_val = 0;
     }
 
-    std::string pad_str(static_cast<size_t>(padding_val), ' ');
+    const std::string pad_str(static_cast<size_t>(padding_val), ' ');
 
     *raw_out << pad_str
         << dim << "arch: " << bright << arch << dim
@@ -274,9 +274,9 @@ void tui_manager::redraw_all_boxes() {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     GetConsoleScreenBufferInfo(hOut, &csbi);
     console_width = csbi.dwSize.X;
-
+  
     SHORT draw_y = exception_y;
-    size_t content_w = global_box_width - 4;
+    const size_t content_w = global_box_width - 4;
 
     // 1. Exceptions Box
     set_cursor(right_x, draw_y++);
@@ -316,8 +316,8 @@ void tui_manager::redraw_all_boxes() {
     // 3. Debug Box
     draw_y = draw_box_internal(draw_y, global_box_width, "Debug", debugs, dbg_scroll_index, "Use PgUp/PgDn to scroll");
 
-    SHORT bottom_y = draw_y - 1; // Ends exactly at the Debug control text line
-    SHORT bracket_x = right_x + static_cast<SHORT>(global_box_width) + 4;
+    const SHORT bottom_y = draw_y - 1; // Ends exactly at the Debug control text line
+    const SHORT bracket_x = right_x + static_cast<SHORT>(global_box_width) + 4;
 
     if (bracket_x + 15 < console_width) {
         set_cursor(bracket_x, exception_y);
@@ -351,14 +351,14 @@ void tui_manager::redraw_all_boxes() {
 
 SHORT tui_manager::draw_box_internal(SHORT startY, size_t box_width, const std::string& title, const std::vector<std::string>& items, size_t scroll_idx, const std::string& controls_base) {
     SHORT draw_y = startY;
-    size_t content_w = box_width - 4;
-    size_t title_len = visible_length(title);
-    size_t dash_count = (box_width >= 5 + title_len) ? (box_width - 5 - title_len) : 0;
+    const size_t content_w = box_width - 4;
+    const size_t title_len = visible_length(title);
+    const size_t dash_count = (box_width >= 5 + title_len) ? (box_width - 5 - title_len) : 0;
 
     set_cursor(right_x, draw_y++);
     *raw_out << dim << "┌─ " << white << title << " " << dim << repeat_str("─", dash_count) << "┐" << ansi_exit << "\x1B[K" << std::flush;
 
-    size_t limit = box_height - 2;
+    const size_t limit = static_cast<size_t>(box_height - 2);
     for (size_t i = 0; i < limit; i++) {
         set_cursor(right_x, draw_y++);
         if (scroll_idx + i < items.size()) {
@@ -372,7 +372,7 @@ SHORT tui_manager::draw_box_internal(SHORT startY, size_t box_width, const std::
     *raw_out << dim << "└" << repeat_str("─", box_width >= 2 ? box_width - 2 : 0) << "┘" << ansi_exit << "\x1B[K" << std::flush;
 
     set_cursor(right_x, draw_y++);
-    std::string controls = controls_base + " (" +
+    const std::string controls = controls_base + " (" +
         std::to_string(items.empty() ? 0 : scroll_idx + 1) + "/" +
         std::to_string(items.size()) + ")";
 
@@ -423,7 +423,7 @@ void tui_manager::add_debug(const std::string& line) {
     bool resized = false;
 
     std::string colored_line;
-    size_t pos = line.find(": ");
+    const size_t pos = line.find(": ");
 
     if (pos != std::string::npos) {
         colored_line = white + line.substr(0, pos) + dim + line.substr(pos) + ansi_exit;
@@ -547,7 +547,7 @@ void tui_manager::finalize() {
     if (!enabled) return;
 
     // position terminal exit prompt below EVERYTHING drawn 
-    SHORT final_y = std::max<SHORT>(left_y, g_right_bottom_y + 1);
+    const SHORT final_y = std::max<SHORT>(left_y, g_right_bottom_y + 1);
     set_cursor(0, final_y);
     *raw_out << ansi_exit << "\n" << std::flush;
 }
@@ -564,7 +564,7 @@ debug_interceptor::int_type debug_interceptor::overflow(int_type c) {
         return c;
     }
 
-    char ch = static_cast<char>(c);
+    const char ch = static_cast<char>(c);
 
     if (ch != '\n') {
         buffer += ch;
@@ -591,7 +591,7 @@ debug_interceptor::int_type debug_interceptor::overflow(int_type c) {
     }
 
     std::string msg = buffer;
-    size_t debug_pos = msg.find("[DEBUG]");
+    const size_t debug_pos = msg.find("[DEBUG]");
     if (debug_pos != std::string::npos) {
         msg = msg.substr(debug_pos + 7);
         while (!msg.empty() && msg[0] == ' ') {
@@ -630,17 +630,17 @@ LONG WINAPI exception_handler_logger(PEXCEPTION_POINTERS ep) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    std::string c_white = white;
-    std::string c_grey = dim;
-    std::string c_rst = ansi_exit;
+    const std::string c_white = white;
+    const std::string c_grey = dim;
+    const std::string c_rst = ansi_exit;
 
-    auto to_hex = [](auto val) {
+    auto to_hex = [](auto val) noexcept {
         std::ostringstream oss;
         oss << "0x" << std::hex << std::uppercase << (uint64_t)val;
         return oss.str();
     };
 
-    auto hex_pad = [&](auto val, int width) {
+    auto hex_pad = [&](auto val, int width) noexcept {
         return pad(to_hex(val), static_cast<size_t>(width));
     };
 
