@@ -11606,8 +11606,8 @@ public:
             So for example, if the CPU reports being Intel, and succesfully runs CLZERO without a NOP, then it's not an Intel CPU.
         */
 
-        // AMD stub template (mov rax, imm64 + clzero + ret)
-        // 8-byte immediate at runtime at offsets [2..9]
+    #if (x86_64)
+        // mov rax, imm64 (10 bytes) + clzero (3 bytes) + ret (1 byte)
         u8 amd_bytes[] = {
             0x48, 0xB8,                 // mov rax, imm64
             0x00, 0x00, 0x00, 0x00,     // imm64 low bytes (placeholder)
@@ -11615,7 +11615,16 @@ public:
             0x0F, 0x01, 0xFC,           // clzero
             0xC3                        // ret
         };
-        constexpr SIZE_T amd_stub_size = sizeof(amd_bytes); // 14
+    #else
+        // mov eax, imm32 (5 bytes) + clzero (3 bytes) + ret (1 byte)
+        u8 amd_bytes[] = {
+            0xB8,                       // mov eax, imm32
+            0x00, 0x00, 0x00, 0x00,     // imm32 (placeholder)
+            0x0F, 0x01, 0xFC,           // clzero
+            0xC3                        // ret
+        };
+    #endif
+        SIZE_T amd_stub_size = sizeof(amd_bytes);
 
         const u8* bytes = nullptr;
         SIZE_T codeSize = 0;
@@ -11683,14 +11692,20 @@ public:
             }
             else {
                 amd_target_mem = base;
-                // fill target with a recognizable non-zero pattern so we can detect CLZERO's effect (in case some obscure Intel CPU treat our instruction as a NOP)
                 memset(amd_target_mem, 0xA5, target_size);
 
-                const std::uintptr_t paddr = reinterpret_cast<std::uintptr_t>(amd_target_mem); // to avoid sign-extension, 32-bit compatible
+                const std::uintptr_t paddr = reinterpret_cast<std::uintptr_t>(amd_target_mem);
+            #if (x86_64)
                 const u64 addr = static_cast<u64>(paddr);
                 for (u8 i = 0; i < 8; ++i) {
                     amd_bytes[2 + i] = static_cast<u8>((addr >> (i * 8)) & 0xFF);
                 }
+            #else
+                const u32 addr = static_cast<u32>(paddr);
+                for (u8 i = 0; i < 4; ++i) {
+                    amd_bytes[1 + i] = static_cast<u8>((addr >> (i * 8)) & 0xFF);
+                }
+            #endif
                 bytes = amd_bytes;
                 codeSize = amd_stub_size;
             }
