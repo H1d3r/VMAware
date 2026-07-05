@@ -13044,41 +13044,71 @@ public:
         using tbsi_get_tcg_log_fn = TBS_RESULT(__stdcall*)(TBS_HCONTEXT, PBYTE, PUINT32);
 
         auto parse_log = [](const std::vector<u8>& logData) noexcept -> bool {
-            if (logData.size() < 32) {
+            auto read_u16 = [](const u8* ptr) noexcept -> u16 {
+                u16 val = 0;
+                memcpy(&val, ptr, sizeof(u16));
+                return val;
+            };
+
+            auto read_u32 = [](const u8* ptr) noexcept -> u32 {
+                u32 val = 0;
+                memcpy(&val, ptr, sizeof(u32));
+                return val;
+            };
+
+            auto read_u64 = [](const u8* ptr) noexcept -> u64 {
+                u64 val = 0;
+                memcpy(&val, ptr, sizeof(u64));
+                return val;
+            };
+
+            auto read_alg_size = [](const u8* ptr) noexcept -> alg_size {
+                alg_size val = { 0, 0 };
+                memcpy(&val, ptr, sizeof(alg_size));
+                return val;
+            };
+
+            auto read_hdr = [](const u8* ptr) noexcept -> TCG_PCR_EVENT_HEADER {
+                TCG_PCR_EVENT_HEADER val = { 0, 0, {0}, 0 };
+                memcpy(&val, ptr, sizeof(TCG_PCR_EVENT_HEADER));
+                return val;
+            };
+
+            if (logData.size() < sizeof(TCG_PCR_EVENT_HEADER)) {
                 return false;
             }
 
             const u8* pBuffer = logData.data();
-            size_t total_size = logData.size();
+            const size_t total_size = logData.size();
 
-            // validate the mandatory Spec ID Event header ( legacy format )
-            const auto* first_hdr = reinterpret_cast<const TCG_PCR_EVENT_HEADER*>(pBuffer);
-            if (first_hdr->pcrIndex != 0 || first_hdr->eventType != 0x00000003 /* EV_NO_ACTION */) {
+            // Validate the mandatory Spec ID Event header (legacy format)
+            const TCG_PCR_EVENT_HEADER first_hdr = read_hdr(pBuffer);
+            if (first_hdr.pcrIndex != 0 || first_hdr.eventType != 0x00000003 /* EV_NO_ACTION */) {
                 return false;
             }
 
-            size_t first_event_data_offset = sizeof(TCG_PCR_EVENT_HEADER);
-            if (total_size < first_event_data_offset + first_hdr->eventSize) {
+            const size_t first_event_data_offset = sizeof(TCG_PCR_EVENT_HEADER);
+            if (total_size < first_event_data_offset + first_hdr.eventSize) {
                 return false;
             }
 
             const u8* spec_id_payload = pBuffer + first_event_data_offset;
-            u32 spec_id_size = first_hdr->eventSize;
+            const u32 spec_id_size = first_hdr.eventSize;
 
-            if (spec_id_size < 28 || memcmp(spec_id_payload, "Spec ID Event03", 15) != 0) {
+            if (spec_id_size < 28 || std::memcmp(spec_id_payload, "Spec ID Event03", 15) != 0) {
                 return false;
             }
 
-            // map agile active crypto hashing algorithms to their digest sizes
-            u32 num_algs = *reinterpret_cast<const u32*>(spec_id_payload + 24);
-            if (spec_id_size < 28 + (num_algs * sizeof(alg_size))) {
+            const u32 num_algs = read_u32(spec_id_payload + 24);
+
+            if (num_algs > 16 || spec_id_size < 28 + (num_algs * sizeof(alg_size))) {
                 return false;
             }
 
             std::vector<alg_size> active_algs(num_algs);
             const u8* alg_ptr = spec_id_payload + 28;
             for (u32 i = 0; i < num_algs; ++i) {
-                active_algs[i] = *reinterpret_cast<const alg_size*>(alg_ptr + (i * sizeof(alg_size)));
+                active_algs[i] = read_alg_size(alg_ptr + (i * sizeof(alg_size)));
             }
 
             auto get_digest_size = [&active_algs](u16 algId) noexcept -> u16 {
@@ -13094,7 +13124,7 @@ public:
                 }
             };
 
-            // move pointer to sequential crypto-agile TCG_PCR_EVENT2 items
+            // Move pointer to sequential crypto-agile TCG_PCR_EVENT2 items
             size_t current_offset = first_event_data_offset + spec_id_size;
 
             while (current_offset < total_size) {
@@ -13104,23 +13134,22 @@ public:
 
                 const u8* event_ptr = pBuffer + current_offset;
 
-                u32 pcrIndex = *reinterpret_cast<const u32*>(event_ptr);
-                u32 eventType = *reinterpret_cast<const u32*>(event_ptr + 4);
-                u32 digestCount = *reinterpret_cast<const u32*>(event_ptr + 8);
+                const u32 pcrIndex = read_u32(event_ptr);
+                const u32 eventType = read_u32(event_ptr + 4);
+                const u32 digestCount = read_u32(event_ptr + 8);
 
                 size_t local_offset = 12;
 
-                // skip digests based on algo ID boundaries
                 bool parse_error = false;
                 for (u32 i = 0; i < digestCount; ++i) {
                     if (total_size - (current_offset + local_offset) < 2) {
                         parse_error = true;
                         break;
                     }
-                    u16 algId = *reinterpret_cast<const u16*>(event_ptr + local_offset);
+                    const u16 algId = read_u16(event_ptr + local_offset);
                     local_offset += 2;
 
-                    u16 digest_size = get_digest_size(algId);
+                    const u16 digest_size = get_digest_size(algId);
                     if (digest_size == 0) {
                         parse_error = true;
                         break;
@@ -13137,14 +13166,12 @@ public:
                     break;
                 }
 
-                // final event size
                 if (total_size - (current_offset + local_offset) < 4) {
                     break;
                 }
-                u32 eventSize = *reinterpret_cast<const u32*>(event_ptr + local_offset);
+                const u32 eventSize = read_u32(event_ptr + local_offset);
                 local_offset += 4;
 
-                // bounds checks on remaining payload space
                 if (total_size - (current_offset + local_offset) < eventSize) {
                     break;
                 }
@@ -13158,10 +13185,10 @@ public:
                     }
                 }
 
-                if (pcrIndex == 0 && eventType == 0x0000000F) {
+                if (pcrIndex == 0 && eventType == 0x80000001) {
                     if (eventSize >= 16) {
-                        u64 base_addr = *reinterpret_cast<const u64*>(payload);
-                        u64 blob_len = *reinterpret_cast<const u64*>(payload + 8);
+                        const u64 base_addr = read_u64(payload);
+                        const u64 blob_len = read_u64(payload + 8);
 
                         if ((base_addr == 0x830000 && blob_len == 0xD0000) ||
                             (base_addr == 0x900000 && blob_len == 0xE80000)) {
@@ -13199,31 +13226,35 @@ public:
 
         bool vm_detected = false;
 
-        // latest API
         if (pTbsi_Get_TCG_Log_Ex) {
-            for (UINT32 logType : { 0, 2 }) { // 0: SRTM_CURRENT, 2: SRTM_BOOT
-                UINT32 logSize = 512 * 1024;
-                std::vector<u8> buffer(logSize);
-                if (pTbsi_Get_TCG_Log_Ex(logType, buffer.data(), &logSize) == 0) {
-                    buffer.resize(logSize);
-                    if (parse_log(buffer)) {
-                        vm_detected = true;
-                        break;
+            for (UINT32 logType : { 0, 2 }) {
+                UINT32 logSize = 0;
+                TBS_RESULT res = pTbsi_Get_TCG_Log_Ex(logType, nullptr, &logSize);
+                if ((res == 0 || res == TBS_E_INSUFFICIENT_BUFFER) && logSize > 0) {
+                    std::vector<u8> buffer(logSize);
+                    if (pTbsi_Get_TCG_Log_Ex(logType, buffer.data(), &logSize) == 0) {
+                        buffer.resize(logSize);
+                        if (parse_log(buffer)) {
+                            vm_detected = true;
+                            break;
+                        }
                     }
                 }
             }
         }
-        // legacy API
         else if (pTbsi_Context_Create && pTbsip_Context_Close && pTbsi_Get_TCG_Log) {
             VMAWARE_TBS_CONTEXT_PARAMS params{ 1 };
             TBS_HCONTEXT hContext = nullptr;
             if (pTbsi_Context_Create(&params, &hContext) == 0) {
-                UINT32 logSize = 512 * 1024;
-                std::vector<u8> buffer(logSize);
-                if (pTbsi_Get_TCG_Log(hContext, buffer.data(), &logSize) == 0) {
-                    buffer.resize(logSize);
-                    if (parse_log(buffer)) {
-                        vm_detected = true;
+                UINT32 logSize = 0;
+                TBS_RESULT res = pTbsi_Get_TCG_Log(hContext, nullptr, &logSize);
+                if ((res == 0 || res == TBS_E_INSUFFICIENT_BUFFER) && logSize > 0) {
+                    std::vector<u8> buffer(logSize);
+                    if (pTbsi_Get_TCG_Log(hContext, buffer.data(), &logSize) == 0) {
+                        buffer.resize(logSize);
+                        if (parse_log(buffer)) {
+                            vm_detected = true;
+                        }
                     }
                 }
                 pTbsip_Context_Close(hContext);
