@@ -744,8 +744,8 @@ public:
                 amd_easter_egg = 0x8fffffff;
         };
 
-    #if (x86)
         static void cpuid_count(unsigned leaf, unsigned subleaf, unsigned* a, unsigned* b, unsigned* c, unsigned* d) {
+        #if (x86)
             #if (MSVC)
                 int regs[4];
                 __cpuidex(regs, static_cast<int>(leaf), static_cast<int>(subleaf));
@@ -763,12 +763,12 @@ public:
                 VMAWARE_UNUSED(c); 
                 VMAWARE_UNUSED(d);
             #endif
+        #endif
         }
-    #endif
 
-    #if (x86)
         // cross-platform wrapper for linux and MSVC cpuid
         static void cpuid(u32& a, u32& b, u32& c, u32& d, const u32 a_leaf, const u32 c_leaf = 0xFF) {
+        #if (x86)
             // may be unmodified for older 32-bit processors, clearing just in case
             a = 0;
             b = 0;
@@ -785,8 +785,8 @@ public:
             b = bb;
             c = cc;
             d = dd;
+        #endif
         };
-    #endif
 
         // same as above but for array type parameters (MSVC specific)
         static void cpuid(i32 x[4], const u32 a_leaf, const u32 c_leaf = 0xFF) {

@@ -55,13 +55,12 @@ static void console_pause() {
 }
 
 bool is_admin() {
+    bool is_admin = false;
 #if (CLI_LINUX || CLI_APPLE)
     const uid_t uid = getuid();
     const uid_t euid = geteuid();
-    const bool is_root = ((uid != euid) || (euid == 0));
-    return is_root;
+    is_admin = ((uid != euid) || (euid == 0));
 #elif (CLI_WINDOWS)
-    bool is_admin = false;
     HANDLE hToken = nullptr;
     if (OpenProcessToken(reinterpret_cast<HANDLE>(-1LL), TOKEN_QUERY, &hToken)) {
         TOKEN_ELEVATION elevation{};
@@ -73,6 +72,7 @@ bool is_admin() {
         }
         CloseHandle(hToken);
     }
+#endif
     return is_admin;
 }
 
