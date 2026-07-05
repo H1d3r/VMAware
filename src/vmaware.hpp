@@ -2990,8 +2990,7 @@ public:
         }
     };
 
-
-    static void str_copy(char* dest, const char* src, size_t max_len) {
+    static void str_copy(char* dest, const char* src, const size_t max_len) {
         size_t i = 0;
         while (src[i] != '\0' && i < max_len - 1) {
             dest[i] = src[i];
@@ -4077,81 +4076,82 @@ public:
 
             hyperx_state state = HYPERV_UNKNOWN;
 
-            if (!is_root_partition()) {
-                if (eax() == 11 && is_hyperv_present()) {
-                    // Windows machine running under Hyper-V type 2
-                    debug("HYPER-X: Detected Hyper-V guest VM");
-                    core::add(brand_enum::HYPERV);
-                    state = HYPERV_REAL_VM;
-                }
-                else {
-                    debug("HYPER-X: Hyper-V is not active");
-                    state = HYPERV_UNKNOWN;
-                }
-            }
-            else {
-                // Windows machine running under Hyper-V type 1
-                std::string brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor + 0x100);
-
-                if (util::find(brand_str, "KVM")) {
-                    debug("HYPER-X: Detected Hyper-V enlightenments");
-                    core::add(brand_enum::QEMU_KVM_HYPERV);
-                    state = HYPERV_ENLIGHTENMENT;
-                }
-                else {
-                    // If we reach here, we do some sanity checks to ensure a hypervisor is not trying to spoof itself as Hyper-V, attempting to bypass some detections
-                    brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
-
-                    bool is_hyper_v_host = false;
-
-                #if (x86_64)
-                    u8 idtr_buffer[10] = { 0 };
-
-                    // we know we're not using SEH here, it's on purpose, and doesn't matter in what CPU core this runs on
-                    #if (CLANG || GCC)
-                        __asm__ volatile("sidt %0" : "=m"(idtr_buffer));
-                    #elif (MSVC)
-                        #pragma pack(push, 1)
-                        struct {
-                            USHORT Limit;
-                            ULONG_PTR Base;
-                        } idtr = { 0 };
-                        #pragma pack(pop)       
-                        __sidt(&idtr);
-
-                        volatile u8* idtr_ptr = (volatile u8*)&idtr;
-                        for (size_t j = 0; j < sizeof(idtr); ++j) {
-                            idtr_buffer[j] = idtr_ptr[j];
-                        }
-                    #endif
-
-                    ULONG_PTR idt_base = 0;
-                    memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
-
-                    // if running under Hyper-V in AMD64 (doesnt matter the VTL/partition level), this value is hardcoded and intercepted/emulated at kernel level
-                    // specifically at KiPreprocessFault -> KiOpDecode -> KiOpLocateDecodeEntry (KiOp_SLDTSTRSMSW)
-                    // this is intercepted by the kernel before handling execution to the hypervisor, so it's a decent safeguard against basic cpuid spoofing
-                    // additionally, brand has to be "Microsoft Hv"
-                    is_hyper_v_host = idt_base == 0xfffff80000001000 && brand_str == "Microsoft Hv";
-                #else
-                    is_hyper_v_host = brand_str == "Microsoft Hv";
-                #endif
-
-                    if (is_hyper_v_host) {
-                        debug("HYPER-X: Detected Hyper-V host machine");
-                        core::add(brand_enum::HYPERV_ROOT);
-                        state = HYPERV_HOST;
-                    }
-                    else {
-                        debug("HYPER-X: Detected hypervisor trying to spoof itself as Hyper-V");
-                        state = HYPERV_SPOOFED; 
-                    } 
-                } 
-            }
-
             if (is_hyperv_nested()) {
                 debug("HYPER-X: Detected Hyper-V in nested state");
                 state = HYPERV_NESTED_VM;
+            }
+            else {
+                if (!is_root_partition()) {
+                    if (eax() == 11 && is_hyperv_present()) {
+                        // Windows machine running under Hyper-V type 2
+                        debug("HYPER-X: Detected Hyper-V guest VM");
+                        core::add(brand_enum::HYPERV);
+                        state = HYPERV_REAL_VM;
+                    }
+                    else {
+                        debug("HYPER-X: Hyper-V is not active");
+                        state = HYPERV_UNKNOWN;
+                    }
+                }
+                else {
+                    // Windows machine running under Hyper-V type 1
+                    std::string brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor + 0x100);
+
+                    if (util::find(brand_str, "KVM")) {
+                        debug("HYPER-X: Detected Hyper-V enlightenments");
+                        core::add(brand_enum::QEMU_KVM_HYPERV);
+                        state = HYPERV_ENLIGHTENMENT;
+                    }
+                    else {
+                        // If we reach here, we do some sanity checks to ensure a hypervisor is not trying to spoof itself as Hyper-V, attempting to bypass some detections
+                        brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
+
+                        bool is_hyper_v_host = false;
+
+                    #if (x86_64)
+                        u8 idtr_buffer[10] = { 0 };
+
+                        // we know we're not using SEH here, it's on purpose, and doesn't matter in what CPU core this runs on
+                        #if (CLANG || GCC)
+                            __asm__ volatile("sidt %0" : "=m"(idtr_buffer));
+                        #elif (MSVC)
+                            #pragma pack(push, 1)
+                                struct {
+                                    USHORT Limit;
+                                    ULONG_PTR Base;
+                                } idtr = { 0 };
+                            #pragma pack(pop)       
+                            __sidt(&idtr);
+
+                            volatile u8* idtr_ptr = (volatile u8*)&idtr;
+                            for (size_t j = 0; j < sizeof(idtr); ++j) {
+                                idtr_buffer[j] = idtr_ptr[j];
+                            }
+                        #endif
+
+                        ULONG_PTR idt_base = 0;
+                        memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
+
+                        // if running under Hyper-V in AMD64 (doesnt matter the VTL/partition level), this value is hardcoded and intercepted/emulated at kernel level
+                        // specifically at KiPreprocessFault -> KiOpDecode -> KiOpLocateDecodeEntry (KiOp_SLDTSTRSMSW)
+                        // this is intercepted by the kernel before handling execution to the hypervisor, so it's a decent safeguard against basic cpuid spoofing
+                        // additionally, brand has to be "Microsoft Hv"
+                        is_hyper_v_host = idt_base == 0xfffff80000001000 && brand_str == "Microsoft Hv";
+                    #else
+                        is_hyper_v_host = brand_str == "Microsoft Hv";
+                    #endif
+
+                        if (is_hyper_v_host) {
+                            debug("HYPER-X: Detected Hyper-V host machine");
+                            core::add(brand_enum::HYPERV_ROOT);
+                            state = HYPERV_HOST;
+                        }
+                        else {
+                            debug("HYPER-X: Detected hypervisor trying to spoof itself as Hyper-V");
+                            state = HYPERV_SPOOFED;
+                        }
+                    }
+                }
             }
 
             memo::hyperx::store(state);
@@ -4905,12 +4905,6 @@ public:
                 }
             }
 
-            #ifdef __VMAWARE_DEBUG__
-                for (const auto& brand : active_brands) {
-                    debug("pre-processed scoreboard: ", int(brand.second), " : ", brands::brand_enum_to_string(brand.first));
-                }
-            #endif
-
             auto remove = [&](const enum brand_enum brand) noexcept {
                 for (auto it = active_brands.begin(); it != active_brands.end(); ++it) {
                     if (it->first == brand) {
@@ -4922,7 +4916,7 @@ public:
 
             // if all brands have a point of 0, return "Unknown"
             if (active_brands.empty()) {                        
-                active_brands.emplace_back(brand_enum::NULL_BRAND, 1);
+                active_brands.emplace_back(brand_enum::NULL_BRAND, 0);
                 memo::brand_list::store(active_brands, flags);
                 return active_brands;
             }
@@ -4935,7 +4929,7 @@ public:
                 const enum brand_enum brand = active_brands.front().first;
 
                 if (brand == brand_enum::HYPERV_ROOT && score > 0) {
-                    active_brands.emplace_back(brand_enum::NULL_BRAND, 1);
+                    active_brands.emplace_back(brand_enum::NULL_BRAND, 0);
                     remove(brand_enum::HYPERV_ROOT);
                 }
 
@@ -4948,6 +4942,11 @@ public:
                 remove(brand_enum::HYPERV_ROOT);
                 remove(brand_enum::NULL_BRAND);
                 remove(brand_enum::INVALID);
+            }
+
+            // If filtering emptied the vector, fall back to NULL_BRAND
+            if (active_brands.empty()) {
+                active_brands.emplace_back(brand_enum::NULL_BRAND, 1);
             }
 
             // this bitset acts as an abstraction layer for the merging stage of this function.
@@ -5033,12 +5032,6 @@ public:
                     return a.second > b.second; // .second = brand score (usually u8)
                 });
             }
-
-        #ifdef __VMAWARE_DEBUG__
-            for (const auto& brand : active_brands) {
-                debug("post-processed scoreboard: ", static_cast<u32>(brand.second), " : ", brands::brand_enum_to_string(brand.first));
-            }
-        #endif
 
             memo::brand_list::store(active_brands, flags);
             return active_brands;
