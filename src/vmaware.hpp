@@ -442,17 +442,6 @@
     #define debug(...)
 #endif
 
-
-/**
- * Official aliases for VM brands. This is added to avoid accidental typos
- * which could really mess up the result. Also, no errors/warnings are
- * issued if the string is invalid in case of a typo. For example:
- * scoreboard[VBOX]++;
- * is much better and safer against typos than:
- * scoreboard["VirtualBox"]++;
- * Hopefully this makes sense.
- *
- */
 #if (VMA_CPP >= 17)
     #define VMAWARE_CONSTEXPR constexpr
 #else
@@ -472,6 +461,8 @@
 #else
     #define VMAWARE_FORCE_INLINE inline
 #endif
+
+#define VMAWARE_UNUSED(x) ((void)(x))
 
 struct VM {
 private:
@@ -729,9 +720,6 @@ public:
     VM(const VM&) = delete;
     VM(VM&&) = delete;
 
-    // macro for bypassing unused parameter/variable warnings
-    #define VMAWARE_UNUSED(x) ((void)(x))
-
     // specifically for util::hyper_x() and memo::hyperv
     enum hyperx_state : u8 {
         HYPERV_UNKNOWN = 0,
@@ -830,7 +818,7 @@ public:
         #endif
         };
 
-        static bool is_leaf_supported(const u32 p_leaf) {
+        [[nodiscard]] static bool is_leaf_supported(const u32 p_leaf) {
         #if (APPLE) 
             return false;
         #endif
@@ -4132,11 +4120,16 @@ public:
             };
 
             // Check whether a hypervisor is nested within a Hyper-V partition
-            auto hyperv_nested = []() noexcept -> u32 {
-                u32 eax, ebx, ecx, edx = 0;
+            auto hyperv_nested = []() noexcept -> bool {
+                u32 eax = 0, ebx = 0, ecx = 0, edx = 0;
                 cpu::cpuid(eax, ebx, ecx, edx, 0x40000004);
 
-                return (eax & 1u << 12) != 0;
+                const bool nested_partition_bit = (eax & (1u << 12)) != 0;
+
+                const bool has_nested_leaf_40000009 = cpu::is_leaf_supported(0x40000009);
+                const bool has_nested_leaf_4000000A = cpu::is_leaf_supported(0x4000000A);
+
+                return nested_partition_bit || has_nested_leaf_40000009 || has_nested_leaf_4000000A;
             };
 
             hyperx_state state = HYPERV_UNKNOWN;
@@ -6085,7 +6078,7 @@ public:
             // Detect IPI-based counter pausing bypasses
             // For the median itself to exceed baremetal limits (which rarely pass 1000), an interrupt must be occurring on almost EVERY single loop iteration
             // This is the footprint of a hypervisor continuously spamming cross-core IPIs to try and pause our threads
-            if (best_cpuid_l > 1000 || best_ref_l > 1000 || best_cpuid_l == 1 || best_ref_l == 1) {
+            if (best_cpuid_l > 2000 || best_ref_l > 2000 || best_cpuid_l == 1 || best_ref_l == 1) {
                 hypervisor_detected = true;
             }
 

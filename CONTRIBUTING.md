@@ -5,9 +5,9 @@ Please consider adding your name and github in the vmaware.hpp file and the READ
 
 
 ## Translations
-If you're making translations, please make sure that you have the intention to be as accurate as possible. If you're unsure which parts should be translated or not, you can use the other translated files as a reference to guide you.
+If you're making translations, please make sure that you have the intention to be as accurate as possible. You can use the other translated files as a reference to guide you.
 
-Using translation software like google translate is allowed, but only if you cross-check between the english and translation version to verify if it's done correctly.
+Using translation software like Google Translate is allowed, but only if you cross-check between the english and translation version to verify if it's done correctly.
 
 The README is quite big, so this is quite an effort. I'm sure you have better thing to do in your life but if you can do this, it would be greatly appreciated :)
 
