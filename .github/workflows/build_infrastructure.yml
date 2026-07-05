@@ -268,7 +268,7 @@ jobs:
         include:
           - config: arm64-debug
             arch: ARM64
-            sdk: "10.0" 
+            sdk: "10.0"
             debug_output: ON
             artifact: vmaware-arm64_debug.exe
           - config: arm64-release
@@ -283,7 +283,7 @@ jobs:
             artifact: vmaware-arm32_debug.exe
           - config: arm32-release
             arch: ARM
-            sdk: "10.0.22621.0" 
+            sdk: "10.0.22621.0"
             debug_output: OFF
             artifact: vmaware-arm32_release.exe
 
@@ -292,27 +292,14 @@ jobs:
 
       - name: Configure (${{ matrix.config }})
         run: >
-          cmake -B build 
-          -G "Visual Studio 17 2022" 
-          -A ${{ matrix.arch }} 
-          -DCMAKE_SYSTEM_VERSION=${{ matrix.sdk }} 
+          cmake -B build
+          -G "Visual Studio 17 2022"
+          -A ${{ matrix.arch }}
+          -DCMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION=${{ matrix.sdk }}
           -DDEBUG_OUTPUT=${{ matrix.debug_output }}
 
       - name: Build (${{ matrix.config }})
         run: cmake --build build --config Release
-
-      - name: Rename binary with commit info
-        shell: pwsh
-        run: |
-          $shortSha = "${{ github.sha }}".Substring(0,12)
-          $run = "${{ github.run_number }}"
-          Add-Content $env:GITHUB_ENV "SHORT_SHA=$shortSha"
-          Rename-Item build\Release\vmaware.exe "vmaware_${run}_${shortSha}.exe"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: build\Release\vmaware_${{ github.run_number }}_${{ env.SHORT_SHA }}.exe
 
   windows-cpp-standard:
     runs-on: windows-2022
