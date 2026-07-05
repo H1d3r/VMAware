@@ -8687,7 +8687,7 @@ public:
             }
         }
 
-        closedir(dir);
+        dir.reset();
     #endif
         return result;
     }
