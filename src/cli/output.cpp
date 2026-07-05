@@ -238,7 +238,7 @@ static void checker(const VM::enum_flags flag, const char* message) {
     if (is_disabled(flag)) {
         disabled_count++;
 
-    #if (CLI_WINDOWS)
+    #if (CLI_WINDOWS && !CLI_ARM)
         if (g_tui.enabled) {
             return;
         }
@@ -284,7 +284,7 @@ static void checker(const VM::enum_flags flag, const char* message) {
 
     std::ostringstream cycle_oss;
     cycle_oss << dim << message << " | " << white << std::fixed << std::setprecision(4) << ms << " ms" << ansi_exit;
-    #if (CLI_WINDOWS)
+    #if (CLI_WINDOWS && !CLI_ARM)
         g_tui.add_cycle(cycle_oss.str());
     #endif
 
@@ -495,7 +495,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
         white = "";
     }
 
-    #if (CLI_WINDOWS)
+    #if (CLI_WINDOWS && !CLI_ARM)
         std::unique_ptr<debug_interceptor> interceptor;
         std::streambuf* old_cout = nullptr;
         std::streambuf* old_cerr = nullptr;
@@ -520,7 +520,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
         if (notes_enabled && !is_admin()) {
             PRINT_LINE("Running under root might give better results");
         }
-    #elif (CLI_WINDOWS)
+    #elif (CLI_WINDOWS && !CLI_ARM)
         if (!is_admin() && arg_bitset.test(RICH)) {
             do {
                 std::ostringstream _oss;
@@ -630,7 +630,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
 #if defined(__VMAWARE_DEBUG__)
     bool print_sha = true;
 
-    #if (CLI_WINDOWS)
+    #if (CLI_WINDOWS && !CLI_ARM)
         print_sha = !g_tui.enabled;
     #endif
 
@@ -751,7 +751,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
         ansi_exit
     );
 
-#if (CLI_WINDOWS)
+#if (CLI_WINDOWS && !CLI_ARM)
     if (!arg_bitset.test(NO_ANSI) && arg_bitset.test(RICH)) {
         g_tui.draw_summary_box(summary);
 

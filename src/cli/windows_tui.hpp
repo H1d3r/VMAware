@@ -3,7 +3,7 @@
 #include <iostream>
 #include <sstream>
 
-#if (CLI_WINDOWS)
+#if (CLI_WINDOWS && !CLI_ARM)
     #define WIN32_LEAN_AND_MEAN
     #define NOMINMAX
 
@@ -104,7 +104,7 @@
         return res;
     }
 
-    // UI Manager: Dynamic scaling boxes with aggressive dark/white sync theme
+    // dynamic scaling boxes with dark/white sync theme
     class tui_manager {
     public:
         SHORT start_y = 0;
@@ -161,7 +161,7 @@
 
     extern tui_manager g_tui;
 
-    // Aggressive stream interceptor. ALL output sent through std::cout that doesn't explicitly bypass
+    // ALL output sent through std::cout that doesn't explicitly bypass
     // into g_tui.raw_out gets captured and sent to the Debug Log UI. No layout escapes possible
     class debug_interceptor : public std::streambuf {
         std::string buffer;

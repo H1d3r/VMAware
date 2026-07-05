@@ -193,7 +193,7 @@ Containerd
 #endif
 
 int main(int argc, char* argv[]) {
-#if (CLI_WINDOWS)
+#if (CLI_WINDOWS && !CLI_ARM)
     #if (__VMAWARE_DEBUG__) 
         enable_crt_leak_check();
     #endif
