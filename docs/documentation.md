@@ -511,94 +511,96 @@ VMAware provides a convenient way to not only check for VMs, but also have the f
 
 | Flag alias | Description | Supported platforms | Certainty | Admin? | 32-bit only? | Notes | Code implementation |
 | ---------- | ----------- | ------------------- | --------- | ------ | ------------ | ----- | ------------------- |
-| `VM::VMID` | Check CPUID output of manufacturer ID for known VMs/hypervisors at leaf 0 and 0x40000000-0x40000100 | 🐧🪟🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5274) |
-| `VM::CPU_BRAND` | Check if CPU brand model contains any VM-specific string snippets | 🐧🪟🍏 | 95% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5292) |
-| `VM::HYPERVISOR_BIT` | Check if hypervisor feature bit in CPUID ECX bit 31 is enabled (always false for physical CPUs) | 🐧🪟🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5372) |
-| `VM::HYPERVISOR_STR` | Check for hypervisor brand string length (would be around 2 characters in a host machine) | 🐧🪟🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5408) |
-| `VM::TIMER` | Check for hypervisor overhead by measuring instruction execution latency | 🪟 | 95% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5872) |
-| `VM::THREAD_COUNT` | Check if there are only 1 or 2 threads, which is a common pattern in VMs with default settings, nowadays physical CPUs should have at least 4 threads for modern CPUs | 🐧🪟🍏 | 35% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8801) |
-| `VM::MAC` | Check if mac address starts with certain VM designated values | 🐧 | 20% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6279) |
-| `VM::TEMPERATURE` | Check for device's temperature | 🐧 | 20% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7158) |
-| `VM::SYSTEMD` | Check result from systemd-detect-virt tool | 🐧 | 35% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6147) |
-| `VM::CVENDOR` | Check if the chassis vendor is a VM vendor | 🐧 | 65% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6171) |
-| `VM::CTYPE` | Check if the chassis type is valid (it's very often invalid in VMs) | 🐧 | 20% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6196) |
-| `VM::DOCKERENV` | Check if /.dockerenv or /.dockerinit file is present | 🐧 | 30% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6219) |
-| `VM::DMIDECODE` | Check if dmidecode output matches a VM brand | 🐧 | 55% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6234) |
-| `VM::DMESG` | Check if dmesg output matches a VM brand | 🐧 | 55% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6392) |
-| `VM::HWMON` | Check if /sys/class/hwmon/ directory is present. If not, likely a VM | 🐧 | 35% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6435) |
-| `VM::DLL` | Check for VM-specific DLLs | 🪟 | 50% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9114) |
-| `VM::HWMODEL` | Check if the sysctl for the hwmodel does not contain the "Mac" string | 🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8830) |
-| `VM::WINE` | Check if the function "wine_get_unix_file_name" is present and if the OS booted from a VHD container | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9145) |
-| `VM::POWER_CAPABILITIES` | Check what power states are enabled | 🪟 | 25% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9171) |
-| `VM::PROCESSES` | Check for any VM processes that are active | 🐧 | 40% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7239) |
-| `VM::LINUX_USER_HOST` | Check for default VM username and hostname for linux | 🐧 | 10% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6445) |
-| `VM::GAMARUE` | Check for Gamarue ransomware technique which compares VM-specific Window product IDs | 🪟 | 10% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9231) |
-| `VM::BOCHS_CPU` | Check for various Bochs-related emulation oversights through CPU checks | 🐧🪟🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5436) |
-| `VM::MAC_MEMSIZE` | Check if memory is too low for MacOS system | 🍏 | 15% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8868) |
-| `VM::MAC_IOKIT` | Check MacOS' IO kit registry for VM-specific strings | 🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8901) |
-| `VM::IOREG_GREP` | Check for VM-strings in ioreg commands for MacOS | 🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8998) |
-| `VM::MAC_SIP` | Check for the status of System Integrity Protection and hv_mm_present | 🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9038) |
-| `VM::VPC_INVALID` | Check for official VPC method | 🪟 | 75% |  | 32-bit |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9340) |
+| `VM::VMID` | Check CPUID output of manufacturer ID for known VMs/hypervisors at leaf 0 and 0x40000000-0x40000100 | 🐧🪟🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5240) |
+| `VM::CPU_BRAND` | Check if CPU brand model contains any VM-specific string snippets | 🐧🪟🍏 | 95% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5258) |
+| `VM::HYPERVISOR_BIT` | Check if hypervisor feature bit in CPUID ECX bit 31 is enabled (always false for physical CPUs) | 🐧🪟🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5338) |
+| `VM::HYPERVISOR_STR` | Check for hypervisor brand string length (would be around 2 characters in a host machine) | 🐧🪟🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5374) |
+| `VM::TIMER` | Check for hypervisor overhead by measuring instruction execution latency | 🪟 | 95% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5838) |
+| `VM::THREAD_COUNT` | Check if there are only 1 or 2 threads, which is a common pattern in VMs with default settings, nowadays physical CPUs should have at least 4 threads for modern CPUs | 🐧🪟🍏 | 35% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8753) |
+| `VM::MAC` | Check if mac address starts with certain VM designated values | 🐧 | 20% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6245) |
+| `VM::TEMPERATURE` | Check for device's temperature | 🐧 | 20% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7134) |
+| `VM::SYSTEMD` | Check result from systemd-detect-virt tool | 🐧 | 35% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6113) |
+| `VM::CVENDOR` | Check if the chassis vendor is a VM vendor | 🐧 | 65% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6137) |
+| `VM::CTYPE` | Check if the chassis type is valid (it's very often invalid in VMs) | 🐧 | 20% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6162) |
+| `VM::DOCKERENV` | Check if /.dockerenv or /.dockerinit file is present | 🐧 | 30% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6185) |
+| `VM::DMIDECODE` | Check if dmidecode output matches a VM brand | 🐧 | 55% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6200) |
+| `VM::DMESG` | Check if dmesg output matches a VM brand | 🐧 | 55% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6358) |
+| `VM::HWMON` | Check if /sys/class/hwmon/ directory is present. If not, likely a VM | 🐧 | 35% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6401) |
+| `VM::DLL` | Check for VM-specific DLLs | 🪟 | 50% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9066) |
+| `VM::HWMODEL` | Check if the sysctl for the hwmodel does not contain the "Mac" string | 🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8782) |
+| `VM::WINE` | Check if the function "wine_get_unix_file_name" is present and if the OS booted from a VHD container | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9097) |
+| `VM::POWER_CAPABILITIES` | Check what power states are enabled | 🪟 | 25% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9123) |
+| `VM::PROCESSES` | Check for any VM processes that are active | 🐧 | 40% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7215) |
+| `VM::LINUX_USER_HOST` | Check for default VM username and hostname for linux | 🐧 | 10% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6411) |
+| `VM::GAMARUE` | Check for Gamarue ransomware technique which compares VM-specific Window product IDs | 🪟 | 10% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9183) |
+| `VM::BOCHS_CPU` | Check for various Bochs-related emulation oversights through CPU checks | 🐧🪟🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5402) |
+| `VM::MAC_MEMSIZE` | Check if memory is too low for MacOS system | 🍏 | 15% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8820) |
+| `VM::MAC_IOKIT` | Check MacOS' IO kit registry for VM-specific strings | 🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8853) |
+| `VM::IOREG_GREP` | Check for VM-strings in ioreg commands for MacOS | 🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8950) |
+| `VM::MAC_SIP` | Check for the status of System Integrity Protection and hv_mm_present | 🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8990) |
+| `VM::VPC_INVALID` | Check for official VPC method | 🪟 | 75% |  | 32-bit |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9292) |
 | `VM::SYSTEM_REGISTERS` |  |  | 50% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L1) |
-| `VM::VMWARE_IOMEM` | Check for VMware string in /proc/iomem | 🐧 | 65% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6474) |
-| `VM::VMWARE_IOPORTS` | Check for VMware string in /proc/ioports | 🐧 | 70% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6988) |
-| `VM::VMWARE_SCSI` | Check for VMware string in /proc/scsi/scsi | 🐧 | 40% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6785) |
-| `VM::VMWARE_DMESG` | Check for VMware-specific device name in dmesg output | 🐧 | 65% | Admin |  | Disabled by default | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6804) |
-| `VM::VMWARE_STR` | Check str assembly instruction method for VMware | 🪟 | 35% |  | 32-bit |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9391) |
-| `VM::VMWARE_BACKDOOR` | Check for official VMware io port backdoor technique | 🪟 | 100% |  | 32-bit |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9416) |
-| `VM::MUTEX` | Check for mutex strings of VM brands | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9477) |
-| `VM::THREAD_MISMATCH` | Check if the system's thread count matches the expected thread count for the detected CPU model | 🐧🪟🍏 | 50% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5517) |
-| `VM::CUCKOO_DIR` | Check for cuckoo directory using crt and WIN API directory functions | 🪟 | 30% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9563) |
-| `VM::CUCKOO_PIPE` | Check for Cuckoo specific piping mechanism | 🪟 | 30% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9619) |
-| `VM::AZURE` | Check for default Azure hostname format (Azure uses Hyper-V as their base VM brand) | 🐧🪟 | 30% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7482) |
-| `VM::DISPLAY` | Check for display configurations commonly found in VMs | 🪟 | 25% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9673) |
-| `VM::BLUESTACKS_FOLDERS` | Check for the presence of BlueStacks-specific folders | 🐧 | 5% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6490) |
-| `VM::CPUID_SIGNATURE` | Check for CPUID signatures that reveal the presence of a hypervisor | 🐧🪟🍏 | 95% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5698) |
-| `VM::KGT_SIGNATURE` | Check for Intel KGT (Trusty branch) hypervisor signature in CPUID | 🐧🪟🍏 | 80% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5846) |
-| `VM::QEMU_VIRTUAL_DMI` | Check for presence of QEMU in the /sys/devices/virtual/dmi/id directory | 🐧 | 40% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6573) |
-| `VM::QEMU_USB` | Check for presence of QEMU in the /sys/kernel/debug/usb/devices directory | 🐧 | 20% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6602) |
-| `VM::HYPERVISOR_DIR` | Check for presence of any files in /sys/hypervisor directory | 🐧 | 20% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6630) |
-| `VM::UML_CPU` | Check for the "UML" string in the CPU brand | 🐧 | 80% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6678) |
-| `VM::KMSG` | Check for any indications of hypervisors in the kernel message logs | 🐧 | 5% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6708) |
-| `VM::VBOX_MODULE` | Check for a VBox kernel module | 🐧 | 15% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6762) |
-| `VM::SYSINFO_PROC` | Check for potential VM info in /proc/sysinfo | 🐧 | 15% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6838) |
-| `VM::DMI_SCAN` | Check for string matches of VM brands in the linux DMI | 🐧 | 50% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6860) |
-| `VM::SMBIOS_VM_BIT` | Check for the VM bit in the SMBIOS data | 🐧 | 50% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6943) |
-| `VM::PODMAN_FILE` | Check for podman file in /run/ | 🐧 | 5% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6973) |
-| `VM::WSL_PROC` | Check for WSL or microsoft indications in /proc/ subdirectories | 🐧 | 30% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7005) |
-| `VM::DRIVERS` | Check for VM-specific names for drivers | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9693) |
-| `VM::DISK_SERIAL` | Check for serial numbers of virtual disks | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8498) |
-| `VM::IVSHMEM` | Check for IVSHMEM device presence | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9797) |
-| `VM::GPU_CAPABILITIES` | Check for GPU capabilities related to VMs | 🪟 | 25% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9903) |
-| `VM::HANDLES` | Check for vm-specific devices | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9941) |
-| `VM::QEMU_FW_CFG` | Detect QEMU fw_cfg interface. This first checks the Device Tree for a fw-cfg node or hypervisor tag, then verifies the presence of the qemu_fw_cfg module and firmware directories in sysfs. | 🐧 | 70% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7048) |
-| `VM::VIRTUAL_PROCESSORS` | Check if the number of virtual and logical processors are reported correctly by the system | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10043) |
-| `VM::HYPERVISOR_QUERY` | Check if a call to NtQuerySystemInformation with the 0x9f leaf fills a _SYSTEM_HYPERVISOR_DETAIL_INFORMATION structure | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10073) |
-| `VM::AMD_SEV_MSR` | Check for AMD-SEV MSR running on the system | 🐧🍏 | 50% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6513) |
-| `VM::VIRTUAL_REGISTRY` | Check for particular object directory which is present in Sandboxie virtual environment but not in usual host systems | 🪟 | 90% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10139) |
-| `VM::FIRMWARE` | Check for VM signatures on all firmware tables | 🐧🪟 | 100% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7542) |
-| `VM::FILE_ACCESS_HISTORY` | Check if the number of accessed files are too low for a human-managed environment | 🐧 | 15% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7078) |
-| `VM::AUDIO` | Check if no waveform-audio output devices are present in the system | 🪟 | 25% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10233) |
-| `VM::CONTAINER_PID` | Check if process status matches with container patterns with PID anomalies | 🐧 | 75% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7105) |
-| `VM::DEVICES` | Check for PCI vendor and device IDs that are VM-specific | 🐧🪟 | 95% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7974) |
-| `VM::ACPI_SIGNATURE` | Check for VM-specific ACPI device signatures | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10341) |
-| `VM::TRAP` | Check if after raising two traps at the same RIP, a hypervisor interferes with the instruction pointer delivery | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10486) |
-| `VM::UD` | Check if no waveform-audio output devices are present in the system | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10233) |
-| `VM::INTERRUPT_SHADOW` | Check if a hypervisor does not properly restore the interruptibility state after a VM-exit | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10763) |
-| `VM::DBVM` | Check if Dark Byte's VM is present | 🪟 | 150% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10888) |
-| `VM::BOOT_LOGO` | Check boot logo for known VM images | 🐧🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8345) |
-| `VM::MAC_SYS` | Check for VM-strings in system profiler commands for MacOS | 🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9082) |
-| `VM::KERNEL_OBJECTS` | Check for any signs of VMs in Windows kernel object entities | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L11077) |
-| `VM::NVRAM` | Check for known NVRAM signatures that are present on virtual firmware | 🪟 | 100% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L11267) |
-| `VM::CPU_HEURISTIC` | Check whether the CPU is genuine and its reported instruction capabilities are not masked | 🪟 | 90% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L11579) |
-| `VM::CLOCK` | Check the presence of system timers | 🪟 | 45% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12048) |
-| `VM::MSR` | Check for AMD-SEV MSR running on the system | 🐧🍏 | 100% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6513) |
-| `VM::KVM_INTERCEPTION` | Check whether KVM attempts to patch a mismatched hypercall instruction | 🪟 | 150% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12244) |
-| `VM::HYPERVISOR_HOOK` | Check whether a hypervisor uses EPT/NPT hooking to intercept hardware breakpoints | 🪟 | 100% |  |  | This hypervisor detection also affects debuggers | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12347) |
-| `VM::SINGLE_STEP` | Check whether a hypervisor delays trap flags over exiting instructions | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12663) |
-| `VM::EIP_OVERFLOW` | Check whether a hypervisor does not correctly emulate instructions in compatibility mode | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12764) |
-| `VM::SVM_EXCEPTIONS` | Check whether a hypervisor leaks EFER.SVME into guest context via SVM instruction fault type | 🪟 | 150% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12950) |
-| `VM::CGROUP` | Check for cgroup paths in /proc/self/cgroup | 🐧 | 70% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7171) |
+| `VM::VMWARE_IOMEM` | Check for VMware string in /proc/iomem | 🐧 | 65% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6440) |
+| `VM::VMWARE_IOPORTS` | Check for VMware string in /proc/ioports | 🐧 | 70% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6964) |
+| `VM::VMWARE_SCSI` | Check for VMware string in /proc/scsi/scsi | 🐧 | 40% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6761) |
+| `VM::VMWARE_DMESG` | Check for VMware-specific device name in dmesg output | 🐧 | 65% | Admin |  | Disabled by default | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6780) |
+| `VM::VMWARE_STR` | Check str assembly instruction method for VMware | 🪟 | 35% |  | 32-bit |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9343) |
+| `VM::VMWARE_BACKDOOR` | Check for official VMware io port backdoor technique | 🪟 | 100% |  | 32-bit |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9368) |
+| `VM::MUTEX` | Check for mutex strings of VM brands | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9429) |
+| `VM::THREAD_MISMATCH` | Check if the system's thread count matches the expected thread count for the detected CPU model | 🐧🪟🍏 | 50% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5483) |
+| `VM::CUCKOO_DIR` | Check for cuckoo directory using crt and WIN API directory functions | 🪟 | 30% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9515) |
+| `VM::CUCKOO_PIPE` | Check for Cuckoo specific piping mechanism | 🪟 | 30% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9571) |
+| `VM::AZURE` | Check for default Azure hostname format (Azure uses Hyper-V as their base VM brand) | 🐧🪟 | 30% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7458) |
+| `VM::DISPLAY` | Check for display configurations commonly found in VMs | 🪟 | 25% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9625) |
+| `VM::BLUESTACKS_FOLDERS` | Check for the presence of BlueStacks-specific folders | 🐧 | 5% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6456) |
+| `VM::CPUID_SIGNATURE` | Check for CPUID signatures that reveal the presence of a hypervisor | 🐧🪟🍏 | 95% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5664) |
+| `VM::KGT_SIGNATURE` | Check for Intel KGT (Trusty branch) hypervisor signature in CPUID | 🐧🪟🍏 | 80% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5812) |
+| `VM::QEMU_VIRTUAL_DMI` | Check for presence of QEMU in the /sys/devices/virtual/dmi/id directory | 🐧 | 40% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6539) |
+| `VM::QEMU_USB` | Check for presence of QEMU in the /sys/kernel/debug/usb/devices directory | 🐧 | 20% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6568) |
+| `VM::HYPERVISOR_DIR` | Check for presence of any files in /sys/hypervisor directory | 🐧 | 20% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6596) |
+| `VM::UML_CPU` | Check for the "UML" string in the CPU brand | 🐧 | 80% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6644) |
+| `VM::KMSG` | Check for any indications of hypervisors in the kernel message logs | 🐧 | 5% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6674) |
+| `VM::VBOX_MODULE` | Check for a VBox kernel module | 🐧 | 15% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6738) |
+| `VM::SYSINFO_PROC` | Check for potential VM info in /proc/sysinfo | 🐧 | 15% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6814) |
+| `VM::DMI_SCAN` | Check for string matches of VM brands in the linux DMI | 🐧 | 50% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6836) |
+| `VM::SMBIOS_VM_BIT` | Check for the VM bit in the SMBIOS data | 🐧 | 50% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6919) |
+| `VM::PODMAN_FILE` | Check for podman file in /run/ | 🐧 | 5% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6949) |
+| `VM::WSL_PROC` | Check for WSL or microsoft indications in /proc/ subdirectories | 🐧 | 30% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6981) |
+| `VM::DRIVERS` | Check for VM-specific names for drivers | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9645) |
+| `VM::DISK_SERIAL` | Check for serial numbers of virtual disks | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8450) |
+| `VM::IVSHMEM` | Check for IVSHMEM device presence | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9749) |
+| `VM::GPU_CAPABILITIES` | Check for GPU capabilities related to VMs | 🪟 | 25% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9855) |
+| `VM::HANDLES` | Check for vm-specific devices | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9893) |
+| `VM::QEMU_FW_CFG` | Detect QEMU fw_cfg interface. This first checks the Device Tree for a fw-cfg node or hypervisor tag, then verifies the presence of the qemu_fw_cfg module and firmware directories in sysfs. | 🐧 | 70% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7024) |
+| `VM::VIRTUAL_PROCESSORS` | Check if the number of virtual and logical processors are reported correctly by the system | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9995) |
+| `VM::HYPERVISOR_QUERY` | Check if a call to NtQuerySystemInformation with the 0x9f leaf fills a _SYSTEM_HYPERVISOR_DETAIL_INFORMATION structure | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10025) |
+| `VM::AMD_SEV_MSR` | Check for AMD-SEV MSR running on the system | 🐧🍏 | 50% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6479) |
+| `VM::VIRTUAL_REGISTRY` | Check for particular object directory which is present in Sandboxie virtual environment but not in usual host systems | 🪟 | 90% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10091) |
+| `VM::FIRMWARE` | Check for VM signatures on all firmware tables | 🐧🪟 | 100% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7518) |
+| `VM::FILE_ACCESS_HISTORY` | Check if the number of accessed files are too low for a human-managed environment | 🐧 | 15% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7054) |
+| `VM::AUDIO` | Check if no waveform-audio output devices are present in the system | 🪟 | 25% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10185) |
+| `VM::CONTAINER_PID` | Check if process status matches with container patterns with PID anomalies | 🐧 | 75% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7081) |
+| `VM::DEVICES` | Check for PCI vendor and device IDs that are VM-specific | 🐧🪟 | 95% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7927) |
+| `VM::ACPI_SIGNATURE` | Check for VM-specific ACPI device signatures | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10293) |
+| `VM::TRAP` | Check if after raising two traps at the same RIP, a hypervisor interferes with the instruction pointer delivery | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10452) |
+| `VM::UD` | Check if no waveform-audio output devices are present in the system | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10185) |
+| `VM::INTERRUPT_SHADOW` | Check if a hypervisor does not properly restore the interruptibility state after a VM-exit | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10729) |
+| `VM::DBVM` | Check if Dark Byte's VM is present | 🪟 | 150% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L10854) |
+| `VM::BOOT_LOGO` | Check boot logo for known VM images | 🐧🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L8297) |
+| `VM::MAC_SYS` | Check for VM-strings in system profiler commands for MacOS | 🍏 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9034) |
+| `VM::KERNEL_OBJECTS` | Check for any signs of VMs in Windows kernel object entities | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L11043) |
+| `VM::NVRAM` | Check for known NVRAM signatures that are present on virtual firmware | 🪟 | 100% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L11233) |
+| `VM::CPU_HEURISTIC` | Check whether the CPU is genuine and its reported instruction capabilities are not masked | 🪟 | 90% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L11545) |
+| `VM::CLOCK` | Check the presence of system timers | 🪟 | 45% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12014) |
+| `VM::MSR` | Check for AMD-SEV MSR running on the system | 🐧🍏 | 100% | Admin |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6479) |
+| `VM::KVM_INTERCEPTION` | Check whether KVM attempts to patch a mismatched hypercall instruction | 🪟 | 150% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12210) |
+| `VM::HYPERVISOR_HOOK` | Check whether a hypervisor uses EPT/NPT hooking to intercept hardware breakpoints | 🪟 | 100% |  |  | This hypervisor detection also affects debuggers | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12313) |
+| `VM::SINGLE_STEP` | Check whether a hypervisor delays trap flags over exiting instructions | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12627) |
+| `VM::EIP_OVERFLOW` | Check whether a hypervisor does not correctly emulate instructions in compatibility mode | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12728) |
+| `VM::SVM_EXCEPTIONS` | Check whether a hypervisor leaks EFER.SVME into guest context via SVM instruction fault type | 🪟 | 150% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12914) |
+| `VM::CGROUP` | Check for cgroup paths in /proc/self/cgroup | 🐧 | 70% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7147) |
+| `VM::HYPERV_NESTED` | Check whether a hypervisor is nested within a Hyper-V partition | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L13056) |
+| `VM::TPM` | Check measured boot logs exported by the TPM | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L13070) |
 <!-- END OF TECHNIQUE DOCUMENTATION -->
 
 <br>

@@ -2,7 +2,7 @@
 
 if Gem.win_platform?
   raise Gem::Exception,
-   'Sadly, the vmaware-rb gem is not available on windows, due to heavy reliance on MSVC.'
+   'Sadly, the vmaware-rb gem is not available on Windows, due to heavy reliance on MSVC.'
 end
 
 Gem::Specification.new do |spec|

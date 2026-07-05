@@ -3,12 +3,13 @@
 Please consider adding your name and github in the vmaware.hpp file and the README's credit sections. Your work is valuable to us, and we want to credit you for the improvements you've made. 
 
 ## Translations
-If you're making translations, please make sure that you have the intention to be as accurate as possible. You can use the other translated files as a reference to guide you.
+If you're making translations for our root-located README.md file, please make sure that you have the intention to be as accurate as possible. You can use the other translated files as a reference to guide you.
 
 Using translation software is allowed, but only if you check yourself the translation was correct.
 
 The README is quite big, so this is quite an effort. I'm sure you have better thing to do in your life, so your work is greatly appreciated :)
 
+You don't have to actively maintain your translation, we will do it for you.
 
 ## Code contributions
 The only rule is to be as simple as possible and document your intentions. 

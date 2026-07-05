@@ -7,8 +7,8 @@ We take security vulnerabilities seriously and aim to fix them promptly and resp
 
 ### 1. Supported Versions
 
-We only provide security fixes for the latest **v2** major release versions. 
-If you discover a vulnerability in an unsupported version, please upgrade to the latest **v2.x** version and verify whether the issue still exists.
+We only provide security fixes for the latest major release versions. 
+If you discover a vulnerability in an unsupported version, please upgrade to the latest version in our Releases and verify whether the issue still exists.
 
 ---
 
@@ -36,47 +36,25 @@ vmaware.support@gmail.com
 
 We prioritize meaningful and actionable security vulnerabilities. Reports will be dismissed without disclosure or fix if they:
 
-> Have minimal or no real-world impact.
+> Have no real-world impact.
 
-> Require unrealistic or contrived conditions for exploitation.
-
-> Are speculative, incomplete, or lack a working proof-of-concept.
+> Require unrealistic conditions for exploitation.
 
 > Relate to outdated or unsupported versions.
 
-> Involve minor issues such as denial-of-service through non-production use, debug-only settings, or expected behavior in constrained environments.
-
-We reserve the right to classify any report as non-actionable and to not disclose or acknowledge such submissions publicly.
+We reserve the right to classify any report as non-actionable.
 
 ### 4. Handling and Response Timeline
 
-**__1.__** Acknowledgment: You will receive a response within 48 hours.
+**__1.__** Acknowledgment: You will receive a response within one week.
 
 **__2.__** Evaluation: Investigation will begin within 5 business days.
 
-**__3.__** Patch Development: If the issue is valid and severe, a fix will be developed within 30 calendar days.
+**__3.__** Patch Development: If the issue is valid, a fix will be developed within 30 calendar days.
 
 **__4.__** Disclosure: For actionable vulnerabilities, we will issue a security advisory and optionally credit the reporter.
 
 ### 5. Post-Fix Actions
 
-* The patched version will be tagged with a security banner (e.g., v2.4.0-secfix).
+* The patched version will be tagged with a security banner (e.g., v2.9.0-secfix).
 * We will coordinate with package repositories and downstream projects.
-
-### 6. Summary Workflow
-
-```text
-Reporter -> vmaware.support@gmail.com (PGP optional)
-    -> Maintainers ack in 48h
-    -> Investigation in 5 days
-    -> Patch in 30 days (if warranted)
-    -> Public disclosure & credit (if warranted)
-```
-
----
-
-### 7. Thank You
-
-We value community involvement and appreciate your help in improving the security of VMAware.
-That said, we aim to focus our efforts on high-impact, real-world vulnerabilities that affect production use.
-Your efforts help keep **VMAware** safe and reliable. We appreciate your time and expertise!
