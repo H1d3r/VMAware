@@ -268,18 +268,22 @@ jobs:
         include:
           - config: arm64-debug
             arch: ARM64
+            sdk: "10.0" 
             debug_output: ON
             artifact: vmaware-arm64_debug.exe
           - config: arm64-release
             arch: ARM64
+            sdk: "10.0"
             debug_output: OFF
             artifact: vmaware-arm64_release.exe
           - config: arm32-debug
             arch: ARM
+            sdk: "10.0.22621.0"
             debug_output: ON
             artifact: vmaware-arm32_debug.exe
           - config: arm32-release
             arch: ARM
+            sdk: "10.0.22621.0" 
             debug_output: OFF
             artifact: vmaware-arm32_release.exe
 
@@ -287,7 +291,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure (${{ matrix.config }})
-        run: cmake -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }} -DDEBUG_OUTPUT=${{ matrix.debug_output }}
+        run: >
+          cmake -B build 
+          -G "Visual Studio 17 2022" 
+          -A ${{ matrix.arch }} 
+          -DCMAKE_SYSTEM_VERSION=${{ matrix.sdk }} 
+          -DDEBUG_OUTPUT=${{ matrix.debug_output }}
 
       - name: Build (${{ matrix.config }})
         run: cmake --build build --config Release

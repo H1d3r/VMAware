@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <iostream>
+#include <limits>
 
 // https://en.wikipedia.org/wiki/Wagner%E2%80%93Fischer_algorithm
 // this function is used for argument corrections in CLI tools.
 // The performance might be questionable, but it's nothing critical.
 // It's only used for finding unrecognised arguments anyway, it's
 // a debug utility for crashes.
+
 u8 wagner_fischer(const std::string& a_input, const std::string& b_input) {
     std::string a = a_input;
     std::string b = b_input;
