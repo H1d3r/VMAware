@@ -6532,7 +6532,15 @@ public:
      * @implements VM::HYPERVISOR_DIR
      */
     [[nodiscard]] static bool hypervisor_dir() {
-        std::unique_ptr<DIR, decltype(&closedir)> dir(opendir("/sys/hypervisor"), closedir);
+        struct DirDeleter {
+            void operator()(DIR* d) const {
+                if (d != nullptr) {
+                    closedir(d);
+                }
+            }
+        };
+
+        std::unique_ptr<DIR, DirDeleter> dir(opendir("/sys/hypervisor"));
 
         if (dir == nullptr) {
             return false;
@@ -6553,7 +6561,7 @@ public:
             break;
         }
 
-        closedir(dir);
+        dir.reset();
 
         bool type = false;
 
@@ -6570,7 +6578,7 @@ public:
 
         // check if there's a few files in that directory
         return ((count != 0) && type);
-    } 
+    }
 
 
     /**
@@ -8626,7 +8634,15 @@ public:
             return true;
         }
     #else
-        std::unique_ptr<DIR, decltype(&closedir)> dir(opendir("/sys/block"), closedir);
+        struct DirDeleter {
+            void operator()(DIR* d) const {
+                if (d != nullptr) {
+                    closedir(d);
+                }
+            }
+        };
+
+        std::unique_ptr<DIR, DirDeleter> dir(opendir("/sys/block"));
         if (!dir) {
             return false;
         }
