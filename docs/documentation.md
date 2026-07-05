@@ -13,7 +13,7 @@
 - [`(Advanced) VM::flag_to_string()`](#advanced-vmflag_to_string)
 - [`(Advanced) VM::detected_enums()`](#advanced-vmdetected_enums)
 - [vmaware struct](#vmaware-struct)
-- [Notes and overall things to avoid](#notes-and-overall-things-to-avoid)
+- [Notes](#notes)
 - [Flag table](#flag-table)
 - [Brand table](#brand-table)
 - [Setting flags](#setting-flags)
@@ -25,7 +25,7 @@
 
 ## `VM::detect()`
 
-This is basically the main function you're looking for, which returns a bool. If no parameter is provided, all the recommended checks will be performed. But you can optionally set which techniques are used.
+This is basically the main function you're looking for, which returns a bool. If no parameter is provided, all the recommended checks will be performed. You can optionally set which techniques are used.
 
 ```cpp
 #include "vmaware.hpp"
@@ -64,34 +64,34 @@ int main() {
 
 
     /**
-     * Essentially means only the CPU brand, MAC, and hypervisor bit techniques 
+     * Essentially means only the CPU brand, hypervisor string, and hypervisor bit techniques 
      * should be performed. Note that the less technique flags you provide, the more 
      * likely the result will not be accurate. If you just want to check for 
      * a single technique, use VM::check() instead. Also, read the flag table
      * at the end of this doc file for a full list of technique flags.
      */
-    bool is_vm5 = VM::detect(VM::CPU_BRAND, VM::MAC, VM::HYPERVISOR_BIT);
+    bool is_vm5 = VM::detect(VM::CPU_BRAND, VM::HYPERVISOR_STR, VM::HYPERVISOR_BIT);
 
 
     /**
      * If you want to disable any technique for whatever reason, use VM::DISABLE(...).
      * This code snippet essentially means "perform all the default flags, but only 
-     * disable the VM::RDTSC technique". 
+     * disable the VM::TIMER technique". 
      */ 
-    bool is_vm6 = VM::detect(VM::DISABLE(VM::RDTSC));
+    bool is_vm6 = VM::detect(VM::DISABLE(VM::TIMER));
 
 
     /**
      * Same as above, but you can disable multiple techniques at the same time.
      */ 
-    bool is_vm7 = VM::detect(VM::DISABLE(VM::VMID, VM::RDTSC, VM::HYPERVISOR_BIT));
+    bool is_vm7 = VM::detect(VM::DISABLE(VM::VMID, VM::TIMER, VM::FIRMWARE));
 
 
     /**
      * This is just an example to show that you can use a combination of 
      * different flags and non-technique flags with the above examples. 
      */ 
-    bool is_vm8 = VM::detect(VM::DEFAULT, VM::HIGH_THRESHOLD, VM::DISABLE(VM::RDTSC, VM::VMID));
+    bool is_vm8 = VM::detect(VM::DEFAULT, VM::HIGH_THRESHOLD, VM::DISABLE(VM::TIMER, VM::VMID));
 }
 ```
 
@@ -107,7 +107,7 @@ This will return a `std::uint8_t` between 0 and 100. It'll return the certainty 
 
 int main() {
     // uint8_t and unsigned char works too
-    const std::uint8_t percent = VM::percentage();
+    std::uint8_t percent = VM::percentage();
 
     if (percent == 100) {
         std::cout << "Definitely a VM!\n";
@@ -125,21 +125,21 @@ int main() {
 ```
 
 > [!NOTE]
-> you can use the same flag system as shown with `VM::detect()` for this function.
+> You can use the same flag system as shown with `VM::detect()` for this function.
 
 <br>
 
 ## `VM::brand()`
 This will essentially return the VM brand as a `std::string`. All the brands and brand alias variables are listed [here](#brand-table)
 
-If none were detected, it will return `Unknown`. It should be noted that this could be a common scenario even if you're running inside a VM due to technical difficulties with accomplishing this. This is especially true for VMware sub-versions (ESX, GSX, Fusion, etc...). It's not recommended to rely on this function for critical operations as if your whole program depends on it.
+If none were detected, it will return `Unknown`. It should be noted that it is not always possible to determine the VM brand, even if VMAware detects that it is running on a VM.
 
 ```cpp
 #include "vmaware.hpp"
 #include <string>
 
 int main() {
-    const std::string result = VM::brand();
+    std::string result = VM::brand();
 
     if (result == "KVM") {
         // do KVM specific stuff
@@ -159,7 +159,9 @@ int main() {
 ```
 
 
-On rare occasions, there might be cases where there's multiple brands that have been detected, which might cause a conflicting output with an inaccurate result. To prevent this, you can use the `VM::MULTIPLE` flag that returns a **message** rather than a **VM brand string**. For example, if it found 2 conflicting brands, it will return `VMware or VirtualBox`. For 3 conflicts, it's `VMware or VirtualBox or QEMU` and so on.
+On rare occasions, VMAware might detect signs of multiple brands, which might cause a conflicting output. 
+To prevent this, you can use the `VM::MULTIPLE` flag that returns a **message** rather than a **VM brand string**. 
+For example, if it found 2 conflicting brands, it will return `VMware or VirtualBox`.
 
 
 ```cpp
@@ -168,7 +170,7 @@ On rare occasions, there might be cases where there's multiple brands that have 
 
 int main() {
     // format: "vmbrand1 or vmbrand2 [or vmbrandx...]"
-    const std::string result = VM::brand(VM::MULTIPLE);
+    std::string result = VM::brand(VM::MULTIPLE);
 
     // example output: "VMware or Bochs"
     std::cout << result << "\n";
@@ -182,16 +184,16 @@ int main() {
 ```
 
 > [!NOTE]
-> you can use the same flag system as shown with `VM::detect()` for `VM::brand()`
+> You can use the same flag system as shown with `VM::detect()` for `VM::brand()`.
 
 > [!IMPORTANT]
-> `VM::MULTIPLE` has no effect for any other function other than `VM::brand()`
+> `VM::MULTIPLE` has no effect for any other function other than `VM::brand()`.
 
 
 <br>
 
 ## `VM::check()`
-This takes a single technique argument and returns a `bool`. It essentially returns a technique's effective output. Nothing more, nothing less.
+This takes a single technique argument and returns a `bool`. It essentially returns whether the given technique detected a VM or not.
 
 
 ```cpp
@@ -214,7 +216,8 @@ int main() {
 <br>
 
 ## `VM::add_custom()`
-This function allows you to add your own custom VM detection techniques to the scoring system. The first parameter is the percentage score (0 to 100) of how likely it's a VM if your custom code returns `true`, and the second parameter should either be a lambda, a function pointer, or a `std::function<bool()>`
+This function allows you to add your own custom VM detection techniques to the scoring system. 
+The first parameter is the percentage score (0 to 100) of how likely it's a VM if your custom code returns `true`, and the second parameter should either be a lambda, a function pointer, or a `std::function<bool()>`
 
 ```cpp
 // Example 1 with function pointers
@@ -278,7 +281,7 @@ This will return the "conclusion" message of what the overall result is as a `st
 - `Running on baremetal`
 - `Running inside a [brand] VM`
 
-The `[brand]` part might contain a brand or may as well be empty, depending on whether a brand has been found. Additionally, you can extend this by adding the `VM::DYNAMIC` flag which will now allow much more variadic  potential outputs:
+The `[brand]` part might contain a brand or may as well be empty, depending on whether a brand has been found. Additionally, you can extend this by adding the `VM::DYNAMIC` flag, which will now allow much more variadic potential outputs:
 - `Running on baremetal`
 - `Very unlikely a [brand] VM`
 - `Unlikely a [brand] VM`
@@ -299,15 +302,12 @@ This will fetch the number of techniques that have been detected as a `std::uint
 #include <iostream>
 
 int main() {
-    const std::uint8_t count = VM::detected_count();
+    std::uint8_t count = VM::detected_count();
 
     // output: 7 techniques were detected
     std::cout << count << " techniques were detected" << "\n"; 
 
     // note that if it's baremetal, it should be 0.
-    // if it's a VM, it should have at least 4 to  
-    // maybe around 15 max. The most I've seen was 
-    // around 18 but that only occurs very rarely.
 
     return 0;
 }
@@ -317,12 +317,7 @@ int main() {
 
 ## `VM::is_hardened()`
 
-This will detect whether the environment has any hardening indications as a `bool`. 
-
-Internally, this function works by analysing which combination of techniques are expected to be detected together. If a certain combination rule is mismatched, it indicates some kind of tampering of the system which assumes some sort of VM hardening.
-
-Similiary to `VM::brand()`, do not rely on this function for critical operations. This is meant to be a heuristic assumption rather than a concrete guarantee.
-
+Returns a `bool`. Indicates whether your program is running in a virtual environment designed to evade VM detection.
 
 ```cpp
 #include "vmaware.hpp"
@@ -330,9 +325,9 @@ Similiary to `VM::brand()`, do not rely on this function for critical operations
 
 int main() {
     if (VM::is_hardened()) {
-        std::cout << "Potential hardening detected" << "\n";
+        std::cout << "Hardened environment detected" << "\n";
     } else {
-        std::cout << "Unsure if hardened" << "\n";
+        std::cout << "No indications of hardening found" << "\n";
     }
 
     return 0;
@@ -353,7 +348,7 @@ This will take a technique flag enum as an argument and return the string versio
 #include <iostream>
 
 int main() {
-    const std::string name = VM::flag_to_string(VM::VMID);
+    std::string name = VM::flag_to_string(VM::VMID);
 
     // output: VM::VMID 
     std::cout << "VM::" << name << "\n"; 
@@ -391,7 +386,7 @@ int main() {
 <details>
 <summary>Show</summary>
 
-This is a function that will return a vector of all the technique flags that were detected as running in a VM. The return type is `std::vector<VM::enum_flags>`, and it's designed to give a more programmatic overview of the result. 
+This is a function that will return a vector of all the technique flags that detected a VM. The return type is `std::vector<VM::enum_flags>`, and it's designed to give a more programmatic overview of the result. 
 
 ```cpp
 #include "vmaware.hpp"
@@ -431,7 +426,7 @@ struct vmaware {
 }; 
 ```
 
-example:
+Example:
 ```cpp
 #include "vmaware.hpp"
 #include <iostream>
@@ -447,15 +442,13 @@ int main() {
 ```
 
 > [!NOTE]
-> the flag system is compatible for the struct constructor.
+> The flag system is compatible for the struct constructor.
 
 
 <br>
 
-# Notes and overall things to avoid
-❌ 1. Do NOT rely on the percentage to determine whether you're in a VM. The lib is not designed for this way, and you're potentially increasing false positives. Use VM::detect() instead for that job.
-
-❌ 2. Do NOT depend your whole program on whether a specific brand was found. VM::brand() will not guarantee it'll give you the result you're looking for even if the environment is in fact that specific VM brand.
+# Notes
+❌ Do NOT rely on the percentage to determine whether you're in a VM. Use VM::detect() instead for that job.
 
 > [!TIP]
 > It should also be mentioned that it's recommended for the end-user to create a wrapper around the header file. C++ compilation is notoriously slow compared to C or other systems programming languages, and recompiling the header over and over again is a time waste, especially considering there's around 10k lines of code in it. This is incredibly unreliable and cumbersome for large-scale projects utilising the lib. If you have a build configuration that supports header dependency handling or [incremental compilation](https://en.wikipedia.org/wiki/Incremental_compiler) (which is present in most build systems such as CMake), you can fix the issue by doing something like this:
@@ -695,6 +688,7 @@ This is the table of all the brands the lib supports.
 | `VM::MULTIPLE` | This will basically return a `std::string` message of which brands could be involved. For example, it could return "`VMware or VirtualBox`" instead of having a single brand string output. | VM::brand() |   
 | `VM::HIGH_THRESHOLD` | This will set the threshold bar to confidently detect a VM by 2x higher. | VM::detect() and VM::percentage() |
 | `VM::DYNAMIC` | This will add 8 options to the conclusion message rather than 2, each with their own varying likelihoods. | VM::conclusion() |
+| `VM::EXPERIMENTAL` | This will disable all VM detection techniques marked as experimental. | VM::detect() |
 | `VM::NULL_ARG` | Does nothing, meant as a placeholder flag mainly for CLI purposes. It's best to ignore this.|  |
 
 <br>
@@ -724,12 +718,13 @@ This is the table of all the brands the lib supports.
 |    | --disable-notes | No notes will be provided |
 |    | --high-threshold | A higher threshold bar for a VM detection will be applied |
 |    | --no-ansi | Removes all the ANSI encodings (color and text style). This is added due to some terminals not supporting ANSI escape codes while cluttering the output |
-|    | --dynamic | allow the conclusion message to be dynamic (8 possibilities instead of only 2) |
-|    | --verbose | add more information to the output  |
-|    | --enums | display the technique enum name used by the lib |
+|    | --dynamic | Allow the conclusion message to be dynamic (8 possibilities instead of only 2) |
+|    | --verbose | Add more information to the output  |
+|    | --enums | Display the technique enum name used by the lib |
 |    | --detected-only | Only display the techniques that were detected |
+|    | --experimental | Disable experimental techniques |
 |    | --json | Output a json-formatted file of the results |
 
 > [!NOTE]
 > If you want a general result with the default settings, do not put any arguments. This is the intended way to use the CLI tool.
->
+> 

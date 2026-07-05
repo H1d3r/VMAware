@@ -977,60 +977,6 @@ public:
             );
         }
 
-        static bool is_amd_A_series() {
-            if (!cpu::is_amd()) {
-                return false;
-            }
-
-            const model_struct model = get_model();
-            const char* s = model.string.c_str();
-
-            for (; *s; ++s) {
-                if ((*s | 0x20) != 'a') {
-                    continue;
-                }
-
-                // check for "MD A" (case-insensitive match for "AMD A")
-                // We need 5 specific characters following the 'A': 'm', 'd', ' ', 'a', and a digit
-                if (!s[1] || !s[2] || !s[3] || !s[4] || !s[5]) {
-                    break;
-                }
-
-                if ((s[1] | 0x20) == 'm' &&
-                    (s[2] | 0x20) == 'd' &&
-                    s[3] == ' ' &&
-                    (s[4] | 0x20) == 'a') {
-
-                    // we found "AMD A" so now verify pattern [0-9]+-[0-9]+
-                    const char* num = s + 5;
-
-                    // must have at least one digit immediately after "AMD A"
-                    if (*num < '0' || *num > '9') {
-                        continue;
-                    }
-
-                    num++;
-                    while (*num >= '0' && *num <= '9') {
-                        num++;
-                    }
-
-    
-                    if (*num != '-') {
-                        continue;
-                    }
-
-                    num++;
-
-                    // Must have at least one digit after the hyphen
-                    if (*num >= '0' && *num <= '9') {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
-        }
-
         struct model_struct {
             bool found;
             bool is_xeon;
@@ -4120,16 +4066,13 @@ public:
             };
 
             // Check whether a hypervisor is nested within a Hyper-V partition
-            auto hyperv_nested = []() noexcept -> bool {
+            auto is_hyperv_nested = []() noexcept -> bool {
                 u32 eax = 0, ebx = 0, ecx = 0, edx = 0;
                 cpu::cpuid(eax, ebx, ecx, edx, 0x40000004);
 
                 const bool nested_partition_bit = (eax & (1u << 12)) != 0;
 
-                const bool has_nested_leaf_40000009 = cpu::is_leaf_supported(0x40000009);
-                const bool has_nested_leaf_4000000A = cpu::is_leaf_supported(0x4000000A);
-
-                return nested_partition_bit || has_nested_leaf_40000009 || has_nested_leaf_4000000A;
+                return nested_partition_bit;
             };
 
             hyperx_state state = HYPERV_UNKNOWN;
@@ -4206,7 +4149,7 @@ public:
                 } 
             }
 
-            if (hyperv_nested()) {
+            if (is_hyperv_nested()) {
                 debug("HYPER-X: Detected Hyper-V in nested state");
                 state = HYPERV_NESTED_VM;
             }
@@ -14400,25 +14343,11 @@ public:
             };
 
             const bool hv_present = (check_technique(VM::HYPERVISOR_BIT) || check_technique(VM::HYPERVISOR_STR));
-            const bool has_hyper_x = [check_technique]() {
-                if (check_technique(VM::HYPERVISOR_BIT) || check_technique(VM::HYPERVISOR_STR)) {
-                    return false;
-                }
-
-                const brand_enum bit_brand = memo::cache_table.at(VM::HYPERVISOR_BIT).has_value
-                    ? memo::cache_table.at(VM::HYPERVISOR_BIT).brand_name : brand_enum::NULL_BRAND;
-                const brand_enum str_brand = memo::cache_table.at(VM::HYPERVISOR_STR).has_value
-                    ? memo::cache_table.at(VM::HYPERVISOR_STR).brand_name : brand_enum::NULL_BRAND;
-
-                return (
-                    (bit_brand == brand_enum::HYPERV_ROOT) ||
-                    (str_brand == brand_enum::HYPERV_ROOT)
-                );
-            }();
+            const bool legit_hyperv_present = (util::hyper_x() == HYPERV_HOST);
 
             // rule 1: if VM::FIRMWARE is detected, so should VM::HYPERVISOR_BIT or VM::HYPERVISOR_STR
             const enum brand_enum firmware_brand = detected_brand(VM::FIRMWARE);
-            if (firmware_brand != brand_enum::NULL_BRAND && !hv_present && !has_hyper_x) {
+            if (firmware_brand != brand_enum::NULL_BRAND && !hv_present && !legit_hyperv_present) {
                 debug("is_hardened(): firmware and hypervisor bit/str are not detected together");
                 return true;
             }
@@ -14443,7 +14372,7 @@ public:
             }
 
             // rule 4: if VM::NVRAM is detected, so should VM::HYPERVISOR_BIT or VM::HYPERVISOR_STR
-            if (check_technique(VM::NVRAM) && !hv_present && !has_hyper_x) {
+            if (check_technique(VM::NVRAM) && !hv_present && !legit_hyperv_present) {
                 debug("is_hardened(): NVRAM and hypervisor bit/str are not detected together");
                 return true;
             }
@@ -14452,7 +14381,7 @@ public:
             if ((check_technique(VM::TRAP) || check_technique(VM::KVM_INTERCEPTION) || check_technique(VM::SVM_EXCEPTIONS)
                 || check_technique(VM::INTERRUPT_SHADOW) || check_technique(VM::EIP_OVERFLOW) || check_technique(VM::SINGLE_STEP)
                 || check_technique(VM::MSR) || check_technique(VM::UD) || check_technique(VM::HYPERV_NESTED)
-                ) && !hv_present && !has_hyper_x) {
+                ) && !hv_present) {
                 debug("is_hardened(): instruction-based techniques and hypervisor bit/str are not detected together");
                 return true;
             }
