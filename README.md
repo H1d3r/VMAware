@@ -306,7 +306,7 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 <br>
 
 ## Issues, discussions, pull requests, and inquiries 📬
-If you have any suggestions, ideas, or any sort of contribution, feel free to ask! I'll be more than happy to discuss either in the [issue](https://github.com/NotRequiem/VMAware/issues) or [discussion](https://github.com/NotRequiem/VMAware/discussions) sections. If you want to personally ask something in private, our discords are `kr.nl` and `shenzken`
+If you have any suggestions, ideas, or any sort of contribution, feel free to ask! I'll be more than happy to discuss either in the [issue](https://github.com/NotRequiem/VMAware/issues) or [discussion](https://github.com/NotRequiem/VMAware/discussions) sections. If you want to personally ask something in private, contact `shenzken` on Discord.
 
 For email inquiries: `vmaware.support@gmail.com`
 
@@ -322,7 +322,7 @@ And if you found this project useful, a star would be appreciated :)
 
 <br>
 
-- [Requiem](https://github.com/NotRequiem) (Maintainer and developer)
+- [Requiem](https://github.com/NotRequiem) (Main developer)
 - [kernelwernel](https://github.com/kernelwernel) (Former creator and maintainer of the project)
 - [Check Point Research](https://research.checkpoint.com/)
 - [Unprotect Project](https://unprotect.it/)
