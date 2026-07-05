@@ -839,6 +839,8 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
         std::cout.rdbuf(original_cout_buf);
     }
 
+    console_pause();
+
 #endif
 
 }

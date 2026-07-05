@@ -1,26 +1,26 @@
 #pragma once
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+
+#include "globals.hpp"
+#include "sha256.hpp"
+
+#include <windows.h>
 #include <iostream>
 #include <sstream>
+#include <winternl.h>
+#include <intrin.h>
+#include <mutex>
+#include <deque>
+#include <conio.h>
+#include <iomanip>
+#include <vector>
+#include <string>
+
+#pragma comment(lib, "ntdll.lib")
 
 #if (CLI_WINDOWS && !CLI_ARM)
-    #define WIN32_LEAN_AND_MEAN
-    #define NOMINMAX
-
-    #include "globals.hpp"
-    #include "sha256.hpp"
-
-    #include <windows.h>
-    #include <winternl.h>
-    #include <intrin.h>
-    #include <mutex>
-    #include <deque>
-    #include <conio.h>
-    #include <iomanip>
-    #include <vector>
-    #include <string>
-
-    #pragma comment(lib, "ntdll.lib")
 
     class win_ansi_enabler_t
     {
