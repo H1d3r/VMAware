@@ -14662,7 +14662,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::MAC_SYS, {100, VM::mac_sys}},
         #endif
 
-        {VM::TIMER, {95, VM::timer}},
+        {VM::TIMER, {100, VM::timer}},
         {VM::THREAD_MISMATCH, {50, VM::thread_mismatch}},
         {VM::VMID, {100, VM::vmid}},
         {VM::CPU_BRAND, {95, VM::cpu_brand}},
