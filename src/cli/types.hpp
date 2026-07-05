@@ -20,7 +20,9 @@ using i32 = std::int32_t;
     #define CLI_APPLE 0
 #endif
 
-#if defined(__aarch64__) || defined(_M_ARM64) || defined(__ARM_LINUX_COMPILER__)
+#if defined(__aarch64__) || defined(_M_ARM64) || \
+    defined(__arm__) || defined(_M_ARM) || \
+    defined(__ARM_LINUX_COMPILER__)
     #define CLI_ARM 1
 #else
     #define CLI_ARM 0

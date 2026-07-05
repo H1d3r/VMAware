@@ -3677,7 +3677,6 @@ public:
             return buffer;
         }
 
-
         // wrapper for std::make_unique because it's not available for C++11
         template<typename T, typename... Args>
         [[nodiscard]] static std::unique_ptr<T> make_unique(Args&&... args) {
@@ -3687,7 +3686,6 @@ public:
             return std::make_unique<T>(std::forward<Args>(args)...);
         #endif
         }
-
 
         [[nodiscard]] static bool is_admin() noexcept {
         #if (LINUX || APPLE)
@@ -3717,26 +3715,35 @@ public:
         #endif
         }
 
-
         [[nodiscard]] static bool find(const std::string& base_str, const char* keyword) noexcept {
             return (base_str.find(keyword) != std::string::npos);
         };
 
-        [[nodiscard]] static i32 popcount(u64 v) {
+        [[nodiscard]] static i32 popcount(u64 v) noexcept {
         #if (GCC) || (CLANG)
             return __builtin_popcountll(v);
         #elif (MSVC)
-        #if (x86_32)
-            return static_cast<int>(
-                __popcnt(static_cast<unsigned int>(v)) +
-                __popcnt(static_cast<unsigned int>(v >> 32))
-            );
+            #if (x86_32)
+                return static_cast<int>(
+                    __popcnt(static_cast<unsigned int>(v)) +
+                    __popcnt(static_cast<unsigned int>(v >> 32))
+                );
+            #elif (x86_64)
+                return static_cast<int>(__popcnt64(static_cast<unsigned long long>(v)));
+            #else
+                i32 c = 0;
+                while (v) {
+                    v &= v - 1;
+                    ++c;
+                }
+                return c;
+            #endif
         #else
-            return static_cast<int>(__popcnt64(static_cast<unsigned long long>(v)));
-        #endif
-        #else
-            int c = 0;
-            while (v) { c += static_cast<int>(v & 1ull); v >>= 1; }
+            i32 c = 0;
+            while (v) {
+                v &= v - 1;
+                ++c;
+            }
             return c;
         #endif
         };
