@@ -199,6 +199,17 @@
 
         LONG WINAPI exception_handler_logger(PEXCEPTION_POINTERS ep);
 
+    #else
+
+        #define PRINT_LINE(msg) std::cout << (msg) << "\n"
+
+        template<typename... Args>
+        void VMAWARE_CLI_DEBUG(Args&&... args) {
+            std::ostringstream oss;
+            int dummy[] = { 0, ((void)(oss << std::forward<Args>(args)), 0)... };
+            (void)dummy;
+            std::cout << "[DEBUG] " << oss.str() << "\n";
+        }
     #endif
 
 #else

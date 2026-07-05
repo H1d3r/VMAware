@@ -10253,8 +10253,8 @@ public:
         // enumerate all devices
         const HDEVINFO handle_dev_info = SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
         if (handle_dev_info == INVALID_HANDLE_VALUE) {
-            debug("ACPI_SIGNATURE: No display device detected");
-            return true;
+            debug("ACPI_SIGNATURE: SetupDiGetClassDevsW returned false");
+            return false;
         }
 
         SP_DEVINFO_DATA dev_info;
@@ -10274,7 +10274,8 @@ public:
         auto has_excluded_token = [&](const wchar_t* s) noexcept -> bool {
             if (!s || !*s) return false;
             for (const wchar_t* tok : excluded_tokens) {
-                if (wcsstr(s, tok) != nullptr) return true;
+                if (wcsstr(s, tok) != nullptr) 
+                    return true;
             }
             return false;
         };
@@ -10294,20 +10295,13 @@ public:
             // query required size (bytes)
             SetupDiGetDevicePropertyW(handle_dev_info, &dev_info, &key, &prop_type, nullptr, 0, &required_size, 0);
             if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || required_size == 0) {
-                if (GetLastError() == ERROR_NOT_FOUND) {
-                    debug("ACPI_SIGNATURE: No dedicated display/GPU detected");
-                    continue;
-                }
-                else {
-                    continue;
-                }
+                continue;             
             }
 
             // fetch buffer (multi-sz)
             std::vector<BYTE> buffer(required_size + (sizeof(wchar_t) * 2), 0);
             if (!SetupDiGetDevicePropertyW(handle_dev_info, &dev_info, &key, &prop_type,
-                buffer.data(), required_size, &required_size, 0))
-            {
+                buffer.data(), required_size, &required_size, 0)) {
                 continue;
             }
 
@@ -10348,11 +10342,12 @@ public:
                     // after "#ACPI(S" we expect two hex chars
                     const wchar_t* hexpos = found + wcslen(acpi_prefix); // first hex char
                     if (hexpos && hexpos[0] && hexpos[1]) {
-                        wchar_t b = hexpos[0];
-                        wchar_t s = hexpos[1];
+                        const wchar_t b = hexpos[0];
+                        const wchar_t s = hexpos[1];
                         if (is_hex(b) && is_hex(s)) {
                             const wchar_t after = hexpos[2]; // may be '_' or ')'
                             if (after == L'_' || after == L')') {
+                                debug("ACPI_SIGNATURE: #ACPI(S QEMU pattern detected");
                                 SetupDiDestroyDeviceInfoList(handle_dev_info);
                                 return core::add(brand_enum::QEMU);
                             }
@@ -10369,6 +10364,7 @@ public:
                     const wchar_t* start = found + wcslen(acpi_paren); // char after '('
                     if (start && start[0] && start[1] && start[2]) {
                         if (start[0] == L'S' && is_hex(start[1]) && is_hex(start[2])) {
+                            debug("ACPI_SIGNATURE: ACPI( QEMU pattern detected");
                             SetupDiDestroyDeviceInfoList(handle_dev_info);
                             return core::add(brand_enum::QEMU);
                         }
@@ -10387,6 +10383,7 @@ public:
 
                 for (const wchar_t* sig : vm_signatures) {
                     if (wcsstr(p, sig) != nullptr) {
+                        debug("ACPI_SIGNATURE: Detected Hyper-V signatures");
                         SetupDiDestroyDeviceInfoList(handle_dev_info);
                         return core::add(brand_enum::HYPERV);
                     }
