@@ -4,7 +4,7 @@
  * ██║   ██║██╔████╔██║███████║██║ █╗ ██║███████║██████╔╝█████╗
  * ╚██╗ ██╔╝██║╚██╔╝██║██╔══██║██║███╗██║██╔══██║██╔══██╗██╔══╝
  *  ╚████╔╝ ██║ ╚═╝ ██║██║  ██║╚███╔███╔╝██║  ██║██║  ██║███████╗
- *   ╚═══╝  ╚═╝     ╚═╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝ Experimental post-2.7.0 (July 2026)
+ *   ╚═══╝  ╚═╝     ╚═╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝ 2.8.0 (July 2026)
  *
  *  C++ VM detection library
  *
@@ -699,7 +699,7 @@ public:
     static std::atomic<u16> technique_count; // get total number of techniques
 
     static std::vector<enum_flags> disabled_techniques;
-    static constexpr std::array<enum_flags, 1> experimental_techniques{ { TIMER } };
+    static constexpr std::array<enum_flags, 1> experimental_techniques{ { TPM } };
 
 #if (WINDOWS)
     using brand_score_t = i32;
@@ -723,8 +723,8 @@ public:
     // specifically for util::hyper_x() and memo::hyperv
     enum hyperx_state : u8 {
         HYPERV_UNKNOWN = 0,
+        HYPERV_HOST,
         HYPERV_REAL_VM,
-        HYPERV_ARTIFACT_VM,
         HYPERV_NESTED_VM,
         HYPERV_ENLIGHTENMENT,
         HYPERV_SPOOFED
@@ -1087,10 +1087,10 @@ public:
             const std::string brand_str = cpu_manufacturer(p_leaf);
 
             if (brand_str == "Microsoft Hv") {
-                if (util::hyper_x() == HYPERV_ARTIFACT_VM) {
+                if (util::hyper_x() == HYPERV_HOST) {
                     return false;
                 }
-                return core::add(brand_enum::HYPERV, brand_enum::VPC);
+                return core::add(brand_enum::HYPERV);
             }
 
             if (util::find(brand_str, "KVM")) {
@@ -4072,7 +4072,7 @@ public:
          *       This can lead to false conclusions, where the system might mistakenly be identified as running in a Hyper-V VM, when in reality, it's simply the host system with Hyper-V features active.
          *       This check aims to distinguish between these two cases by identifying specific CPU flags and hypervisor-related artifacts that are indicative of a Hyper-V VM rather than a host system with Hyper-V enabled.
          * @returns hyperx_state enum indicating the detected state:
-         *          - HYPERV_ARTIFACT_VM for host with Hyper-V enabled
+         *          - HYPERV_HOST for host with Hyper-V enabled
          *          - HYPERV_REAL_VM for real Hyper-V VM
          *          - HYPERV_ENLIGHTENMENT for QEMU with Hyper-V enlightenments
          *          - HYPERV_NESTED_VM for a hypervisor nested within a Hyper-V partition
@@ -4197,7 +4197,7 @@ public:
                     if (is_hyper_v_host) {
                         debug("HYPER-X: Detected Hyper-V host machine");
                         core::add(brand_enum::HYPERV_ROOT);
-                        state = HYPERV_ARTIFACT_VM;
+                        state = HYPERV_HOST;
                     }
                     else {
                         debug("HYPER-X: Detected hypervisor trying to spoof itself as Hyper-V");
@@ -5028,7 +5028,7 @@ public:
                 }
             };
 
-            // same as above, but for 3
+            // merge 3 brands into one
             auto triple_merge = [&](const enum brand_enum a, const enum brand_enum b, const enum brand_enum c, const enum brand_enum result) noexcept -> void {
                 const bool a_hit = brand_hits.test(static_cast<u8>(a));
                 const bool b_hit = brand_hits.test(static_cast<u8>(b));
@@ -5351,7 +5351,7 @@ public:
 
         if (ecx & HYPERVISOR_MASK) {
             // if hypervisor bit is enabled, but we're in a root partition, prevent it from flagging
-            if (util::hyper_x() == HYPERV_ARTIFACT_VM) {
+            if (util::hyper_x() == HYPERV_HOST) {
                 return false;
             }
 
@@ -5359,7 +5359,7 @@ public:
         }
 
         // if hypervisor bit is disabled, but vmaware detects hyper-v signals, we're in an impossible situation (patching)
-        if (util::hyper_x() == HYPERV_ARTIFACT_VM) {
+        if (util::hyper_x() == HYPERV_HOST) {
             return true;
         }
 
@@ -5377,7 +5377,7 @@ public:
     #if (!x86)
         return false;
     #else
-        if (util::hyper_x() == HYPERV_ARTIFACT_VM) {
+        if (util::hyper_x() == HYPERV_HOST) {
             return false;
         }
 
@@ -10026,7 +10026,7 @@ public:
      */
     [[nodiscard]] static bool hypervisor_query() {
     #if (x86_64)
-        if (util::hyper_x() == HYPERV_ARTIFACT_VM) {
+        if (util::hyper_x() == HYPERV_HOST) {
             return false;
         }
 
@@ -10610,7 +10610,7 @@ public:
                 const u64 status = info->ContextRecord->Dr6;
 
                 if ((status & required_bits) != required_bits) {
-                    if (util::hyper_x() != HYPERV_ARTIFACT_VM) // detects type 1 Hyper-V too, which we consider legitimate
+                    if (util::hyper_x() != HYPERV_HOST) // detects type 1 Hyper-V too, which we consider legitimate
                         *ctx->hypervisor_caught = true;
                 }
 
@@ -10729,7 +10729,7 @@ public:
      * @implements VM::INTERRUPT_SHADOW
      */
     [[nodiscard]] static bool interrupt_shadow() {
-        if (util::hyper_x() == HYPERV_ARTIFACT_VM) {
+        if (util::hyper_x() == HYPERV_HOST) {
                    return false;
         }
         volatile ULONG_PTR trap_ip = 0;
@@ -12920,7 +12920,7 @@ public:
             return false;
         }
 
-        if (util::hyper_x() == HYPERV_ARTIFACT_VM) {
+        if (util::hyper_x() == HYPERV_HOST) {
             return false;
         }
 
@@ -13056,11 +13056,7 @@ public:
      * @implements VM::HYPERV_NESTED
      */
     [[nodiscard]] static bool hyperv_nested() {
-    #if (x86)
         return util::hyper_x() == HYPERV_NESTED_VM;
-    #else
-        return false;
-    #endif
     }
 
 
@@ -13163,7 +13159,7 @@ public:
 
                 size_t local_offset = 12;
 
-                // Skip digests based on algo ID boundaries
+                // skip digests based on algo ID boundaries
                 bool parse_error = false;
                 for (u32 i = 0; i < digestCount; ++i) {
                     if (total_size - (current_offset + local_offset) < 2) {
@@ -13782,7 +13778,7 @@ public:
         }
 
         throw_error("Flag is not known or not implemented");
-        return false; // useless but whatever
+        return false; // useless but avoids compiler warnings
     }
 
 

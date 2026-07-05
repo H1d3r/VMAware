@@ -51,7 +51,7 @@
     #endif
 #endif
 
-constexpr const char* ver = "2.7.0";
+constexpr const char* ver = "2.8.0";
 constexpr const char* date = "July 2026";
 
 [[noreturn]] static void help() {
