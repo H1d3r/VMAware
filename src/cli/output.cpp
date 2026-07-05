@@ -74,7 +74,6 @@ bool is_admin() {
         CloseHandle(hToken);
     }
     return is_admin;
-#endif
 }
 
 #if (CLI_LINUX)

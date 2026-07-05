@@ -1,6 +1,6 @@
 #include "types.hpp"
 
-#if (CLI_WINDOWS)
+#if (CLI_WINDOWS && !CLI_ARM)
 #include "globals.hpp"
 #include "sha256.hpp"
 #include "windows_tui.hpp"
