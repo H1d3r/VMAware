@@ -262,28 +262,32 @@ jobs:
   windows-arm-compilation:
     runs-on: windows-11-arm
     timeout-minutes: 10
+
     strategy:
       fail-fast: true
       matrix:
         include:
           - config: arm64-debug
-            arch: ARM64
-            sdk: "10.0"
+            platform: ARM64
+            build_config: Debug
             debug_output: ON
             artifact: vmaware-arm64_debug.exe
+
           - config: arm64-release
-            arch: ARM64
-            sdk: "10.0"
+            platform: ARM64
+            build_config: Release
             debug_output: OFF
             artifact: vmaware-arm64_release.exe
+
           - config: arm32-debug
-            arch: ARM
-            sdk: "10.0.22621.0"
+            platform: ARM,version=10.0.22621.0
+            build_config: Debug
             debug_output: ON
             artifact: vmaware-arm32_debug.exe
+
           - config: arm32-release
-            arch: ARM
-            sdk: "10.0.22621.0"
+            platform: ARM,version=10.0.22621.0
+            build_config: Release
             debug_output: OFF
             artifact: vmaware-arm32_release.exe
 
@@ -294,12 +298,28 @@ jobs:
         run: >
           cmake -B build
           -G "Visual Studio 17 2022"
-          -A ${{ matrix.arch }}
-          -DCMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION=${{ matrix.sdk }}
+          -A "${{ matrix.platform }}"
           -DDEBUG_OUTPUT=${{ matrix.debug_output }}
 
       - name: Build (${{ matrix.config }})
-        run: cmake --build build --config Release
+        run: cmake --build build --config ${{ matrix.build_config }}
+
+      - name: Rename binary with commit info
+        shell: pwsh
+        run: |
+          $shortSha = "${{ github.sha }}".Substring(0,12)
+          $run = "${{ github.run_number }}"
+          Add-Content $env:GITHUB_ENV "SHORT_SHA=$shortSha"
+
+          $source = "build\${{ matrix.build_config }}\vmaware.exe"
+          $target = "vmaware_${run}_${shortSha}.exe"
+
+          Rename-Item $source $target
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: vmaware_${{ github.run_number }}_${{ env.SHORT_SHA }}.exe
 
   windows-cpp-standard:
     runs-on: windows-2022
