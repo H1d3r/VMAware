@@ -397,6 +397,8 @@
 
     #pragma comment(lib, "setupapi.lib")
     #pragma comment(lib, "powrprof.lib")
+    #pragma comment(lib, "advapi32.lib")
+    #pragma comment(lib, "gdi32.lib")
 #elif (LINUX)
     #if (x86)
         #include <cpuid.h>
@@ -10313,7 +10315,7 @@ public:
             static const wchar_t acpi_prefix[] = L"#ACPI(S";
             static const wchar_t acpi_paren[] = L"ACPI(";
 
-            // First pass: QEMU-style "#ACPI(Sxx...)" and generic "ACPI(Sxx)"
+            // QEMU-style "#ACPI(Sxx...)" and generic "ACPI(Sxx)"
             for (const wchar_t* p = ptr; p < buf_end && *p; p += (wcslen(p) + 1)) {
                 if (wcsstr(p, L"ACPI(DRAC)")) {
                     debug("ACPI_SIGNATURE: QEMU virtual DRAM Controller (DRAC) ACPI node detected");
@@ -10355,25 +10357,9 @@ public:
                     }
                     search = found + 1;
                 }
-
-                // search for "ACPI(" then check for "S" + two hex digits
-                search = p;
-                while (true) {
-                    const wchar_t* found = wcsstr(search, acpi_paren);
-                    if (!found) break;
-                    const wchar_t* start = found + wcslen(acpi_paren); // char after '('
-                    if (start && start[0] && start[1] && start[2]) {
-                        if (start[0] == L'S' && is_hex(start[1]) && is_hex(start[2])) {
-                            debug("ACPI_SIGNATURE: ACPI( QEMU pattern detected");
-                            SetupDiDestroyDeviceInfoList(handle_dev_info);
-                            return core::add(brand_enum::QEMU);
-                        }
-                    }
-                    search = found + 1;
-                }
             }
 
-            // Important to run Hyper-V checks later because of is_hardened() logic
+            // important to run Hyper-V checks later because of is_hardened() logic
             static constexpr const wchar_t* vm_signatures[] = {
                 L"#ACPI(VMOD)", L"#ACPI(VMBS)", L"#VMBUS(", L"#VPCI("
             };
