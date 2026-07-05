@@ -745,32 +745,29 @@ public:
         };
 
         static void cpuid_count(unsigned leaf, unsigned subleaf, unsigned* a, unsigned* b, unsigned* c, unsigned* d) {
-        #if (MSVC)
-            int regs[4];
-            __cpuidex(regs, static_cast<int>(leaf), static_cast<int>(subleaf));
-            *a = static_cast<unsigned int>(regs[0]);
-            *b = static_cast<unsigned int>(regs[1]);
-            *c = static_cast<unsigned int>(regs[2]);
-            *d = static_cast<unsigned int>(regs[3]);
-        #elif (x86)
-            __get_cpuid_count(leaf, subleaf, a, b, c, d);
-        #else
-            VMAWARE_UNUSED(leaf); 
-            VMAWARE_UNUSED(subleaf); 
-            VMAWARE_UNUSED(a); 
-            VMAWARE_UNUSED(b); 
-            VMAWARE_UNUSED(c); 
-            VMAWARE_UNUSED(d);
+        #if (x86)
+            #if (MSVC)
+                int regs[4];
+                __cpuidex(regs, static_cast<int>(leaf), static_cast<int>(subleaf));
+                *a = static_cast<unsigned int>(regs[0]);
+                *b = static_cast<unsigned int>(regs[1]);
+                *c = static_cast<unsigned int>(regs[2]);
+                *d = static_cast<unsigned int>(regs[3]);
+            #elif (x86)
+                __get_cpuid_count(leaf, subleaf, a, b, c, d);
+            #else
+                VMAWARE_UNUSED(leaf); 
+                VMAWARE_UNUSED(subleaf); 
+                VMAWARE_UNUSED(a); 
+                VMAWARE_UNUSED(b); 
+                VMAWARE_UNUSED(c); 
+                VMAWARE_UNUSED(d);
+            #endif
         #endif
         }
 
         // cross-platform wrapper for linux and MSVC cpuid
-        static void cpuid
-        (
-            u32& a, u32& b, u32& c, u32& d,
-            const u32 a_leaf,
-            const u32 c_leaf = 0xFF  // dummy value if not set manually
-        ) {
+        static void cpuid(u32& a, u32& b, u32& c, u32& d, const u32 a_leaf, const u32 c_leaf = 0xFF) {
         #if (x86)
             // may be unmodified for older 32-bit processors, clearing just in case
             a = 0;
@@ -792,12 +789,7 @@ public:
         };
 
         // same as above but for array type parameters (MSVC specific)
-        static void cpuid
-        (
-            i32 x[4],
-            const u32 a_leaf,
-            const u32 c_leaf = 0xFF
-        ) {
+        static void cpuid(i32 x[4], const u32 a_leaf, const u32 c_leaf = 0xFF) {
         #if (x86)
             // may be unmodified for older 32-bit processors, clearing just in case
             x[0] = 0;
@@ -3495,30 +3487,32 @@ public:
 
         // we dont use cpu::cpuid on purpose
         static VMAWARE_FORCE_INLINE void vmexit() {
-        #if (GCC || CLANG)
-            u32 a = 0, c = 0, d = 0;
-            #if (x86_64)
-            __asm__ volatile (
-                "pushq %%rbx\n\t" // better than doing something like xchgq %%rbx, %%rdi\n\t to swap rbx to rdi avoiding GCC pushing/popping rbx on the stack
-                "cpuid\n\t"
-                "popq %%rbx\n\t"
-                : "+a"(a), "+c"(c), "=d"(d) // + mapping forces compiler to use registers, avoids stack spills
-                :
-                : "cc"
-                );
+        #if (x86)
+            #if (GCC || CLANG)
+                u32 a = 0, c = 0, d = 0;
+                #if (x86_64)
+                __asm__ volatile (
+                    "pushq %%rbx\n\t" // better than doing something like xchgq %%rbx, %%rdi\n\t to swap rbx to rdi avoiding GCC pushing/popping rbx on the stack
+                    "cpuid\n\t"
+                    "popq %%rbx\n\t"
+                    : "+a"(a), "+c"(c), "=d"(d) // + mapping forces compiler to use registers, avoids stack spills
+                    :
+                    : "cc"
+                    );
+                #else
+                __asm__ volatile (
+                    "pushl %%ebx\n\t"
+                    "cpuid\n\t"
+                    "popl %%ebx\n\t"
+                    : "+a"(a), "+c"(c), "=d"(d)
+                    :
+                    : "cc"
+                    );
+                #endif
             #else
-            __asm__ volatile (
-                "pushl %%ebx\n\t"
-                "cpuid\n\t"
-                "popl %%ebx\n\t"
-                : "+a"(a), "+c"(c), "=d"(d)
-                :
-                : "cc"
-                );
+                i32 dummy[4];
+                __cpuidex(dummy, 0x0, 0); // leaf 0 instead of invalid ones like 0x20000000 because it's the most stable, even if it's the fastest one (we target context switch latency only)
             #endif
-        #else
-            i32 dummy[4];
-            __cpuidex(dummy, 0x0, 0); // leaf 0 instead of invalid ones like 0x20000000 because it's the most stable, even if it's the fastest one (we target context switch latency only)
         #endif
         }
 

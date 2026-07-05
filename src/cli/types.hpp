@@ -20,7 +20,12 @@ using i32 = std::int32_t;
     #define CLI_APPLE 0
 #endif
 
-#if (defined(_MSC_VER) || defined(_WIN32) || defined(_WIN64) || defined(__MINGW32__))
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(__ARM_LINUX_COMPILER__)
+    #define CLI_ARM 1
+#else
+    #define CLI_ARM 0
+#endif
+#if (defined(_MSC_VER) || defined(_WIN32) || defined(_WIN64) || defined(__MINGW32__)) && (!CLI_ARM)
     #define CLI_WINDOWS 1
 #else
     #define CLI_WINDOWS 0
