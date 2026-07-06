@@ -5913,7 +5913,6 @@ public:
             timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
             timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
             constexpr int TRIALS = 3;
-            constexpr size_t MAX_ATTEMPTS = 30000;
 
             // cache and cpu scheduler warm-up won't affect anything in the measurement loop, so ramp up frequency/P-states to a high non-AVX Turbo/P-state without vmexits
             u64 val = static_cast<u64>(seed) ^ 0x5a5a5a5a5a5a5a5aULL;
@@ -5929,9 +5928,11 @@ public:
                 size_t valid = 0;
                 size_t invalid = 0;
 
+                const size_t local_max_attempts = BATCH_SIZE * 3;
+
                 // inside the timing windows, there must be zero memory output (no stack arrays can be written to), zero conditional branches and zero stack spilling (no register push/pops)
                 if (is_intel) {
-                    while (valid < BATCH_SIZE && invalid < MAX_ATTEMPTS) {
+                    while (valid < BATCH_SIZE && invalid < local_max_attempts) {
                         // cpuid and serialize/lfence interpolated so that any turbo boost, thermal throttling, speculation (for the loop overhead itself, not for the serializing instructions), etc affects samples equally
                         timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
@@ -5980,7 +5981,7 @@ public:
                     }
                 }
                 else {
-                    while (valid < BATCH_SIZE && invalid < MAX_ATTEMPTS) {
+                    while (valid < BATCH_SIZE && invalid < local_max_attempts) {
                         // cpuid and serialize/lfence interpolated so that any turbo boost, thermal throttling, speculation (for the loop overhead itself, not for the serializing instructions), etc affects samples equally
                         timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
@@ -6029,8 +6030,17 @@ public:
                     }
                 }
 
-                const timer::timer_tick_t cpuid_l = timer::calculate_latency(vm_samples); // check for lowest dense cluster with no interrupt spikes, filter noise we can't detect (SMIs, NMIs, etc)
-                const timer::timer_tick_t ref_l = timer::calculate_latency(ref_samples);
+                if (valid == 0) {
+                    continue;
+                }
+
+                // discard the unused default-initialized zero-elements
+                std::vector<timer::timer_tick_t> active_vm_samples(vm_samples.begin(), vm_samples.begin() + valid);
+                std::vector<timer::timer_tick_t> active_ref_samples(ref_samples.begin(), ref_samples.begin() + valid);
+
+                // check for lowest dense cluster with no interrupt spikes, filter noise we can't detect (SMIs, NMIs, etc)
+                const timer::timer_tick_t cpuid_l = timer::calculate_latency(active_vm_samples);
+                const timer::timer_tick_t ref_l = timer::calculate_latency(active_ref_samples);
 
                 // record the cleanest/lowest latency observed across the independent trials
                 if (cpuid_l < best_cpuid_l) best_cpuid_l = cpuid_l;
