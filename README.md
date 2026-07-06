@@ -365,6 +365,7 @@ And if you found this project useful, a star would be appreciated :)
 - [Juan Diego](https://github.com/w451)
 - [Wiisus](https://github.com/wiisus)
 - [Marcel](https://github.com/MarcelDev)
+- [Max Ufer](https://github.com/Manny684)
 
 <br>
 
