@@ -13185,7 +13185,7 @@ public:
                     }
                 }
 
-                if (pcrIndex == 0 && eventType == 0x80000001) {
+                if (pcrIndex == 0 && eventType == 0x80000008) {
                     if (eventSize >= 16) {
                         const u64 base_addr = read_u64(payload);
                         const u64 blob_len = read_u64(payload + 8);
