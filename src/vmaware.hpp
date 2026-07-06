@@ -5931,7 +5931,7 @@ public:
 
                 // inside the timing windows, there must be zero memory output (no stack arrays can be written to), zero conditional branches and zero stack spilling (no register push/pops)
                 if (is_intel) {
-                    while (valid < BATCH_SIZE && invalid >= MAX_ATTEMPTS) {
+                    while (valid < BATCH_SIZE && invalid < MAX_ATTEMPTS) {
                         // cpuid and serialize/lfence interpolated so that any turbo boost, thermal throttling, speculation (for the loop overhead itself, not for the serializing instructions), etc affects samples equally
                         timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
@@ -5980,7 +5980,7 @@ public:
                     }
                 }
                 else {
-                    while (valid < BATCH_SIZE && invalid >= MAX_ATTEMPTS) {
+                    while (valid < BATCH_SIZE && invalid < MAX_ATTEMPTS) {
                         // cpuid and serialize/lfence interpolated so that any turbo boost, thermal throttling, speculation (for the loop overhead itself, not for the serializing instructions), etc affects samples equally
                         timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
