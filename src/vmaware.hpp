@@ -12581,6 +12581,10 @@ public:
     #if (!x86)
         return false;
     #else
+        if (util::hyper_x() == HYPERV_HOST) {
+            return false;
+        }
+
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
@@ -12612,10 +12616,9 @@ public:
         const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
 
         constexpr unsigned char shellcode[] = {
-            0x9C,                                     // pushfq (x64) / pushfd (x86)
-            0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00, // or dword ptr [rsp/esp], 0x100 (sets TF)
-            0x9D,                                     // popfq (x64) / popfd (x86)
-            0x31, 0xC0,                               // xor eax, eax
+            0x9C,                                     // pushfq
+            0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00, // or dword ptr [rsp], 0x100 (sets TF)
+            0x9D,                                     // popfq
             0x0F, 0xA2,                               // cpuid
             0xC7, 0xB2,                               // db 0xC7, 0xB2 (invalid opcode)
             0xC3                                      // ret
@@ -12643,26 +12646,21 @@ public:
 
         nt_flush_instruction_cache(current_process, base_address, sizeof(shellcode));
 
-        bool is_vm = false;
+        bool is_vm = true;
         DWORD exc_code = 0;
 
         __try {
             using func_ptr = void(*)();
             const auto func = reinterpret_cast<func_ptr>(base_address);
             func();
-
-            is_vm = true;
+            // if the hypervisor completely swallows all exceptions, is_vm still remains true
         }
         __except (exc_code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+            // if the exception doesnt reach this block, hypervisor delayed the trap flag over cpuid, execution fell through into 
+            // the bad bytes (C7 B2) causing EXCEPTION_ILLEGAL_INSTRUCTION
             if (exc_code == EXCEPTION_SINGLE_STEP) {
-                // trap flag single-step exception triggered on CPUID
-                is_vm = false;
-            }
-            else {
-                // hypervisor delayed the trap flag over cpuid, execution fell through into 
-                // the bad bytes (C7 B2) causing EXCEPTION_ILLEGAL_INSTRUCTION
-                is_vm = true;
-            }
+                is_vm = false; // trap flag single-step exception triggered on CPUID
+            }   
         }
 
         SIZE_T free_size = 0; 
