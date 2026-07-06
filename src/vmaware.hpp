@@ -8021,6 +8021,23 @@ public:
                     add_device(static_cast<u16>(parsed_v & 0xFFFFu), static_cast<u32>(parsed_d));
                 }
             }
+
+            // PCI Subsystem: SUBSYS_ (8 hex digits: SSSSVVVV)
+            p = text;
+            while ((p = wcsstr(p, L"SUBSYS_"))) {
+                const wchar_t* s = p;
+                p += 7; // advance past "SUBSYS_" to prevent infinite loops
+
+                unsigned long parsed_sub = 0;
+                size_t c_sub = 0;
+
+                // Parse exactly 8 hex characters following "SUBSYS_"
+                if (parse_hex(s + 7, 8, 8, parsed_sub, c_sub) && c_sub == 8) {
+                    const u16 sub_vid = static_cast<u16>(parsed_sub & 0xFFFFu);         // Lower 16 bits (Subsystem Vendor ID)
+                    const u32 sub_did = static_cast<u32>((parsed_sub >> 16) & 0xFFFFu); // Upper 16 bits (Subsystem Device ID)
+                    add_device(sub_vid, sub_did);
+                }
+            }
         };
 
         // process the hardware ID on an instance key
