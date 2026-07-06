@@ -5323,10 +5323,10 @@ public:
         char out[(sizeof(i32) * 4) + 1] = { 0 }; // e*x size + number of e*x registers + null terminator
         cpu::cpuid(reinterpret_cast<int*>(out), cpu::leaf::hypervisor);
 
-        debug("HYPERVISOR_STR: \neax: ", static_cast<u32>(out[0]),
-            "\nebx: ", static_cast<u32>(out[1]),
-            "\necx: ", static_cast<u32>(out[2]),
-            "\nedx: ", static_cast<u32>(out[3])
+        debug("HYPERVISOR_STR: eax: ", static_cast<u32>(out[0]),
+            ", ebx: ", static_cast<u32>(out[1]),
+            ", ecx: ", static_cast<u32>(out[2]),
+            ", edx: ", static_cast<u32>(out[3])
         );
 
         return (strlen(out + 4) >= 4);
@@ -13117,7 +13117,7 @@ public:
             const u8* spec_id_payload = pBuffer + first_event_data_offset;
             const u32 spec_id_size = first_hdr.eventSize;
 
-            if (spec_id_size < 28 || std::memcmp(spec_id_payload, "Spec ID Event03", 15) != 0) {
+            if (spec_id_size < 28 || memcmp(spec_id_payload, "Spec ID Event03", 15) != 0) {
                 return false;
             }
 
