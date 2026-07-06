@@ -5883,9 +5883,14 @@ public:
             VirtualLock(vm_samples.data(), BATCH_SIZE * sizeof(timer::timer_tick_t)); // lock the memory for the samples to prevent page faults if permissions are enough
             VirtualLock(ref_samples.data(), BATCH_SIZE * sizeof(timer::timer_tick_t));
 
-            #define LFENCE_8 _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+            state.start_test.store(true, std::memory_order_release); // _mm_pause can be exited conditionally, spam hit L3
 
-            state.start_test.store(true, std::memory_order_release); // _mm_pause can be vm-exited conditionally, spam hit L3
+            // independent multi-trial state initialization
+            timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+            timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+            constexpr int TRIALS = 3;
+            constexpr size_t MAX_ATTEMPTS = 30000;
+
             // cache and cpu scheduler warm-up won't affect anything in the measurement loop, so ramp up frequency/P-states to a high non-AVX Turbo/P-state without vmexits
             u64 val = static_cast<u64>(seed) ^ 0x5a5a5a5a5a5a5a5aULL;
 
@@ -5896,17 +5901,13 @@ public:
             volatile u64 compiler_sink = val;
             VMAWARE_UNUSED(compiler_sink);
 
-            // independent multi-trial state initialization
-            timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
-            timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
-            constexpr int TRIALS = 3;
-
             for (int trial = 0; trial < TRIALS; ++trial) {
-                size_t valid = 0;  // end of setup phase
+                size_t valid = 0;
+                size_t invalid = 0;
 
                 // inside the timing windows, there must be zero memory output (no stack arrays can be written to), zero conditional branches and zero stack spilling (no register push/pops)
                 if (is_intel) {
-                    while (valid < BATCH_SIZE) {
+                    while (valid < BATCH_SIZE && invalid >= MAX_ATTEMPTS) {
                         // cpuid and serialize/lfence interpolated so that any turbo boost, thermal throttling, speculation (for the loop overhead itself, not for the serializing instructions), etc affects samples equally
                         timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
@@ -5946,13 +5947,16 @@ public:
                             ref_samples[valid] = r_post - r_pre;
                             valid++;
                         }
+                        else {
+                            invalid++;
+                        }
 
                         // burn cycles executing a random number of instructions in each loop iteration, so that the hypervisor doesn't know when to pause the counter thread
                         timer::burn_random_cycles(ct_seed, v_post, r_post);
                     }
                 }
                 else {
-                    while (valid < BATCH_SIZE) {
+                    while (valid < BATCH_SIZE && invalid >= MAX_ATTEMPTS) {
                         // cpuid and serialize/lfence interpolated so that any turbo boost, thermal throttling, speculation (for the loop overhead itself, not for the serializing instructions), etc affects samples equally
                         timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
@@ -5966,7 +5970,7 @@ public:
                         while (state.counter == sync);
                         r_pre = state.counter;
                         std::atomic_signal_fence(std::memory_order_seq_cst);
-                        LFENCE_8
+                        _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
                         std::atomic_signal_fence(std::memory_order_seq_cst);
                         r_post = state.counter;
 
@@ -5991,6 +5995,9 @@ public:
                             vm_samples[valid] = v_post - v_pre;
                             ref_samples[valid] = r_post - r_pre;
                             valid++;
+                        }
+                        else {
+                            invalid++;
                         }
 
                         // burn cycles executing a random number of instructions in each loop iteration, so that the hypervisor doesn't know when to pause the counter thread
