@@ -276,7 +276,7 @@ Et si ce projet vous a été utile, un star serait très apprécié :)
 <br>
 
 - [Requiem](https://github.com/NotRequiem) (Main developer)
-- [kernelwernel](https://github.com/kernelwernel) (Former creator and maintainer of the project)
+- [kernelwernel](https://github.com/kernelwernel) (Former creator and developer of the project)
 - [Check Point Research](https://research.checkpoint.com/)
 - [Unprotect Project](https://unprotect.it/)
 - [Al-Khaser](https://github.com/LordNoteworthy/al-khaser)

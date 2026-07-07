@@ -9,7 +9,7 @@
  *  C++ VM detection library
  *
  *  - Developed by: Requiem (https://github.com/NotRequiem)
- *  - Co-developed by: kernelwernel (https://github.com/kernelwernel)
+ *  - Former developer and creator: kernelwernel (https://github.com/kernelwernel)
  *  - Contributed by:
  *      - Alex (https://github.com/greenozon)
  *      - Marek Knápek (https://github.com/MarekKnapek)

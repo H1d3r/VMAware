@@ -282,7 +282,7 @@ VMAware 同样支持多种编程语言。若 C++ 不是您的首选语言，请�
 <br>
 
 - [Requiem](https://github.com/NotRequiem) (Main developer)
-- [kernelwernel](https://github.com/kernelwernel) (Former creator and maintainer of the project)
+- [kernelwernel](https://github.com/kernelwernel) (Former creator and developer of the project)
 - [Check Point Research](https://research.checkpoint.com/)
 - [Unprotect Project](https://unprotect.it/)
 - [Al-Khaser](https://github.com/LordNoteworthy/al-khaser)
