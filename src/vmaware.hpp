@@ -5812,9 +5812,9 @@ public:
         // calculation of minimum threshold
         bool is_intel = cpu::is_intel();
         double threshold = 2.5;
-        if (util::hyper_x() != HYPERV_UNKNOWN) {
+        if (util::hyper_x() == HYPERV_HOST) {
             if (is_intel) threshold = 17.5;
-            else          threshold = 35.0;
+            else          threshold = 45.0;
         }
 
         // shared state and results
@@ -5928,7 +5928,7 @@ public:
                 size_t valid = 0;
                 size_t invalid = 0;
 
-                const size_t local_max_attempts = BATCH_SIZE * 3;
+                const size_t local_max_attempts = BATCH_SIZE * TRIALS;
 
                 // inside the timing windows, there must be zero memory output (no stack arrays can be written to), zero conditional branches and zero stack spilling (no register push/pops)
                 if (is_intel) {
