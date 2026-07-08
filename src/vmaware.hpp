@@ -13260,7 +13260,7 @@ public:
             return false;
         };
 
-        const HMODULE hTbs = LoadLibraryA("tbs.dll");
+        const HMODULE hTbs = LoadLibraryW(L"tbs.dll");
         if (hTbs == nullptr) {
             return false;
         }
