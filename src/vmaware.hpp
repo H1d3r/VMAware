@@ -13042,10 +13042,7 @@ public:
                 continue;
             }
 
-            if (svmcpuid_visible) {
-                debug("SVM_EXCEPTIONS: Detected SVM hypervisor");
-            }
-            else {
+            if (!svmcpuid_visible) {
                 debug("SVM_EXCEPTIONS: Detected SVM hypervisor hiding CPU capabilities");
                 return core::add(brand_enum::NULL_BRAND, 150);
             }
