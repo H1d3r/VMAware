@@ -2337,10 +2337,10 @@ public:
                 { "i9-14900T", 32 },
                 { "i9-14901KE", 16 }
             };
-            out_ptr = db;
-            out_size = sizeof(db) / sizeof(cpu_entry);
 
             static_assert(sizeof(db) / sizeof(cpu_entry) > 0, "Intel Core database must contain at least one entry.");
+            out_ptr = db;
+            out_size = sizeof(db) / sizeof(cpu_entry);
         }
 
         static void get_intel_xeon_db(const cpu_entry*& out_ptr, size_t& out_size) {
@@ -2478,14 +2478,14 @@ public:
                 { "w9-3575X", 88 },
                 { "w9-3595X", 120 }
             };
-            out_ptr = db;
-            out_size = sizeof(db) / sizeof(cpu_entry);
 
             static_assert(sizeof(db) / sizeof(cpu_entry) > 0, "Intel Xeon database must contain at least one entry.");
+            out_ptr = db;
+            out_size = sizeof(db) / sizeof(cpu_entry);
         }
 
         static void get_intel_ultra_db(const cpu_entry*& db, size_t& size) {
-            static const cpu_entry intel_ultra[] = {
+            static const cpu_entry db[] = {
                 // Series 2 (Arrow Lake - Desktop/Mobile) - No HT on P-Cores
                 { "285K", 24 },
                 { "265K", 20 },
@@ -2514,10 +2514,10 @@ public:
                 { "135U", 14 },
                 { "125U", 14 },
             };
-            db = intel_ultra;
-            size = sizeof(intel_ultra) / sizeof(cpu_entry);
 
             static_assert(sizeof(db) / sizeof(cpu_entry) > 0, "Intel Ultra database must contain at least one entry.");
+            db = db;
+            size = sizeof(db) / sizeof(cpu_entry);
         }
 
         static void get_amd_ryzen_db(const cpu_entry*& out_ptr, size_t& out_size) {
@@ -3024,10 +3024,10 @@ public:
                 // Z-Series
                 { "z1", 12 }
             };
-            out_ptr = db;
-            out_size = sizeof(db) / sizeof(cpu_entry);
 
             static_assert(sizeof(db) / sizeof(cpu_entry) > 0, "AMD Ryzen database must contain at least one entry.");
+            out_ptr = db;
+            out_size = sizeof(db) / sizeof(cpu_entry);
         }
     };
 
