@@ -2484,7 +2484,7 @@ public:
             out_size = sizeof(db) / sizeof(cpu_entry);
         }
 
-        static void get_intel_ultra_db(const cpu_entry*& db, size_t& size) {
+        static void get_intel_ultra_db(const cpu_entry*& out_ptr, size_t& out_size) {
             static const cpu_entry db[] = {
                 // Series 2 (Arrow Lake - Desktop/Mobile) - No HT on P-Cores
                 { "285K", 24 },
@@ -2516,8 +2516,8 @@ public:
             };
 
             static_assert(sizeof(db) / sizeof(cpu_entry) > 0, "Intel Ultra database must contain at least one entry.");
-            db = db;
-            size = sizeof(db) / sizeof(cpu_entry);
+            out_ptr = db;
+            out_size = sizeof(db) / sizeof(cpu_entry);
         }
 
         static void get_amd_ryzen_db(const cpu_entry*& out_ptr, size_t& out_size) {
