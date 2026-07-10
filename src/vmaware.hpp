@@ -85,9 +85,6 @@
  *
  * ========================== CODE DOCUMENTATION =============================
  *
- * TL;DR: if you have the patience of an ADHD kid, head over here:
- * https://deepwiki.com/NotRequiem/VMAware
- * 
  *
  * Welcome! This is just a preliminary text to lay the context of how it works, 
  * how it's structured, and to guide anybody who's trying to understand the whole code. 
@@ -723,6 +720,26 @@ public:
     VM(const VM&) = delete;
     VM(VM&&) = delete;
 
+    // compile-time checks
+    static_assert(sizeof(u8) == 1, "Alias u8 must be exactly 1 byte.");
+    static_assert(sizeof(u16) == 2, "Alias u16 must be exactly 2 bytes.");
+    static_assert(sizeof(u32) == 4, "Alias u32 must be exactly 4 bytes.");
+    static_assert(sizeof(u64) == 8, "Alias u64 must be exactly 8 bytes.");
+    static_assert(sizeof(i8) == 1, "Alias i8 must be exactly 1 byte.");
+    static_assert(sizeof(i16) == 2, "Alias i16 must be exactly 2 bytes.");
+    static_assert(sizeof(i32) == 4, "Alias i32 must be exactly 4 bytes.");
+    static_assert(sizeof(i64) == 8, "Alias i64 must be exactly 8 bytes.");
+
+    static_assert(std::is_integral<brand_score_t>::value, "brand_score_t must map to an integral type.");
+
+    static_assert(enum_size == MULTIPLE, "enum_size must match the terminal element of the enum_flags.");
+    static_assert(MAX_BRANDS == static_cast<size_t>(brand_enum::NULL_BRAND) + 1, "MAX_BRANDS must account for all elements including NULL_BRAND.");
+    static_assert(enum_begin == 0, "enum_begin must start at 0.");
+    static_assert(enum_end == enum_size + 1, "enum_end boundary calculation mismatch.");
+    static_assert(technique_end == DEFAULT, "technique_end must match the transition point to settings flags.");
+    static_assert(settings_begin == DEFAULT, "settings_begin must align with the transition point.");
+    static_assert(settings_end == enum_end, "settings_end must align with the end of the flags.");
+
     // specifically for util::hyper_x() and memo::hyperv
     enum hyperx_state : u8 {
         HYPERV_UNKNOWN = 0,
@@ -1096,6 +1113,20 @@ public:
 
             return false;
         }
+
+        #if (x86 && (CLANG || GCC))
+            __attribute__((__target__("crc32")))
+        #endif
+        static u32 crc32(u32 crc, char data) {
+        #if (x86)
+            return _mm_crc32_u8(crc, static_cast<u8>(data));
+        #else
+            crc ^= static_cast<u8>(data);
+            for (int i = 0; i < 8; ++i)
+                crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
+            return crc;
+        #endif
+        }
   
         // to search in our databases, we want to precompute hashes at compile time for C++11 and later
         // so we need to match the hardware _mm_crc32_u8, it is based on CRC32-C (Castagnoli) polynomial
@@ -1150,12 +1181,10 @@ public:
             if (initialized) {
                 return result;
             }
-
-            {
-                i32 regs[4];
-                cpu::cpuid(regs, 1);
-                result.has_sse42 = (regs[2] & (1 << 20)) != 0;
-            }
+    
+            i32 regs[4];
+            cpu::cpuid(regs, 1);
+            result.has_sse42 = (regs[2] & (1 << 20)) != 0;           
 
             // to save a few cycles
             struct hasher {
@@ -1170,7 +1199,7 @@ public:
                 using hashfc = u32(*)(u32, char);
 
                 static hashfc get() {
-                    return result.has_sse42 ? util::crc32 : crc32_sw;
+                    return result.has_sse42 ? cpu::crc32 : crc32_sw;
                 }
             };
 
@@ -2310,6 +2339,8 @@ public:
             };
             out_ptr = db;
             out_size = sizeof(db) / sizeof(cpu_entry);
+
+            static_assert(sizeof(db) / sizeof(cpu_entry) > 0, "Intel Core database must contain at least one entry.");
         }
 
         static void get_intel_xeon_db(const cpu_entry*& out_ptr, size_t& out_size) {
@@ -2449,6 +2480,8 @@ public:
             };
             out_ptr = db;
             out_size = sizeof(db) / sizeof(cpu_entry);
+
+            static_assert(sizeof(db) / sizeof(cpu_entry) > 0, "Intel Xeon database must contain at least one entry.");
         }
 
         static void get_intel_ultra_db(const cpu_entry*& db, size_t& size) {
@@ -2483,6 +2516,8 @@ public:
             };
             db = intel_ultra;
             size = sizeof(intel_ultra) / sizeof(cpu_entry);
+
+            static_assert(sizeof(db) / sizeof(cpu_entry) > 0, "Intel Ultra database must contain at least one entry.");
         }
 
         static void get_amd_ryzen_db(const cpu_entry*& out_ptr, size_t& out_size) {
@@ -2991,6 +3026,8 @@ public:
             };
             out_ptr = db;
             out_size = sizeof(db) / sizeof(cpu_entry);
+
+            static_assert(sizeof(db) / sizeof(cpu_entry) > 0, "AMD Ryzen database must contain at least one entry.");
         }
     };
 
@@ -4187,232 +4224,6 @@ public:
         #endif
         }
 
-        // For strings shorter than 16-32 bytes, the overhead of setting up the _mm_crc32_u64 (or 32) loop, then checking length, handling the tail bytes, and finally handling alignment, 
-        // will always make it slower or equal to a simple unrolled u8 loop, and not every cpu model fits in u32/u64
-        #if (x86 && (CLANG || GCC))
-            __attribute__((__target__("crc32")))
-        #endif
-        static u32 crc32(u32 crc, char data) {
-        #if (x86)
-            return _mm_crc32_u8(crc, static_cast<u8>(data));
-        #else
-            // Fallback for non-x86: use software CRC32-C
-            crc ^= static_cast<u8>(data);
-            for (int i = 0; i < 8; ++i)
-                crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
-            return crc;
-        #endif
-        }
-
-        // to search in our databases, we want to precompute hashes at compile time for C++11 and later
-        // so we need to match the hardware _mm_crc32_u8, it is based on CRC32-C (Castagnoli) polynomial
-        struct constexpr_hash {
-            // it does 8 rounds of CRC32-C bit reflection recursively
-            static constexpr u32 crc32_bits(u32 crc, int bits) {
-                return (bits == 0) ? crc :
-                    crc32_bits((crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0), bits - 1);
-            }
-
-            // over string
-            static constexpr u32 crc32_str(const char* s, u32 crc) {
-                return (*s == '\0') ? crc :
-                    crc32_str(s + 1, crc32_bits(crc ^ static_cast<u8>(*s), 8));
-            }
-
-            static constexpr u32 get(const char* s) {
-                return crc32_str(s, 0);
-            }
-        };
-
-        // this forces the compiler to calculate the hash when initializing the array while staying C++11 compatible
-        struct thread_entry {
-            u32 hash;
-            u32 threads;
-            constexpr thread_entry(const char* m, u32 t) : hash(constexpr_hash::get(m)), threads(t) {}
-        };
-
-        enum class cpu_type : u8 {
-            INTEL_I,
-            INTEL_XEON,
-            AMD
-        };
-
-        // 4 arguments to stay compliant with x64 __fastcall (just in case)
-        [[nodiscard]] static bool verify_thread_count(const thread_entry* db, size_t db_size, size_t max_model_len, cpu_type type) {
-            // to save a few cycles
-            struct hasher {
-                static u32 crc32_sw(u32 crc, char data) {
-                    crc ^= static_cast<u8>(data);
-                    for (int i = 0; i < 8; ++i) {
-                        crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
-                    }
-                    return crc;
-                }
-
-                using hashfc = u32(*)(u32, char);
-
-                static hashfc get() {
-                    // yes, vmaware runs on dinosaur cpus without sse4.2 pretty often
-                    i32 regs[4];
-                    cpu::cpuid(regs, 1);
-                    const bool has_sse42 = (regs[2] & (1 << 20)) != 0;
-
-                    return has_sse42 ? util::crc32 : crc32_sw;
-                }
-            };
-
-            std::string model_string;
-            const char* debug_tag = ""; // NOLINT(clang-analyzer-deadcode.DeadStores)
-
-            if (type == cpu_type::AMD) {
-                if (!cpu::is_amd()) {
-                    return false;
-                }
-                model_string = cpu::get_brand();
-                debug_tag = "AMD_THREAD_MISMATCH";
-            }
-            else {
-                if (!cpu::is_intel()) {
-                    return false;
-                }
-
-                const cpu::model_struct model = cpu::get_model();
-
-                if (!model.found) {
-                    return false;
-                }
-
-                if (type == cpu_type::INTEL_I) {
-                    if (!model.is_i_series) {
-                        return false;
-                    }
-                    debug_tag = "INTEL_THREAD_MISMATCH";
-                }
-                else {
-                    if (!model.is_xeon) {
-                        return false;
-                    }
-                    debug_tag = "XEON_THREAD_MISMATCH";
-                }
-                model_string = model.string;
-            }
-
-            if (model_string.empty()) {
-                return false;
-            }
-
-            debug(debug_tag, ": CPU model = ", model_string);
-
-            const char* str = model_string.c_str();
-            u32 expected_threads = 0;
-            bool found = false;
-            size_t best_len = 0;
-
-            // manual collision fix for Z1 Extreme (16) vs Z1 (12)
-            // this is a special runtime check because "z1" is a substring of "z1 extreme" tokens
-            // and both might be hashed. VMAware should prioritize 'extreme' if found
-            u32 z_series_threads = 0;
-
-            const auto hash_func = hasher::get();
-
-            for (size_t i = 0; str[i] != '\0'; ) {
-                char const c = str[i];
-                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) {
-                    i++;
-                    continue;
-                }
-
-                u32 current_hash = 0;
-                size_t current_len = 0;
-                size_t j = i;
-
-                while (true) {
-                    char k = str[j];
-                    const bool is_valid = (
-                        (k >= '0' && k <= '9') ||
-                        (k >= 'A' && k <= 'Z') ||
-                        (k >= 'a' && k <= 'z') ||
-                        (k == '-') // models have hyphen
-                    );
-    
-                    if (!is_valid) {
-                        break;
-                    }
-
-                    if (current_len >= max_model_len) {
-                        while (str[j] != '\0' && str[j] != ' ') {
-                            j++; // fast forward to space/null
-                        }
-                        break;
-                    }
-
-                    /*
-                       models are usually 8 or more bytes long, i.e. i9-10900K
-                       so imagine we want to use u64, you hash the first 8 bytes i9-10900
-                       but then you are left with K. You have to handle the tail
-                       fetching 8 bytes would include the characters after the token, corrupting the hash
-                       so a byte-by-byte loop is the most optimal choice here
-                    */
-
-                    // convert to lowercase on-the-fly to match compile-time keys
-                    if (type == cpu_type::AMD && (k >= 'A' && k <= 'Z')) {
-                        k += 32;
-                    }
-
-                    // since this technique is cross-platform, we cannot use a standard C++ try-catch block to catch a missing CPU instruction
-                    // we could use preprocessor directives and add an exception handler (VEH/SEH or SIGHANDLER) but nah
-                    current_hash = hash_func(current_hash, k);
-                    current_len++;
-                    j++;
-
-                    // only verify match if the token has ended (next char is not alphanumeric)
-                    const char next = str[j];
-                    const bool next_is_alnum = (next >= '0' && next <= '9') ||
-                        (next >= 'A' && next <= 'Z') ||
-                        (next >= 'a' && next <= 'z');
-
-                    if (!next_is_alnum) {
-                        // Check specific Z1 Extreme token
-                        // Hash for "extreme" (CRC32-C) is 0x3D09D5B4
-                        if (type == cpu_type::AMD && current_hash == 0x3D09D5B4) { z_series_threads = 16; }
-
-                        // since it's a contiguous block of integers in .rodata/.rdata, this is extremely fast
-                        for (size_t idx = 0; idx < db_size; ++idx) {
-                            if (db[idx].hash != current_hash) {
-                                continue;
-                            }
-
-                            if (current_len > best_len) {
-                                best_len = current_len;
-                                expected_threads = db[idx].threads;
-                                found = true;
-                            }
-                            // since hashing implies uniqueness in this dataset, you might say we could break here,
-                            // but we continue to ensure we find the longest substring match if overlaps exist,
-                            // so like it finds both "i9-11900" and "i9-11900K" i.e.
-                        }
-                    }
-                }
-                i = j;
-            }
-
-            // Z1 Extreme fix
-            if (type == cpu_type::AMD && z_series_threads != 0 && expected_threads == 12) {
-                expected_threads = z_series_threads;
-            }
-
-            if (found) {
-                const u32 actual = memo::threadcount::fetch();
-                if (actual != expected_threads) {
-                    debug(debug_tag, ": Expected threads -> ", expected_threads);
-                    VMAWARE_UNUSED(debug_tag); // if compiled in release mode, silence the unused variable warning
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
     #if (WINDOWS)
         // retrieves the addresses of specified functions from a loaded module using the export directory, manual implementation of GetProcAddress
         static void get_function_address(const HMODULE hModule, const char* names[], void** functions, const size_t count) {
@@ -4836,7 +4647,7 @@ public:
         // helper function to invoke pointers without instrumentation
         NO_CF_GUARD static void execute_unchecked(void* pointer) {
             using func_t = void(*)();
-            reinterpret_cast<func_t>(pointer)();
+            reinterpret_cast<func_t>(pointer)(); // breakpoint hit
         }
     #endif
     };
@@ -5311,10 +5122,11 @@ public:
 
         cpu::cpuid(eax, ebx, ecx, edx, 1); 
         constexpr u32 HYPERVISOR_MASK = (1u << 31);
+        const hyperx_state state = util::hyper_x();
 
         if (ecx & HYPERVISOR_MASK) {
             // if hypervisor bit is enabled, but we're in a root partition, prevent it from flagging
-            if (util::hyper_x() == HYPERV_HOST) {
+            if (state == HYPERV_HOST) {
                 return false;
             }
 
@@ -5322,7 +5134,7 @@ public:
         }
 
         // if hypervisor bit is disabled, but vmaware detects hyper-v signals, we're in an impossible situation (patching)
-        if (util::hyper_x() == HYPERV_HOST) {
+        if (state == HYPERV_HOST) {
             return true;
         }
 
@@ -5819,6 +5631,9 @@ public:
 
         // shared state and results
         timer::cache_state state;
+        static_assert(alignof(timer::cache_state) >= 64, "timer::cache_state must be aligned to 64 bytes to prevent cache-line thrashing (false sharing).");
+        static_assert(std::is_standard_layout<timer::cache_state>::value, "timer::cache_state must be standard layout for predictable memory offsets.");
+
         bool hypervisor_detected = false;
 
         const u32 ct_seed = timer::get_ct_seed();
@@ -7578,11 +7393,9 @@ public:
             }
         };
 
-        static_assert(targets.size() == brands_map.size(),
-            "FIRMWARE: 'targets' and 'brands_map' must have the same size.");
-
-        static_assert(array_validator::verify_no_nulls(targets, 0),
-            "FIRMWARE: 'targets' array contains NULLs.");
+        static_assert(targets.size() == brands_map.size(), "FIRMWARE: 'targets' and 'brands_map' must have the same size.");
+        static_assert(array_validator::verify_no_nulls(targets, 0), "FIRMWARE: 'targets' array contains NULLs.");
+        static_assert(targets.size() == brands_map.size(), "FIRMWARE: The target string array size must match the brands mapping array size.");
 
         // Core scanning engine
         auto scan_buffer = [&](const u8* buffer, const size_t buffer_len) noexcept -> bool {
@@ -9254,6 +9067,8 @@ public:
             ULONG DataLength;
             BYTE Data[1];
         };
+
+        static_assert(offsetof(KEY_VALUE_PARTIAL_INFORMATION_LOCAL, Data) == 12, "Offset of Data member in KEY_VALUE_PARTIAL_INFORMATION_LOCAL must be exactly 12 bytes.");
 
         if (result_length < offsetof(KEY_VALUE_PARTIAL_INFORMATION_LOCAL, Data) + 1) {
             return false;
@@ -12747,6 +12562,9 @@ public:
         };
         #pragma pack(pop)
 
+        static_assert(sizeof(iretq_frame) == 16, "iretq_frame size must be exactly 16 bytes for proper hardware exception processing.");
+        static_assert(std::is_standard_layout<iretq_frame>::value, "iretq_frame must follow standard layout rules.");
+
         static bool hypervisor_detected = true;
         static uintptr_t g_recovery_pad = 0;
         static u64 g_saved_rsp = 0;
@@ -13090,6 +12908,10 @@ public:
             u16 digestSize;
         };
     #pragma pack(pop)
+
+        static_assert(sizeof(VMAWARE_TBS_CONTEXT_PARAMS) == 4, "VMAWARE_TBS_CONTEXT_PARAMS must be exactly 4 bytes.");
+        static_assert(sizeof(TCG_PCR_EVENT_HEADER) == 32, "TCG_PCR_EVENT_HEADER must be exactly 32 bytes.");
+        static_assert(sizeof(alg_size) == 4, "alg_size must be exactly 4 bytes.");
 
         using tbsi_get_tcg_log_ex_fn = TBS_RESULT(__stdcall*)(UINT32, PBYTE, PUINT32);
         using tbsi_context_create_fn = TBS_RESULT(__stdcall*)(const VMAWARE_TBS_CONTEXT_PARAMS*, TBS_HCONTEXT*);
@@ -14558,6 +14380,8 @@ std::array<VM::core::brand_entry, VM::MAX_BRANDS> VM::core::brand_scoreboard = [
     return arr;
 }();
 
+static_assert(VM::core::brand_scoreboard.size() == VM::MAX_BRANDS, "brand_scoreboard size must match MAX_BRANDS.");
+
 // initial definitions for cache items because C++ forbids in-class initializations
 VM::flagset VM::memo::conclusion::cached_flags{};
 VM::flagset VM::memo::single_brand::cached_flags{};
@@ -14735,5 +14559,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
     }
     return table;
 }();
+
+static_assert(VM::core::technique_table.size() == VM::enum_size + 1, "technique_table must map to every enum value.");
 
 #endif // include guard end

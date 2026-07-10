@@ -145,7 +145,9 @@ The module file and function version is located [here](auxiliary/vmaware_downloa
 ## Documentation and code overview 📒
 You can view the full docs [here](docs/documentation.md). All the details such as functions, techniques, settings, and examples are provided. Trust me, it's not too intimidating ;)
 
-If you want to learn about the architecture and design of the library, head over to https://deepwiki.com/NotRequiem/VMAware
+If you want to learn about the architecture and design of the library, head over to https://deepwiki.com/NotRequiem/VMAware.
+
+Information described in DeepWiki or other non official sources may not be accurate.
 
 <br>
 
