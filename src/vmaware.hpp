@@ -994,26 +994,31 @@ public:
             bool is_xeon;
             bool is_i_series;
             bool is_ryzen;
-            std::string string;
+            const char* string;
         };
 
         [[nodiscard]] static model_struct get_model() {
-            const std::string brand = get_brand();
+            const char* brand = get_brand();
 
             model_struct result { false, false, false, false, {} };
 
+            if (!brand) {
+                return result;
+            }
+
             if (cpu::is_intel()) {
                 // Ultra
-                if (brand.find("Ultra") != std::string::npos &&
-                    brand.find_first_of("0123456789") != std::string::npos) {
+                if (strstr(brand, "Ultra") &&
+                    strpbrk(brand, "0123456789")) {
                     result.found = true;
                     result.string = brand;
                     return result;
                 }
 
                 // i-series
-                if (brand.find('i') != std::string::npos && brand.find('-') != std::string::npos &&
-                    brand.find_first_of("0123456789") != std::string::npos) {
+                if (strchr(brand, 'i') &&
+                    strchr(brand, '-') &&
+                    strpbrk(brand, "0123456789")) {
                     result.found = true;
                     result.is_i_series = true;
                     result.string = brand;
@@ -1021,8 +1026,9 @@ public:
                 }
 
                 // Xeon
-                if (brand.find_first_of("DEW") != std::string::npos && brand.find('-') != std::string::npos &&
-                    brand.find_first_of("0123456789") != std::string::npos) {
+                if (strpbrk(brand, "DEW") &&
+                    strchr(brand, '-') &&
+                    strpbrk(brand, "0123456789")) {
                     result.found = true;
                     result.is_xeon = true;
                     result.string = brand;
@@ -1030,7 +1036,7 @@ public:
                 }
             }
             else if (cpu::is_amd()) {
-                if (brand.find("AMD Ryzen") != std::string::npos) {
+                if (strstr(brand, "AMD Ryzen")) {
                     result.found = true;
                     result.is_ryzen = true;
                     result.string = brand;
@@ -1114,56 +1120,14 @@ public:
             return false;
         }
 
-        #if (x86 && (CLANG || GCC))
-            __attribute__((__target__("crc32")))
-        #endif
-        static u32 crc32(u32 crc, char data) {
-        #if (x86)
-            return _mm_crc32_u8(crc, static_cast<u8>(data));
-        #else
-            crc ^= static_cast<u8>(data);
-            for (int i = 0; i < 8; ++i)
-                crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
-            return crc;
-        #endif
-        }
-  
-        // to search in our databases, we want to precompute hashes at compile time for C++11 and later
-        // so we need to match the hardware _mm_crc32_u8, it is based on CRC32-C (Castagnoli) polynomial
-        struct constexpr_hash {
-            // it does 8 rounds of CRC32-C bit reflection recursively
-            static constexpr u32 crc32_bits(u32 crc, int bits) {
-                return (bits == 0) ? crc :
-                    crc32_bits((crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0), bits - 1);
-            }
-
-            // over string
-            static constexpr u32 crc32_str(const char* s, u32 crc) {
-                return (*s == '\0') ? crc :
-                    crc32_str(s + 1, crc32_bits(crc ^ static_cast<u8>(*s), 8));
-            }
-
-            static constexpr u32 get(const char* s) {
-                return crc32_str(s, 0);
-            }
-        };
-
         // this forces the compiler to calculate the hash when initializing the array while staying C++11 compatible
         struct cpu_entry {
             u32 hash;
             u32 threads;
 
             constexpr cpu_entry(const char* m, u32 t)
-                : hash(constexpr_hash::get(m)), threads(t) {
+                : hash(util::hash::constexpr_hash::get(m)), threads(t) {
             }
-        };
-
-        struct cpu_cache {
-            u32 expected_threads = 0;
-            bool found = false;
-            bool has_sse42 = false;
-            const char* debug_tag = "";
-            std::string model_name;
         };
 
         enum class cpu_type : u8 {
@@ -1173,161 +1137,6 @@ public:
             INTEL_ULTRA,
             AMD
         };
-
-        static const cpu_cache& analyze_cpu() {
-            static cpu_cache result;
-            static bool initialized = false;
-
-            if (initialized) {
-                return result;
-            }
-    
-            i32 regs[4];
-            cpu::cpuid(regs, 1);
-            result.has_sse42 = (regs[2] & (1 << 20)) != 0;           
-
-            // to save a few cycles
-            struct hasher {
-                static u32 crc32_sw(u32 crc, char data) {
-                    crc ^= static_cast<u8>(data);
-                    for (int i = 0; i < 8; ++i) {
-                        crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
-                    }
-                    return crc;
-                }
-
-                using hashfc = u32(*)(u32, char);
-
-                static hashfc get() {
-                    return result.has_sse42 ? cpu::crc32 : crc32_sw;
-                }
-            };
-
-            const cpu_entry* db = nullptr;
-            size_t db_size = 0;
-            const size_t max_model_len = 32;
-            cpu_type type = cpu_type::UNKNOWN;
-
-            // Detection logic
-            if (is_amd()) {
-                type = cpu_type::AMD;
-                result.model_name = get_brand();
-                result.debug_tag = "AMD_THREAD_MISMATCH";
-                get_amd_ryzen_db(db, db_size);
-            }
-            else if (is_intel()) {
-                const model_struct model = get_model();
-                if (!model.found) { initialized = true; return result; }
-
-                result.model_name = model.string;
-
-                if (result.model_name.find("Ultra") != std::string::npos) {
-                    type = cpu_type::INTEL_ULTRA;
-                    result.debug_tag = "ULTRA_THREAD_MISMATCH";
-                    get_intel_ultra_db(db, db_size);
-                }
-                else if (model.is_i_series) {
-                    type = cpu_type::INTEL_I;
-                    result.debug_tag = "INTEL_THREAD_MISMATCH";
-                    get_intel_core_db(db, db_size);
-                }
-                else if (model.is_xeon) {
-                    type = cpu_type::INTEL_XEON;
-                    result.debug_tag = "XEON_THREAD_MISMATCH";
-                    get_intel_xeon_db(db, db_size);
-                }
-                else { 
-                    initialized = true; 
-                    return result; 
-                }
-                result.model_name = model.string;
-            }
-            else { 
-                initialized = true; 
-                return result; 
-            }
-
-            if (result.model_name.empty() || db == nullptr) { 
-                initialized = true; 
-                return result; 
-            }
-
-            const char* str = result.model_name.c_str();
-            size_t best_len = 0;
-            u32 z_series_threads = 0;
-
-            const auto hash_func = hasher::get();
-
-            for (size_t i = 0; str[i] != '\0'; ) {
-                const char c = str[i];
-                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) {
-                    i++;
-                    continue;
-                }
-
-                u32 current_hash = 0;
-                size_t current_len = 0;
-                size_t j = i;
-
-                while (true) {
-                    char k = str[j];
-                    const bool is_valid = (k >= '0' && k <= '9') ||
-                        (k >= 'A' && k <= 'Z') ||
-                        (k >= 'a' && k <= 'z') ||
-                        (k == '-');
-                    if (!is_valid) {
-                        break;
-                    }
-
-                    if (current_len >= max_model_len) {
-                        while (str[j] != '\0' && str[j] != ' ') {
-                            j++;
-                        }
-                        break;
-                    }
-
-                    // convert to lowercase on-the-fly to match compile-time keys
-                    if (type == cpu_type::AMD && (k >= 'A' && k <= 'Z')) {
-                        k += 32;
-                    }
-
-                    current_hash = hash_func(current_hash, k);
-                    current_len++;
-                    j++;
-
-                    const char next = str[j];
-                    const bool next_is_alnum = (next >= '0' && next <= '9') ||
-                        (next >= 'A' && next <= 'Z') ||
-                        (next >= 'a' && next <= 'z');
-
-                    if (!next_is_alnum) {
-                        // Check specific Z1 Extreme token
-                        if (type == cpu_type::AMD && current_hash == 0x3D09D5B4) { 
-                            z_series_threads = 16; 
-                        }
-
-                        for (size_t idx = 0; idx < db_size; ++idx) {
-                            if (db[idx].hash == current_hash) {
-                                if (current_len > best_len) {
-                                    best_len = current_len;
-                                    result.expected_threads = db[idx].threads;
-                                    result.found = true;
-                                }
-                            }
-                        }
-                    }
-                }
-                i = j;
-            }
-
-            // Z1 Extreme fix
-            if (type == cpu_type::AMD && z_series_threads != 0 && result.expected_threads == 12) {
-                result.expected_threads = z_series_threads;
-            }
-
-            initialized = true;
-            return result;
-        }
 
         static void get_intel_core_db(const cpu_entry*& out_ptr, size_t& out_size) {
             static const cpu_entry db[] = {
@@ -3057,35 +2866,22 @@ public:
 
         static std::array<cache_entry, enum_size + 1> cache_table;
 
-        static void cache_store(u16 flag, bool result, u8 points, const brand_enum brand = brand_enum::NULL_BRAND) {
+        static void cache_store(u16 flag, bool result, u8 points, const brand_enum brand = brand_enum::NULL_BRAND) noexcept {
             if (flag <= enum_size) {
-                cache_table.at(flag) = { result, points, true, brand };
+                cache_table[flag] = { result, points, true, brand };
             }
         }
 
-        static bool is_cached(u16 flag) {
-            if (flag <= enum_size) {
-                return cache_table.at(flag).has_value;
-            }
-            return false;
+        static bool is_cached(u16 flag) noexcept {
+            return (flag <= enum_size) && cache_table[flag].has_value;
         }
 
-        static data_t cache_fetch(u16 flag) {
-            if (flag <= enum_size && cache_table.at(flag).has_value) {
-                return { 
-                    /* result */ cache_table.at(flag).result, 
-                    /* points */ cache_table.at(flag).points, 
-                    /* cached */ true, 
-                    /* brand_name */ cache_table.at(flag).brand_name
-                };
+        static data_t cache_fetch(u16 flag) noexcept {
+            if (flag <= enum_size && cache_table[flag].has_value) {
+                const auto& entry = cache_table[flag];
+                return { entry.result, entry.points, true, entry.brand_name };
             }
-
-            return { 
-                /* result */ false, 
-                /* points */ 0, 
-                /* cached */ false, 
-                /* brand_name */ brand_enum::NULL_BRAND
-            };
+            return { false, 0, false, brand_enum::NULL_BRAND };
         }
 
         struct single_brand {
@@ -3802,62 +3598,81 @@ public:
                 return {};
             }
 
-            const std::wstring ws(wstr);
             std::string result;
-            result.reserve(ws.size());
-            for (const wchar_t wc : ws) {
-                result.push_back((static_cast<u32>(wc) < 128)
-                    ? static_cast<char>(wc)
+            const wchar_t* p = wstr;
+            while (*p) {
+                result.push_back((static_cast<u32>(*p) < 128)
+                    ? static_cast<char>(*p)
                     : '?');
+                ++p;
             }
             return result;
         }
 
-        // choose correct << or narrow for each type
-        static void write_arg_impl(std::ostream& os, const wchar_t* arg) {
-            os << narrow_wide(arg);
+        static void append_to_string(std::string& out, const wchar_t* arg) {
+            out += narrow_wide(arg);
         }
-        static void write_arg_impl(std::ostream& os, wchar_t* arg) {
-            os << narrow_wide(arg);
+        static void append_to_string(std::string& out, wchar_t* arg) {
+            out += narrow_wide(arg);
         }
-
-        static void write_arg_impl(std::ostream& os, const std::wstring& ws) {
-            os << narrow_wide(ws.c_str());
+        static void append_to_string(std::string& out, const std::wstring& ws) {
+            out.reserve(out.size() + ws.size());
+            for (wchar_t wc : ws) {
+                out.push_back((static_cast<u32>(wc) < 128)
+                    ? static_cast<char>(wc)
+                    : '?');
+            }
+        }
+        static void append_to_string(std::string& out, const std::string& s) {
+            out += s;
+        }
+        static void append_to_string(std::string& out, const char* s) {
+            if (s) {
+                out += s;
+            }
+        }
+        static void append_to_string(std::string& out, char c) {
+            out.push_back(c);
+        }
+        static void append_to_string(std::string& out, bool b) {
+            out += (b ? "true" : "false");
         }
 
         // everything else that is not std::string or wchar_t
         template <typename T>
         static typename std::enable_if<!std::is_convertible<T, std::wstring>::value
-            && !std::is_same<typename std::decay<T>::type, wchar_t*>::value,
+            && !std::is_same<typename std::decay<T>::type, wchar_t*>::value
+            && !std::is_same<typename std::decay<T>::type, const wchar_t*>::value
+            && !std::is_same<typename std::decay<T>::type, std::string>::value
+            && !std::is_same<typename std::decay<T>::type, const char*>::value
+            && !std::is_same<typename std::decay<T>::type, char*>::value,
             void>::type
-            write_arg_impl(std::ostream& os, T&& arg) {
-            os << std::forward<T>(arg);
+            append_to_string(std::string& out, T&& arg)
+        {
+            std::ostringstream oss;
+            oss << std::forward<T>(arg);
+            out += oss.str();
         }
 
         // variadic pack printer for C++11
-        static void print_to_stream(std::ostream& /*unused*/) noexcept {}
+        static void print_to_stream(std::string& /*unused*/) noexcept {}
 
         // forward the first, then expand the rest in an initializer list
         template <typename T, typename... Args>
-        static void print_to_stream(std::ostream& os,
-            T&& first,
-            Args&&... args) noexcept
-        {
-            write_arg_impl(os, std::forward<T>(first));
-            // trick to expand the pack
+        static void print_to_stream(std::string& out, T&& first, Args&&... args) noexcept {
+            append_to_string(out, std::forward<T>(first));
             using expander = int[];
             (void)expander {
-                0, ((void)write_arg_impl(os, std::forward<Args>(args)), 0)...
+                0, ((void)append_to_string(out, std::forward<Args>(args)), 0)...
             };
         }
 
         template <typename... Args>
-        static void debug_msg(Args&&... message) noexcept {
+        static void debug_msg(Args&&... message) {
             static std::unordered_set<std::string> printed_messages;
-
-            std::stringstream ss;
-            print_to_stream(ss, std::forward<Args>(message)...);
-            std::string msg_content = ss.str();
+            std::string msg_content;
+            msg_content.reserve(128);
+            print_to_stream(msg_content, std::forward<Args>(message)...);
 
             if (printed_messages.find(msg_content) == printed_messages.end()) {
             #if (LINUX || APPLE)
@@ -3865,9 +3680,6 @@ public:
                 constexpr const char* bold = "\033[1m";
                 constexpr const char* blue = "\x1B[38;2;00;59;193m";
                 constexpr const char* ansiexit = "\x1B[0m";
-
-                std::cerr.setf(std::ios::fixed, std::ios::floatfield);
-                std::cerr.setf(std::ios::showpoint);
 
                 std::cerr << black_bg
                     << bold << "["
@@ -3877,8 +3689,7 @@ public:
             #else
                 std::cerr << "[DEBUG] ";
             #endif
-                std::cerr << msg_content;
-                std::cerr << std::dec << "\n";
+                std::cerr << msg_content << '\n';
 
                 printed_messages.insert(std::move(msg_content));
             }
@@ -4625,30 +4436,141 @@ public:
 
         // indirect call without CFG checks
         #if (MSVC)
-            #define NO_CF_GUARD __declspec(guard(nocf)) __declspec(noinline)
+            #define VMAWARE_NO_CFG __declspec(guard(nocf)) __declspec(noinline)
         #elif (CLANG)
             #if __has_declspec_attribute(guard)
-                #define NO_CF_GUARD __declspec(guard(nocf)) __attribute__((noinline))
+                #define VMAWARE_NO_CFG __declspec(guard(nocf)) __attribute__((noinline))
             #elif __has_attribute(nocf_check)
-                #define NO_CF_GUARD __attribute__((nocf_check)) __attribute__((noinline))
+                #define VMAWARE_NO_CFG __attribute__((nocf_check)) __attribute__((noinline))
             #else
-                #define NO_CF_GUARD __attribute__((noinline))
+                #define VMAWARE_NO_CFG __attribute__((noinline))
             #endif
         #elif (GCC)
             #if defined(__has_attribute) && __has_attribute(nocf_check)
-                #define NO_CF_GUARD __attribute__((nocf_check)) __attribute__((noinline))
+                #define VMAWARE_NO_CFG __attribute__((nocf_check)) __attribute__((noinline))
             #else
-                #define NO_CF_GUARD __attribute__((noinline))
+                #define VMAWARE_NO_CFG __attribute__((noinline))
             #endif
             #else
-                #define NO_CF_GUARD
+                #define VMAWARE_NO_CFG
         #endif
 
         // helper function to invoke pointers without instrumentation
-        NO_CF_GUARD static void execute_unchecked(void* pointer) {
+        VMAWARE_NO_CFG static void execute_unchecked(void* pointer) {
             using func_t = void(*)();
             reinterpret_cast<func_t>(pointer)(); // breakpoint hit
         }
+
+        struct hash {
+            static bool has_sse42() noexcept {
+                static const bool supported = []() noexcept -> bool {
+                #if (x86)
+                    i32 regs[4];
+                    cpu::cpuid(regs, 1);
+                    return (regs[2] & (1 << 20)) != 0; // ECX Bit 20: SSE4.2
+                #else
+                    return false;
+                #endif
+                }();
+
+                return supported;
+            }
+
+            // software fallback CRC32-C (Castagnoli) of a block of memory
+            static u32 crc32c_sw(u32 crc, const void* data, size_t len) noexcept {
+                const u8* ptr = reinterpret_cast<const u8*>(data);
+                for (size_t i = 0; i < len; ++i) {
+                    crc ^= ptr[i];
+                    for (int j = 0; j < 8; ++j) {
+                        crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
+                    }
+                }
+                return crc;
+            }
+
+            // software fallback CRC32-C for a single byte
+            static u32 crc32c_byte_sw(u32 crc, char data) noexcept {
+                crc ^= static_cast<u8>(data);
+                for (int i = 0; i < 8; ++i) {
+                    crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
+                }
+                return crc;
+            }
+
+            // Native/SSE4.2 hardware assisted or software CRC32C of a single byte
+       #if (x86 && (GCC || CLANG))
+            __attribute__((__target__("sse4.2")))
+        #endif
+            static u32 crc32c_byte(u32 crc, char data) noexcept {
+                #if (x86)
+                if (has_sse42()) {
+                    return _mm_crc32_u8(crc, static_cast<u8>(data));
+                }
+                #endif
+                return crc32c_byte_sw(crc, data);
+            }
+
+        #if (x86 && (GCC || CLANG))
+            __attribute__((__target__("sse4.2")))
+        #endif
+            static u32 crc32c(u32 crc, const void* data, size_t len) noexcept {
+                if (!has_sse42()) {
+                    return crc32c_sw(crc, data, len);
+                }
+
+            #if (x86)
+                const u8* ptr = reinterpret_cast<const u8*>(data);
+                size_t i = 0;
+
+            #if (x86_64)
+                const size_t qwords = len >> 3;
+                const u64* qptr = reinterpret_cast<const u64*>(data);
+                u64 crc64 = crc;
+
+                for (; i < qwords; ++i) {
+                    crc64 = _mm_crc32_u64(crc64, qptr[i]);
+                }
+                crc = static_cast<u32>(crc64);
+                i <<= 3; // convert QWord count to bytes
+            #else
+                const size_t dwords = len >> 2;
+                const u32* dptr = reinterpret_cast<const u32*>(data);
+
+                for (; i < dwords; ++i) {
+                    crc = _mm_crc32_u32(crc, dptr[i]);
+                }
+                i <<= 2; // convert DWord count to bytes
+            #endif
+
+                // hash any remaining trailing bytes
+                for (; i < len; ++i) {
+                    crc = _mm_crc32_u8(crc, ptr[i]);
+                }
+
+                return crc;
+            #else
+                return crc32c_sw(crc, data, len);
+            #endif
+            }
+
+            struct constexpr_hash {
+                // 8 rounds of CRC32-C bit reflection recursively
+                static constexpr u32 crc32_bits(u32 crc, int bits) {
+                    return (bits == 0) ? crc :
+                        crc32_bits((crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0), bits - 1);
+                }
+
+                // over string
+                static constexpr u32 crc32_str(const char* s, u32 crc) {
+                    return (*s == '\0') ? crc :
+                        crc32_str(s + 1, crc32_bits(crc ^ static_cast<u8>(*s), 8));
+                }
+
+                static constexpr u32 get(const char* s) {
+                    return crc32_str(s, 0);
+                }
+            };
+        };
     #endif
     };
 
@@ -4885,7 +4807,7 @@ public:
                     const brand_element_t& b
                     ) {
                         return a.second > b.second; // .second is brand score
-                    });
+                });
             }
 
             memo::brand_list::store(active_brands, flags);
@@ -4970,11 +4892,19 @@ public:
 
             return "Invalid";
         }
+        
+        static std::string brand_multiple(const brand_list_t& list) {
+            std::string buffer = {};
+            buffer += brands::brand_enum_to_string(list[0].first);
 
-        static std::string fetch_brand_name(const brand_list_t& list, const size_t index) {
-            return brand_enum_to_string(list.at(index).first);
-        };
-    
+            for (size_t i = 1; i < list.size(); i++) {
+                buffer += " or ";
+                buffer += brands::brand_enum_to_string(list[i].first);
+            }
+
+            return buffer;
+        }
+
         static std::string brand_multiple(const flagset& flags = core::generate_default()) {
             if (memo::multi_brand::is_cached(flags)) {
                 return memo::multi_brand::fetch();
@@ -4986,17 +4916,10 @@ public:
             memo::multi_brand::store(buffer, flags);
             return buffer;
         }
-            
-        static std::string brand_multiple(const brand_list_t& list) {
-            std::string buffer = {};
-            buffer += brands::fetch_brand_name(list, 0);
 
-            for (size_t i = 1; i < list.size(); i++) {
-                buffer += " or "; 
-                buffer += brands::fetch_brand_name(list, i);
-            }
-
-            return buffer;
+        static enum brand_enum brand_single(const brand_list_t& list) {
+            const brand_element_t brand = list.front();
+            return brand.first;
         }
 
         static brand_enum brand_single(const flagset& flags = core::generate_default()) {
@@ -5010,11 +4933,6 @@ public:
             memo::single_brand::store(brand, flags);
 
             return brand;
-        }
-
-        static enum brand_enum brand_single(const brand_list_t& list) {
-            const brand_element_t brand = list.front();
-            return brand.first;
         }
     };
 
@@ -5206,17 +5124,17 @@ public:
             return false;
         }
 
-        const std::string brand = cpu::get_brand();
+        const char* brand = cpu::get_brand();
 
         if (intel) {
             // technique 1: not a valid brand 
-            if (brand == "              Intel(R) Pentium(R) 4 CPU        ") {
+            if (strcmp(brand, "              Intel(R) Pentium(R) 4 CPU        ") == 0) {
                 debug("BOCHS_CPU: technique 1 found");
                 return core::add(brand_enum::BOCHS);
             }
         } else if (amd) {
             // technique 2: "processor" should have a capital P
-            if (brand == "AMD Athlon(tm) processor") {
+            if (strcmp(brand, "AMD Athlon(tm) processor") == 0) {
                 debug("BOCHS_CPU: technique 2 found");
                 return core::add(brand_enum::BOCHS);
             }
@@ -5415,33 +5333,138 @@ public:
         #endif
         };
 
-        const auto& info = cpu::analyze_cpu();
         
-        if (info.found) {
-            debug(info.debug_tag, ": CPU model = ", info.model_name);
 
-        #if (WINDOWS)
+        constexpr size_t max_model_len = 32;
+        cpu::cpu_type type = cpu::cpu_type::UNKNOWN;
+        size_t db_size = 0;
+        const cpu::cpu_entry* db = nullptr;
+        static bool found = false;
+        static u32 expected_threads = 0;
+        static const char* model_name = nullptr;
+
+        if (cpu::is_amd()) {
+            type = cpu::cpu_type::AMD;
+            model_name = cpu::get_brand();
+            cpu::get_amd_ryzen_db(db, db_size);
+        }
+        else if (cpu::is_intel()) {
+            const cpu::model_struct model = cpu::get_model();
+            if (model.found) {
+                model_name = model.string;
+
+                if (strstr(model_name, "Ultra") != nullptr) {
+                    type = cpu::cpu_type::INTEL_ULTRA;
+                    cpu::get_intel_ultra_db(db, db_size);
+                }
+                else if (model.is_i_series) {
+                    type = cpu::cpu_type::INTEL_I;
+                    cpu::get_intel_core_db(db, db_size);
+                }
+                else if (model.is_xeon) {
+                    type = cpu::cpu_type::INTEL_XEON;
+                    cpu::get_intel_xeon_db(db, db_size);
+                }
+            }
+        }
+
+        if (model_name != nullptr && db != nullptr && model_name[0] != '\0') {
+            const char* str = model_name;
+            size_t best_len = 0;
+            u32 z_series_threads = 0;
+
+            for (size_t i = 0; str[i] != '\0'; ) {
+                const char c = str[i];
+                if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) {
+                    i++;
+                    continue;
+                }
+
+                u32 current_hash = 0;
+                size_t current_len = 0;
+                size_t j = i;
+
+                while (true) {
+                    char k = str[j];
+                    const bool is_valid = (k >= '0' && k <= '9') ||
+                        (k >= 'A' && k <= 'Z') ||
+                        (k >= 'a' && k <= 'z') ||
+                        (k == '-');
+                    if (!is_valid) {
+                        break;
+                    }
+
+                    if (current_len >= max_model_len) {
+                        while (str[j] != '\0' && str[j] != ' ') {
+                            j++;
+                        }
+                        break;
+                    }
+
+                    // convert to lowercase on-the-fly to match compile-time keys
+                    if (type == cpu::cpu_type::AMD && (k >= 'A' && k <= 'Z')) {
+                        k += 32;
+                    }
+
+                    // Delegate directly to static central util::hash
+                    current_hash = util::hash::crc32c_byte(current_hash, k);
+                    current_len++;
+                    j++;
+
+                    const char next = str[j];
+                    const bool next_is_alnum = (next >= '0' && next <= '9') ||
+                        (next >= 'A' && next <= 'Z') ||
+                        (next >= 'a' && next <= 'z');
+
+                    if (!next_is_alnum) {
+                        // Check specific Z1 Extreme token
+                        if (type == cpu::cpu_type::AMD && current_hash == 0x3D09D5B4) {
+                            z_series_threads = 16;
+                        }
+
+                        for (size_t idx = 0; idx < db_size; ++idx) {
+                            if (db[idx].hash == current_hash) {
+                                if (current_len > best_len) {
+                                    best_len = current_len;
+                                    expected_threads = db[idx].threads;
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                i = j;
+            }
+
+            // Z1 Extreme fix
+            if (type == cpu::cpu_type::AMD && z_series_threads != 0 && expected_threads == 12) {
+                expected_threads = z_series_threads;
+            }
+        }
+
+        if (found) {
+            debug("CPU model = ", model_name);
+
+        #if (WINDOWS && __VMAWARE_DEBUG__)
             const char* manufacturer = "";
             const char* model = "";
             util::get_manufacturer_model(&manufacturer, &model);
-            debug(info.debug_tag, ": {\"manufacturer\": \"", manufacturer,
+            debug("{\"manufacturer\": \"", manufacturer,
                 "\", \"model\": \"", model, "\"}");
         #endif
 
             const u32 actual = memo::threadcount::fetch();
 
-            if (actual != info.expected_threads) {
-                debug(info.debug_tag, ": Current threads -> ", actual);
+            if (actual != expected_threads) {
+                debug("Current threads -> ", actual);
                 const bool smt = is_smt_enabled();
 
                 if (smt) {
-                    debug(info.debug_tag, ": Expected ", info.expected_threads, " threads");
+                    debug("Expected ", expected_threads, " threads");
                     return true;
                 }
 
-                debug(info.debug_tag, ": Expected ", info.expected_threads,
-                    " threads, but found SMT disabled");
-                return false;
+                debug("Expected ", expected_threads, " threads, but found SMT disabled");
             }
         }
 
@@ -8217,65 +8240,22 @@ public:
             const u8* bmp = buffer.data();
         #endif
 
-        // struct + function to isolate SEH from the stack frame containing std::vector and use __target__
-        struct crc {
-        #if (GCC || CLANG)
-            __attribute__((__target__("sse4.2")))
-        #endif
-            static u32 compute(const u8* data, size_t len) {
-                // 8 byte chunks
-                u64 crcReg = 0xFFFFFFFFull;
-                const size_t qwords = len >> 3;
-                const auto* ptr = reinterpret_cast<const u64*>(data);
-
-                size_t i = 0;
-
-                const auto& info = cpu::analyze_cpu();
-
-                if (info.has_sse42)
-                {
-                    // unrolled loop
-                    for (; i + 3 < qwords; i += 4) {
-                        crcReg = _mm_crc32_u64(crcReg, ptr[i]);
-                        crcReg = _mm_crc32_u64(crcReg, ptr[i + 1]);
-                        crcReg = _mm_crc32_u64(crcReg, ptr[i + 2]);
-                        crcReg = _mm_crc32_u64(crcReg, ptr[i + 3]);
-                    }
-
-                    for (; i < qwords; ++i) {
-                        crcReg = _mm_crc32_u64(crcReg, ptr[i]);
-                    }
-
-                    u32 crc = static_cast<u32>(crcReg);
-                    const auto* tail = reinterpret_cast<const u8*>(ptr + qwords);
-
-                    for (size_t j = 0, r = len & 7; j < r; ++j) {
-                        crc = _mm_crc32_u8(crc, tail[j]);
-                    }
-                    crc ^= 0xFFFFFFFFu;
-                    return crc;
-                }
-
-                return 0;
-            }
-        };
-
-        const u32 hash = crc::compute(bmp, size);
+        const u32 hash = util::hash::crc32c(0xFFFFFFFFu, bmp, size) ^ 0xFFFFFFFFu;
 
         #if (WINDOWS)
             debug("BOOT_LOGO: size=", needed, ", flags=", info->flags, ", offset=", info->bitmap_offset, ", crc=0x", std::hex, hash);
         #else
             debug("BOOT_LOGO: size=", size, ", crc=0x", std::hex, hash);
         #endif
+
         switch (hash) {
             case 0x110350C5: return core::add(brand_enum::QEMU); // TianoCore EDK2
             case 0x87c39681: return core::add(brand_enum::HYPERV);
-            // case 0x9502cb33: return core::add(brand_enum::VBOX); // conflicts with some MSI logo images
             default:         return false;
         }
-        #else
+    #else
         return false;
-        #endif
+    #endif
     }
 
     
@@ -12220,7 +12200,7 @@ public:
         using execute_throws_t = bool(*)(void*);
         execute_throws_t execute_throws = [](void* pointer) -> bool {
             __try {
-                util::execute_unchecked(pointer); // breakpoint hit
+                util::execute_unchecked(pointer);
             }
             __except (EXCEPTION_EXECUTE_HANDLER) {
                 return true;
@@ -13181,7 +13161,7 @@ public:
             constexpr technique(u8 points, bool(*run)()) : points(points), run(run) {}
         };
 
-        struct custom_technique {
+        struct custom_technique { // for custom techniques the user can implement
             u8 points;
             u16 id;
             bool(*run)();
@@ -13244,12 +13224,12 @@ public:
             return true;
         }
 
-        // assert if the flag is enabled, far better expression than typing std::bitset member functions
+        // assert if the flag is disabled, far better expression than typing std::bitset member functions
         [[nodiscard]] static bool is_disabled(const flagset& flags, const u8 flag_bit) noexcept {
             return flag_bit >= flags.size() || !flags.test(flag_bit);
         }
 
-        // same as above but for checking enabled flags
+        // assert if the flag is enabled
         [[nodiscard]] static bool is_enabled(const flagset& flags, const u8 flag_bit) noexcept {
             return flag_bit < flags.size() && flags.test(flag_bit);
         }
@@ -13274,7 +13254,7 @@ public:
                     m.set(i);
                 }
                 return m;
-                }();
+            }();
             return mask;
         }
 
@@ -13297,12 +13277,7 @@ public:
                 brand_scoreboard[i].name = static_cast<brand_enum>(i);
             }
 
-            u16 threshold_points = threshold_score;
-
-            // set it to 300 if high threshold is enabled
-            if (core::is_enabled(flags, HIGH_THRESHOLD)) {
-                threshold_points = high_threshold_score;
-            }
+            const u16 threshold_points = core::is_enabled(flags, HIGH_THRESHOLD) ? high_threshold_score : threshold_score;
 
             const size_t tech_limit = technique_table.size();
             for (size_t i = technique_begin; i < technique_end; ++i) {
@@ -13352,7 +13327,7 @@ public:
                     detected_count_num++;
 
                     // retrieve the brand that was set during execution (if any)
-                    const enum brand_enum detected_brand = (last_detected_brand != brand_enum::NULL_BRAND) ? last_detected_brand : brand_enum::NULL_BRAND;
+                    const enum brand_enum detected_brand = last_detected_brand;
                     // store the current technique result to the cache
                     memo::cache_store(technique_macro, result, points_to_add, detected_brand);
                 }
@@ -13434,27 +13409,32 @@ public:
         };
 
         static void generate_default(flagset& flags) noexcept {
-            // set all bits to 1
-            flags.set();
+            static const flagset default_flags = []() {
+                flagset f;
+                f.set();
 
-            // disable all non-default techniques
-            for (const auto id : disabled_techniques) {
-                const auto idx = static_cast<size_t>(id);
-                if (idx < flags.size()) {
-                    flags.reset(idx);
+                // disable all disabled techniques
+                for (const auto id : disabled_techniques) {
+                    const auto idx = static_cast<size_t>(id);
+                    if (idx < f.size()) {
+                        f.reset(idx);
+                    }
                 }
-            }
 
-            // disable all the settings flags except for VM::DEFAULT
-            flags.reset(EXPERIMENTAL);
-            flags.reset(HIGH_THRESHOLD);
-            flags.reset(NULL_ARG);
-            flags.reset(DYNAMIC);
-            flags.reset(MULTIPLE);
-            flags.reset(ALL);
+                // disable all the settings flags except for VM::DEFAULT
+                f.reset(EXPERIMENTAL);
+                f.reset(HIGH_THRESHOLD);
+                f.reset(NULL_ARG);
+                f.reset(DYNAMIC);
+                f.reset(MULTIPLE);
+                f.reset(ALL);
+
+                return f;
+            }();
+
+            flags = default_flags;
         }
 
-        // this overload is mainly for default argument purposes
         static flagset generate_default() noexcept {
             flagset flags;
             generate_default(flags);
@@ -13587,12 +13567,16 @@ public:
         }
 
         auto throw_error = [&](const char* text) -> void {
-            std::stringstream ss;
-        #if (VMA_CPP >= 20 && !CLANG)
-            ss << ", error in " << loc.function_name() << " at " << loc.file_name() << ":" << loc.line() << ")";
+            std::string msg = text;
+        #if (SOURCE_LOCATION_SUPPORTED)
+            msg += ", error in ";
+            msg += loc.function_name();
+            msg += " at ";
+            msg += loc.file_name();
+            msg += ":" + std::to_string(loc.line());
         #endif
-            ss << ". Consult the documentation's flag handler for VM::check()";
-            throw std::invalid_argument(std::string(text) + ss.str());
+            msg += ". Consult the documentation's flag handler for VM::check()";
+            throw std::invalid_argument(msg);
         };
 
         if (flag_bit > enum_size) {
@@ -13713,7 +13697,7 @@ public:
         // this is added as a last ditch attempt to detect a VM, 
         // because if there are indications of hardening then logically 
         // it should in fact be a VM.
-        return (is_hardened(flags));
+        return is_hardened(flags);
     }
 
 
@@ -13750,10 +13734,6 @@ public:
             threshold = high_threshold_score;
         }
 
-        // the percentage will be set to 99%, because a score 
-        // of 100 is not entirely robust. 150 is more robust
-        // in my opinion, which is why you need a score of
-        // above 150 to get to 100% 
         if (points >= threshold) {
             percent = 100;
         } else if (points >= 100) {
@@ -13784,12 +13764,16 @@ public:
         #endif
 
         auto throw_error = [&](const char* text) -> void {
-            std::stringstream ss;
-        #if (VMA_CPP >= 20 && !CLANG)
-            ss << ", error in " << loc.function_name() << " at " << loc.file_name() << ":" << loc.line() << ")";
+            std::string msg = text;
+        #if (SOURCE_LOCATION_SUPPORTED)
+            msg += ", error in ";
+            msg += loc.function_name();
+            msg += " at ";
+            msg += loc.file_name();
+            msg += ":" + std::to_string(loc.line());
         #endif
-            ss << ". Consult the documentation's parameters for VM::add_custom()";
-            throw std::invalid_argument(std::string(text) + ss.str());
+            msg += ". Consult the documentation's flag handler for VM::add_custom()";
+            throw std::invalid_argument(msg);
         };
 
         if (percent > 100) {
@@ -13823,6 +13807,7 @@ public:
         core::disabled_arg_handler(args...);
         return VM::NULL_ARG;
     }
+
 
     /**
      * @brief This will convert the technique flag into a string, which will correspond to the technique name
@@ -13990,18 +13975,15 @@ public:
 
 
     static u8 detected_count(const flagset& flags = core::generate_default()) {
-        // run all the techniques, which will set the detected_count variable 
-        core::run_all(flags);
-
-        // Accessed directly without .load() since it is now a standard u8
+        core::run_all(flags); // run all the techniques, which will set the detected_count variable 
         return detected_count_num;
     }
 
 
     /**
-     * @brief Fetch the total number of detected techniques
+     * @brief Fetch the VM type
      * @param any flag combination in VM structure or nothing
-     * @return const char*
+     * @return std::string
      */
     template <typename ...Args>
     static std::string type(Args ...args) {
@@ -14097,7 +14079,7 @@ public:
             case brand_enum::BAREVISOR: return "Hypervisor (type 1)";
             case brand_enum::HYPERPLATFORM: return "Hypervisor (type 1)";
             case brand_enum::MINIVISOR: return "Hypervisor (type 1)";
-            case brand_enum::HYPERV_ROOT: return "Host machine"; // This refers to the type 1 hypervisor where Windows normally runs under, we put "Host machine" to clarify you're not running under a VM if this is detected
+            case brand_enum::HYPERV_ROOT: return "Host machine"; // This refers to the type 1 hypervisor where Windows normally runs under, we put "Host machine" to clarify you're not running under a traditional VM if this is detected
             case brand_enum::NULL_BRAND: return "Unknown";
             case brand_enum::INVALID: return "Invalid";
         }
@@ -14109,7 +14091,7 @@ public:
     /**
       * @brief Fetch the conclusion message based on the brand and percentage
       * @param any flag combination in VM structure or nothing
-      * @return const char*
+      * @return std::string
       */
     template <typename ...Args>
     static std::string conclusion(Args ...args) {
@@ -14240,7 +14222,7 @@ public:
         }
 
         auto hardened_logic = [&flags]() noexcept -> bool {
-            // Helper to execute techniques only if they are enabled in the active configuration
+            // helper to execute techniques only if they are enabled in the active configuration
             auto check_technique = [&flags](const enum_flags flag) noexcept -> bool {
                 if (core::is_disabled(flags, flag)) {
                     return false;
@@ -14248,7 +14230,7 @@ public:
                 return check(flag);
             };
 
-            // Helper to get the specific brand associated with a technique using the cache
+            // helper to get the specific brand associated with a technique using the cache
             auto detected_brand = [check_technique](const enum_flags flag) noexcept -> enum brand_enum {
                 if (!check_technique(flag)) {
                     return brand_enum::NULL_BRAND;
