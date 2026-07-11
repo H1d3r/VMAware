@@ -695,8 +695,8 @@ public:
 
     // this is specifically meant for VM::detected_count() to 
     // get the total number of techniques that detected a VM
-    static std::atomic<u8> detected_count_num;
-    static std::atomic<u16> technique_count; // get total number of techniques
+    static u8 detected_count_num;
+    static u16 technique_count; // get total number of techniques
 
     static std::vector<enum_flags> disabled_techniques;
     static constexpr std::array<enum_flags, 1> experimental_techniques{ { TPM } };
@@ -13208,10 +13208,9 @@ public:
 
         static std::array<brand_entry, MAX_BRANDS> brand_scoreboard;
 
-        // Temporary storage to capture which brand was detected by the currently running technique.
-        // thread_local ensures each thread running run_all() has its own independent copy.
-        static thread_local brand_enum last_detected_brand;
-        static thread_local u8 last_detected_score;
+        // temporary storage to capture which brand was detected by the currently running technique.
+        static brand_enum last_detected_brand;
+        static u8 last_detected_score;
 
         // 1. one brand, custom score
         static bool add(const brand_enum p_brand, u8 score) noexcept {
@@ -13230,14 +13229,16 @@ public:
 
         static bool add_score(const brand_enum p_brand, const brand_enum extra_brand, u8 score) noexcept {
             last_detected_brand = p_brand;
-            last_detected_score = score; // Store for the engine to read
+            last_detected_score = score; // store for the engine to read
 
-            brand_score_t brand_score = brand_scoreboard.at(static_cast<u8>(p_brand)).score;
+            const u8 p_idx = static_cast<u8>(p_brand);
+            if (p_idx < MAX_BRANDS) {
+                brand_scoreboard[p_idx].score++;
+            }
 
-            brand_scoreboard.at(static_cast<u8>(p_brand)) = { p_brand, ++brand_score };
-
-            if (extra_brand != brand_enum::NULL_BRAND) {
-                brand_scoreboard.at(static_cast<u8>(extra_brand)) = { extra_brand, ++brand_score };
+            const u8 e_idx = static_cast<u8>(extra_brand);
+            if (extra_brand != brand_enum::NULL_BRAND && e_idx < MAX_BRANDS) {
+                brand_scoreboard[e_idx].score++;
             }
 
             return true;
@@ -13245,46 +13246,56 @@ public:
 
         // assert if the flag is enabled, far better expression than typing std::bitset member functions
         [[nodiscard]] static bool is_disabled(const flagset& flags, const u8 flag_bit) noexcept {
-            if (flag_bit >= flags.size()) {
-                return true;
-            }
-
-            return !flags.test(flag_bit);
+            return flag_bit >= flags.size() || !flags.test(flag_bit);
         }
 
         // same as above but for checking enabled flags
         [[nodiscard]] static bool is_enabled(const flagset& flags, const u8 flag_bit) noexcept {
-            if (flag_bit >= flags.size()) {
-                return false;
-            }
-
-            return flags.test(flag_bit);
+            return flag_bit < flags.size() && flags.test(flag_bit);
         }
 
-        [[nodiscard]] static bool are_techniques_empty(const flagset& flags) {
-            for (std::size_t i = technique_begin; i < technique_end; i++) {
-                if (flags.test(i)) {
-                    return false;
+        // cache technique range mask 
+        static flagset get_techniques_mask() noexcept {
+            static const flagset mask = []() {
+                flagset m;
+                for (size_t i = technique_begin; i < technique_end; ++i) {
+                    m.set(i);
                 }
-            }
-
-            return true;
+                return m;
+            }();
+            return mask;
         }
 
-        [[nodiscard]] static bool is_setting_flag_set(const flagset& flags) {
-            for (std::size_t i = settings_begin; i < settings_end; i++) {
-                if (flags.test(i)) {
-                    return true;
+        // cache settings range mask 
+        static flagset get_settings_mask() noexcept {
+            static const flagset mask = []() {
+                flagset m;
+                for (size_t i = settings_begin; i < settings_end; ++i) {
+                    m.set(i);
                 }
-            }
+                return m;
+            }();
+            return mask;
+        }
 
-            return false;
+        [[nodiscard]] static bool are_techniques_empty(const flagset& flags) noexcept {
+            return (flags & get_techniques_mask()).none();
+        }
+
+        [[nodiscard]] static bool is_setting_flag_set(const flagset& flags) noexcept {
+            return (flags & get_settings_mask()).any();
         }
 
         // run every VM detection mechanism in the technique table
-        static u16 run_all(const flagset& flags, const bool shortcut = false) {
+        static u16 run_all(const flagset& flags, const bool shortcut = false) noexcept {
             u16 points = 0;
-            detected_count_num.store(0);
+            detected_count_num = 0;
+
+            // Reset scoreboard at the start of a run to prevent score leakage
+            for (size_t i = 0; i < MAX_BRANDS; ++i) {
+                brand_scoreboard[i].score = 0;
+                brand_scoreboard[i].name = static_cast<brand_enum>(i);
+            }
 
             u16 threshold_points = threshold_score;
 
@@ -13293,9 +13304,14 @@ public:
                 threshold_points = high_threshold_score;
             }
 
+            const size_t tech_limit = technique_table.size();
             for (size_t i = technique_begin; i < technique_end; ++i) {
+                if (i >= tech_limit) {
+                    continue;
+                }
+
                 const enum_flags technique_macro = static_cast<enum_flags>(i);
-                const technique& technique_data = technique_table.at(i);
+                const technique& technique_data = technique_table[i];
 
                 // skip empty entries
                 if (!technique_data.run) {
@@ -13339,7 +13355,8 @@ public:
                     const enum brand_enum detected_brand = (last_detected_brand != brand_enum::NULL_BRAND) ? last_detected_brand : brand_enum::NULL_BRAND;
                     // store the current technique result to the cache
                     memo::cache_store(technique_macro, result, points_to_add, detected_brand);
-                } else {
+                }
+                else {
                     memo::cache_store(technique_macro, false, 0);
                 }
 
@@ -13389,24 +13406,6 @@ public:
             return points;
         }
 
-
-        /* ============================================================================================== *
-         *                                                                                                *
-         *                                     ARGUMENT HANDLER SECTION                                   *
-         *                                                                                                *
-         * ============================================================================================== */
-
-         /**
-          * basically what this entire section does is handle the arguments in a way
-          * where it can coordinate between enabled and disabled flags. The flags in
-          * the argument handling strategy are std::bitset variables (right below 
-          * this comment), and it's used as a semi-global variable so that each 
-          * component can share this variable together. The core of this section is
-          * the arg_handler and disabled_arg_handler functions. They both take a 
-          * variadic argument of enum_flags. The former decides which bits should be 
-          * enabled, while the latter will toggle those bits (if there's any) after 
-          * the arg_handler processing is done.
-          */
         static flagset flag_collector;
         static flagset disabled_flag_collector;
 
@@ -13414,161 +13413,148 @@ public:
         struct settings {
             flagset flag_collector = generate_default();
 
-            void enable(const enum_flags flag) {
-                flag_collector.set(flag, true);
+            void enable(const enum_flags flag) noexcept {
+                const auto idx = static_cast<size_t>(flag);
+                if (idx < flag_collector.size()) {
+                    flag_collector.set(idx, true);
+                }
             }
 
-            void disable(const enum_flags flag) {
-                flag_collector.set(flag, false);
+            void disable(const enum_flags flag) noexcept {
+                const auto idx = static_cast<size_t>(flag);
+                if (idx < flag_collector.size()) {
+                    flag_collector.set(idx, false);
+                }
             }
 
-            bool is_set(const enum_flags flag) const {
-                return flag_collector.test(flag);
+            bool is_set(const enum_flags flag) const noexcept {
+                const auto idx = static_cast<size_t>(flag);
+                return idx < flag_collector.size() && flag_collector.test(idx);
             }
         };
-    
-        static void generate_default(flagset& flags) {
+
+        static void generate_default(flagset& flags) noexcept {
             // set all bits to 1
             flags.set();
 
             // disable all non-default techniques
             for (const auto id : disabled_techniques) {
-                flags.flip(id);
+                const auto idx = static_cast<size_t>(id);
+                if (idx < flags.size()) {
+                    flags.reset(idx);
+                }
             }
 
             // disable all the settings flags except for VM::DEFAULT
-            flags.flip(EXPERIMENTAL);
-            flags.flip(HIGH_THRESHOLD);
-            flags.flip(NULL_ARG);
-            flags.flip(DYNAMIC);
-            flags.flip(MULTIPLE);
-            flags.flip(ALL);
+            flags.reset(EXPERIMENTAL);
+            flags.reset(HIGH_THRESHOLD);
+            flags.reset(NULL_ARG);
+            flags.reset(DYNAMIC);
+            flags.reset(MULTIPLE);
+            flags.reset(ALL);
         }
 
         // this overload is mainly for default argument purposes
-        static flagset generate_default() {
+        static flagset generate_default() noexcept {
             flagset flags;
             generate_default(flags);
             return flags;
         }
 
-        static void generate_all(flagset& flags) {
+        static void generate_all(flagset& flags) noexcept {
             generate_default(flags);
 
             for (const enum_flags technique : disabled_techniques) {
-                flags.set(technique, true);
+                const auto idx = static_cast<size_t>(technique);
+                if (idx < flags.size()) {
+                    flags.set(idx, true);
+                }
             }
         }
 
-        static void reset_disabled_flagset() {
+        static void reset_disabled_flagset() noexcept {
             disabled_flag_collector.reset();
             for (const auto technique : disabled_techniques) {
-                disabled_flag_collector.set(static_cast<u32>(technique), true);
+                const auto idx = static_cast<size_t>(technique);
+                if (idx < disabled_flag_collector.size()) {
+                    disabled_flag_collector.set(idx, true);
+                }
             }
         }
 
-        static void disable_experimental_techniques() {
+        static void disable_experimental_techniques() noexcept {
             for (const auto technique : experimental_techniques) {
-                VM::DISABLE(technique);
+                const auto idx = static_cast<size_t>(technique);
+                if (idx < disabled_flag_collector.size()) {
+                    disabled_flag_collector.set(idx, true);
+                }
             }
         }
 
-        // base handle implementation
-        static bool all_enum_flags() {
-            return true;
-        }
+        // C++11 compile-time template evaluator to replace runtime recursion
+        template <typename... Args>
+        struct is_all_enum_flags;
 
         template <typename T, typename... Rest>
-        static bool all_enum_flags(T&& /*first*/, Rest&&... rest) {
-            using decayed = typename std::decay<T>::type;
+        struct is_all_enum_flags<T, Rest...> : std::conditional<
+            std::is_same<typename std::decay<T>::type, enum_flags>::value,
+            is_all_enum_flags<Rest...>,
+            std::false_type
+        >::type {
+        };
 
-            if (!std::is_same<decayed, enum_flags>::value) {
-                return false;
-            }
-
-            return all_enum_flags(std::forward<Rest>(rest)...);
-        }
-
-        template <typename... Args>
-        static bool is_type_valid(Args&&... args) {
-            return all_enum_flags(std::forward<Args>(args)...);
-        }
-
-        template <typename... Args>
-        static constexpr bool is_empty() {
-            return (sizeof...(Args) == 0);
-        }
+        template <>
+        struct is_all_enum_flags<> : std::true_type {};
 
         // this will generate a std::bitset based on the arguments provided
         template <typename... Args>
         static VMAWARE_CONSTEXPR flagset arg_handler(Args... args) {
-            if (is_type_valid(args...) == false) {
-                throw std::invalid_argument("argument handler only accepts enum_flags variables");
+            static_assert(is_all_enum_flags<Args...>::value, "argument handler only accepts enum_flags variables");
+
+            flagset collector;
+            if (sizeof...(Args) == 0) {
+                generate_default(collector);
+                return collector;
             }
 
-            // reset all relevant flags
-            flag_collector.reset();
-            bool experimental_requested = false;
-
-            if VMAWARE_CONSTEXPR(is_empty<Args...>()) {
-                generate_default(flag_collector);
-                return flag_collector;
-            }
-
-            // C++ trick to loop over the variadic arguments one by one
-            const int dummy[] = {
-                0, // MSVC guardrail so it doesn't complain
-                (
-                    experimental_requested = experimental_requested || (args == EXPERIMENTAL),
-                    flag_collector.set(static_cast<u32>(args), true),
-                    0
-                )...
+            // C++11 initializer list expansion trick to loop over the variadic arguments one by one
+            using expander = int[];
+            (void)expander {
+                0, (collector.set(static_cast<size_t>(args), true), 0)...
             };
-            VMAWARE_UNUSED(dummy);
 
-            if (flag_collector.test(DEFAULT)) {
-                generate_default(flag_collector);
+            if (collector.test(DEFAULT)) {
+                generate_default(collector);
             }
 
-            if (are_techniques_empty(flag_collector)) {
-                flag_collector |= generate_default();
+            if (are_techniques_empty(collector)) {
+                collector |= generate_default();
             }
 
-            if (flag_collector.test(ALL)) {
-                generate_all(flag_collector);
+            if (collector.test(ALL)) {
+                generate_all(collector);
             }
 
-            if (experimental_requested) {
-                flag_collector.set(EXPERIMENTAL, true);
-                disable_experimental_techniques(); 
+            if (collector.test(EXPERIMENTAL)) {
+                disable_experimental_techniques();
             }
 
-            // if flag is disabled, remove it from the flag_collector
-            for (u8 i = 0; i < enum_size + 1; i++) {
-                if (disabled_flag_collector.test(i)) {
-                    flag_collector.set(i, false);
-                }
-            }
+            // Direct bitwise operation for fast mask clearing (replaces loop)
+            collector &= ~disabled_flag_collector;
 
-            return flag_collector;
+            return collector;
         }
 
         // same as above but for VM::disable which only accepts technique flags
         template <typename... Args>
         static void disabled_arg_handler(Args... args) {
-            if (is_type_valid(args...) == false) {
-                throw std::invalid_argument("disabled argument handler only accepts enum_flags variables");
-            }
+            static_assert(is_all_enum_flags<Args...>::value, "disabled argument handler only accepts enum_flags variables");
+            static_assert(sizeof...(Args) > 0, "VM::DISABLE() must contain at least one flag");
 
-            if VMAWARE_CONSTEXPR(is_empty<Args...>()) {
-                throw std::invalid_argument("VM::DISABLE() must contain a flag");
-            }
-
-            // C++ trick to loop over the variadic arguments one by one
-            int dummy[] = { 
-                (disabled_flag_collector.set(args, true), 0)...
+            using expander = int[];
+            (void)expander {
+                0, (disabled_flag_collector.set(static_cast<size_t>(args), true), 0)...
             };
-            VMAWARE_UNUSED(dummy);
 
             // check if a settings flag is set, which is not valid
             if (core::is_setting_flag_set(disabled_flag_collector)) {
@@ -14004,11 +13990,12 @@ public:
     }
 
 
-    static u8 detected_count(const flagset &flags = core::generate_default()) {
+    static u8 detected_count(const flagset& flags = core::generate_default()) {
         // run all the techniques, which will set the detected_count variable 
         core::run_all(flags);
 
-        return detected_count_num.load();
+        // Accessed directly without .load() since it is now a standard u8
+        return detected_count_num;
     }
 
 
@@ -14425,8 +14412,8 @@ bool VM::memo::hardened::result = false;
 bool VM::memo::hardened::cached = false;
 bool VM::memo::brand_list::cached = false;
 
-thread_local enum VM::brand_enum VM::core::last_detected_brand = VM::brand_enum::NULL_BRAND;
-thread_local VM::u8 VM::core::last_detected_score = 0;
+enum VM::brand_enum VM::core::last_detected_brand = VM::brand_enum::NULL_BRAND;
+VM::u8 VM::core::last_detected_score = 0;
 
 // these are basically the base values for the core::arg_handler function.
 // It's like a bucket that will collect all the bits enabled. If for example 
@@ -14436,8 +14423,7 @@ thread_local VM::u8 VM::core::last_detected_score = 0;
 VM::flagset VM::core::flag_collector;
 VM::flagset VM::core::disabled_flag_collector;
 
-
-std::atomic<VM::u8> VM::detected_count_num{0};
+VM::u8 VM::detected_count_num = 0;
 
 std::vector<VM::enum_flags> VM::disabled_techniques = []() {
     std::vector<VM::enum_flags> c;
@@ -14446,12 +14432,10 @@ std::vector<VM::enum_flags> VM::disabled_techniques = []() {
 }();
 
 // this value is incremented each time VM::add_custom is called
-std::atomic<VM::u16> VM::technique_count{VM::base_technique_count};
+VM::u16 VM::technique_count = VM::base_technique_count;
 
 // this is initialised as empty, because this is where custom techniques can be added at runtime 
-std::vector<VM::core::custom_technique> VM::core::custom_table = {
-
-}; 
+std::vector<VM::core::custom_technique> VM::core::custom_table = {};
 size_t VM::core::custom_table_size = 0;
 
 // the 0~100 points are debatable, but we think it's fine how it is. Feel free to disagree
