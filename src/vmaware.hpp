@@ -4460,6 +4460,7 @@ public:
             using func_t = void(*)();
             reinterpret_cast<func_t>(pointer)(); // breakpoint hit
         }
+    #endif
 
         struct hash {
             static bool has_sse42() noexcept {
@@ -4571,7 +4572,6 @@ public:
                 }
             };
         };
-    #endif
     };
 
 
