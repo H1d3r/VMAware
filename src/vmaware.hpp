@@ -3862,8 +3862,8 @@ public:
             }
 
         #if (WINDOWS)
-            const std::string& brand = cpu::get_brand();
-            if (brand.find("Virtual CPU") != std::string::npos) {
+            const char* brand = cpu::get_brand();
+            if (brand && strstr(brand, "Virtual CPU")) {
                 return true;
             }
         #endif
@@ -4468,7 +4468,7 @@ public:
                 #if (x86)
                     i32 regs[4];
                     cpu::cpuid(regs, 1);
-                    return (regs[2] & (1 << 20)) != 0; // ECX Bit 20: SSE4.2
+                    return (regs[2] & (1 << 20)) != 0;
                 #else
                     return false;
                 #endif
@@ -4498,7 +4498,7 @@ public:
                 return crc;
             }
 
-            // Native/SSE4.2 hardware assisted or software CRC32C of a single byte
+            // native/SSE4.2 hardware assisted or software CRC32C of a single byte
        #if (x86 && (GCC || CLANG))
             __attribute__((__target__("sse4.2")))
         #endif
@@ -4721,7 +4721,7 @@ public:
             };
 
             static constexpr rule merge_rules[] = {
-                // Double merges
+                // double merges
                 { brand_enum::VPC, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::HYPERV_VPC },
 
                 { brand_enum::AZURE_HYPERV, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::AZURE_HYPERV },
@@ -4746,7 +4746,7 @@ public:
                 { brand_enum::HYPERV_VPC, brand_enum::QEMU_KVM_HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
                 { brand_enum::HYPERV, brand_enum::QEMU_KVM_HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
 
-                // Triple merge
+                // triple merge
                 { brand_enum::QEMU, brand_enum::KVM, brand_enum::KVM_HYPERV, brand_enum::QEMU_KVM_HYPERV },
 
                 // VMware merges
@@ -4966,79 +4966,53 @@ public:
      * @category x86
      * @implements VM::CPU_BRAND
      */
-    [[nodiscard]] static bool cpu_brand() {
+     [[nodiscard]] static bool cpu_brand() {
     #if (!x86)
-        return false;
+         return false;
     #else
-        const std::string& brand = cpu::get_brand();
+         const char* brand = cpu::get_brand();
 
-        // easy shortcut for QEMU
-        if (brand.rfind("QEMU Virtual CPU version", 0) == 0) {
-            return core::add(brand_enum::QEMU);
-        }
+         if (!brand) {
+             return false;
+         }
 
-        struct cstrview {
-            const char* data;
-            std::size_t size;
-            constexpr cstrview(const char* d, std::size_t s) noexcept
-                : data(d), size(s) {
-            }
-        };
+         if (strncmp(brand, "QEMU Virtual CPU version", 24) == 0) {
+             return core::add(brand_enum::QEMU);
+         }
 
-        static constexpr std::array<cstrview, 10> checks{ {
-            { "qemu",       4 },
-            { "kvm",        3 },
-            { "vbox",       4 },
-            { "virtualbox", 10},
-            { "monitor",    7 },
-            { "bhyve",      5 },
-            { "hypervisor", 10},
-            { "hvisor",     6 },
-            { "parallels",  9 },
-            { "vmware",     6 }
-        } };
+         struct check_t {
+             const char* text;
+             brand_enum brand;
+         };
 
-        for (auto& v : checks) {
-            if (brand.size() < v.size) {
-                continue;  // too short to match
-            }
+         static constexpr check_t checks[] = {
+             { "qemu",       brand_enum::QEMU },
+             { "kvm",        brand_enum::KVM },
+             { "vbox",       brand_enum::VBOX },
+             { "virtualbox", brand_enum::VBOX },
+             { "bhyve",      brand_enum::BHYVE },
+             { "parallels",  brand_enum::PARALLELS },
+             { "vmware",     brand_enum::VMWARE },
+         };
 
-            if (brand.find(v.data) != std::string::npos) {
-                debug("CPU_BRAND: match = ", v.data);
+         for (const auto& c : checks) {
+             if (strstr(brand, c.text)) {
+                 debug("CPU_BRAND: match = ", c.text);
+                 return core::add(c.brand);
+             }
+         }
 
-                // For these, we only care that it's virtualized:
-                if (v.size == 7  // "monitor"
-                    || ((v.size == 6) && (v.data[0] == 'h'))  // "hvisor"
-                    || ((v.size == 10) && (v.data[0] == 'h')) // "hypervisor" 
-                ) {
-                    return true;
-                }
+         if (strstr(brand, "monitor") ||
+             strstr(brand, "hypervisor") ||
+             strstr(brand, "hvisor"))
+         {
+             debug("CPU_BRAND: generic virtualization match");
+             return true;
+         }
 
-                // Otherwise map to our enums:
-                switch (v.size) {
-                case 4:  // "qemu" or "vbox"
-                    return core::add(v.data[0] == 'q'
-                        ? brand_enum::QEMU
-                        : brand_enum::VBOX);
-                case 3:  // "kvm"
-                    return core::add(brand_enum::KVM);
-                case 5:  // "bhyve"
-                    return core::add(brand_enum::BHYVE);
-                case 9:  // "parallels"
-                    return core::add(brand_enum::PARALLELS);
-                case 10: // "virtualbox"
-                    return core::add(brand_enum::VBOX);
-                case 6:  // "vmware"
-                    return core::add(brand_enum::VMWARE);
-                default:
-                    return false;
-                }
-            }
-        }
-
-        return false;
+         return false;
     #endif
-    }
+     }
 
 
     /**
