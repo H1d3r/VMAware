@@ -88,7 +88,7 @@
  *
  * Welcome! This is just a preliminary text to lay the context of how it works, 
  * how it's structured, and to guide anybody who's trying to understand the whole code. 
- * Reading over 12k+ lines of other people's C++ code is obviously not an easy task, 
+ * Reading over 10k+ lines of other people's C++ code is obviously not an easy task, 
  * and that's perfectly understandable. We'd struggle as well if we were in your position
  * while not even knowing where to start. So here's a more human-friendly explanation:
  * 
@@ -4743,6 +4743,7 @@ public:
                 }
             }
 
+            // simple helper lambda for early filtering
             auto remove = [&](const enum brand_enum brand) noexcept {
                 for (auto it = active_brands.begin(); it != active_brands.end(); ++it) {
                     if (it->first == brand) {
@@ -4753,16 +4754,13 @@ public:
             };
 
             // if all brands have a point of 0, return "Unknown"
-            if (active_brands.empty()) {                        
+            if (active_brands.empty()) {
                 active_brands.emplace_back(brand_enum::NULL_BRAND, 0);
                 memo::brand_list::store(active_brands, flags);
                 return active_brands;
             }
 
             // if there's only a single brand, return it immediately
-            // We skip this early return if the single brand is HYPERV_ARTIFACT,
-            // but we must also nullify the result if the score is above 0, 
-            // which would most likely indicate a hardened VM instead and return "Unknown".
             if (active_brands.size() == 1) {
                 const enum brand_enum brand = active_brands.front().first;
 
@@ -4775,100 +4773,119 @@ public:
                 return active_brands;
             }
 
-            // remove Hyper-V artifacts and Unknown if found with other brands
+            // remove Hyper-V artifacts and Unknown if found alongside other brands
             if (active_brands.size() > 1) {
                 remove(brand_enum::HYPERV_ROOT);
                 remove(brand_enum::NULL_BRAND);
                 remove(brand_enum::INVALID);
             }
 
-            // If filtering emptied the vector, fall back to NULL_BRAND
+            // if filtering emptied the vector, fall back to NULL_BRAND
             if (active_brands.empty()) {
                 active_brands.emplace_back(brand_enum::NULL_BRAND, 1);
             }
 
-            // this bitset acts as an abstraction layer for the merging stage of this function.
-            // the amount of hits above 0 for a brand isn't relevant, the core idea here is to
-            // just check the presence of the brand itself so we can merge them. 
+            // capture initial hit presence
             std::bitset<MAX_BRANDS> brand_hits = {};
-
             for (const auto& brand : active_brands) {
                 brand_hits.set(static_cast<u8>(brand.first));
             }
 
-            // merge 2 brands into one
-            auto merge = [&](const enum brand_enum a, const enum brand_enum b, const enum brand_enum result) noexcept -> void {
-                const bool a_hit = brand_hits.test(static_cast<u8>(a));
-                const bool b_hit = brand_hits.test(static_cast<u8>(b));
-
-                if (a_hit && b_hit) {
-                    remove(a);
-                    remove(b);
-                    active_brands.emplace_back(result, 2);
-                }
+            struct rule {
+                brand_enum a;
+                brand_enum b;
+                brand_enum c; // brand_enum::INVALID if unused (double merge)
+                brand_enum result;
             };
 
-            // merge 3 brands into one
-            auto triple_merge = [&](const enum brand_enum a, const enum brand_enum b, const enum brand_enum c, const enum brand_enum result) noexcept -> void {
-                const bool a_hit = brand_hits.test(static_cast<u8>(a));
-                const bool b_hit = brand_hits.test(static_cast<u8>(b));
-                const bool c_hit = brand_hits.test(static_cast<u8>(c));
+            static constexpr rule merge_rules[] = {
+                // Double merges
+                { brand_enum::VPC, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::HYPERV_VPC },
+
+                { brand_enum::AZURE_HYPERV, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::AZURE_HYPERV },
+                { brand_enum::AZURE_HYPERV, brand_enum::VPC, brand_enum::INVALID, brand_enum::AZURE_HYPERV },
+                { brand_enum::AZURE_HYPERV, brand_enum::HYPERV_VPC, brand_enum::INVALID, brand_enum::AZURE_HYPERV },
+
+                { brand_enum::QEMU, brand_enum::KVM, brand_enum::INVALID, brand_enum::QEMU_KVM },
+                { brand_enum::KVM, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::KVM_HYPERV },
+                { brand_enum::QEMU, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::QEMU_KVM, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+
+                { brand_enum::KVM, brand_enum::HYPERV_VPC, brand_enum::INVALID, brand_enum::KVM_HYPERV },
+                { brand_enum::QEMU, brand_enum::HYPERV_VPC, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::QEMU_KVM, brand_enum::HYPERV_VPC, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+
+                { brand_enum::KVM, brand_enum::KVM_HYPERV, brand_enum::INVALID, brand_enum::KVM_HYPERV },
+                { brand_enum::QEMU, brand_enum::KVM_HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::QEMU_KVM, brand_enum::KVM_HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+
+                { brand_enum::HYPERV_VPC, brand_enum::KVM_HYPERV, brand_enum::INVALID, brand_enum::KVM_HYPERV },
+                { brand_enum::HYPERV, brand_enum::KVM_HYPERV, brand_enum::INVALID, brand_enum::KVM_HYPERV },
+                { brand_enum::HYPERV_VPC, brand_enum::QEMU_KVM_HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::HYPERV, brand_enum::QEMU_KVM_HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+
+                // Triple merge
+                { brand_enum::QEMU, brand_enum::KVM, brand_enum::KVM_HYPERV, brand_enum::QEMU_KVM_HYPERV },
+
+                // VMware merges
+                { brand_enum::VMWARE, brand_enum::VMWARE_FUSION, brand_enum::INVALID, brand_enum::VMWARE_FUSION },
+                { brand_enum::VMWARE, brand_enum::VMWARE_EXPRESS, brand_enum::INVALID, brand_enum::VMWARE_EXPRESS },
+                { brand_enum::VMWARE, brand_enum::VMWARE_ESX, brand_enum::INVALID, brand_enum::VMWARE_ESX },
+                { brand_enum::VMWARE, brand_enum::VMWARE_GSX, brand_enum::INVALID, brand_enum::VMWARE_GSX },
+                { brand_enum::VMWARE, brand_enum::VMWARE_WORKSTATION, brand_enum::INVALID, brand_enum::VMWARE_WORKSTATION },
+
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE, brand_enum::INVALID, brand_enum::VMWARE_HARD },
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_FUSION, brand_enum::INVALID, brand_enum::VMWARE_HARD },
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_EXPRESS, brand_enum::INVALID, brand_enum::VMWARE_HARD },
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_ESX, brand_enum::INVALID, brand_enum::VMWARE_HARD },
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_GSX, brand_enum::INVALID, brand_enum::VMWARE_HARD },
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_WORKSTATION, brand_enum::INVALID, brand_enum::VMWARE_HARD }
+            };
+
+            std::bitset<MAX_BRANDS> current_active = brand_hits;
+            std::array<brand_score_t, MAX_BRANDS> active_scores{};
+
+            for (const auto& brand : active_brands) {
+                active_scores[static_cast<u8>(brand.first)] = brand.second;
+            }
+
+            // evaluate merge rules
+            for (const auto& rule : merge_rules) {
+                const u8 a_idx = static_cast<u8>(rule.a);
+                const u8 b_idx = static_cast<u8>(rule.b);
+                const u8 c_idx = static_cast<u8>(rule.c);
+                const u8 res_idx = static_cast<u8>(rule.result);
+
+                const bool a_hit = brand_hits.test(a_idx);
+                const bool b_hit = brand_hits.test(b_idx);
+                const bool c_hit = (rule.c == brand_enum::INVALID) || brand_hits.test(c_idx);
 
                 if (a_hit && b_hit && c_hit) {
-                    remove(a);
-                    remove(b);
-                    remove(c);
-                    active_brands.emplace_back(result, 2);
+                    current_active.reset(a_idx);
+                    current_active.reset(b_idx);
+                    if (rule.c != brand_enum::INVALID) {
+                        current_active.reset(c_idx);
+                    }
+                    current_active.set(res_idx);
+                    active_scores[res_idx] = 2; // default merged score assignment
                 }
-            };
+            }
 
-            // Brand post-processing / merging
-            merge(brand_enum::VPC, brand_enum::HYPERV, brand_enum::HYPERV_VPC);
-
-            merge(brand_enum::AZURE_HYPERV, brand_enum::HYPERV, brand_enum::AZURE_HYPERV);
-            merge(brand_enum::AZURE_HYPERV, brand_enum::VPC, brand_enum::AZURE_HYPERV);
-            merge(brand_enum::AZURE_HYPERV, brand_enum::HYPERV_VPC, brand_enum::AZURE_HYPERV);
-
-            merge(brand_enum::QEMU, brand_enum::KVM, brand_enum::QEMU_KVM);
-            merge(brand_enum::KVM, brand_enum::HYPERV, brand_enum::KVM_HYPERV);
-            merge(brand_enum::QEMU, brand_enum::HYPERV, brand_enum::QEMU_KVM_HYPERV);
-            merge(brand_enum::QEMU_KVM, brand_enum::HYPERV, brand_enum::QEMU_KVM_HYPERV);
-
-            merge(brand_enum::KVM, brand_enum::HYPERV_VPC, brand_enum::KVM_HYPERV);
-            merge(brand_enum::QEMU, brand_enum::HYPERV_VPC, brand_enum::QEMU_KVM_HYPERV);
-            merge(brand_enum::QEMU_KVM, brand_enum::HYPERV_VPC, brand_enum::QEMU_KVM_HYPERV);
-
-            merge(brand_enum::KVM, brand_enum::KVM_HYPERV, brand_enum::KVM_HYPERV);
-            merge(brand_enum::QEMU, brand_enum::KVM_HYPERV, brand_enum::QEMU_KVM_HYPERV);
-            merge(brand_enum::QEMU_KVM, brand_enum::KVM_HYPERV, brand_enum::QEMU_KVM_HYPERV);
-
-            merge(brand_enum::HYPERV_VPC, brand_enum::KVM_HYPERV, brand_enum::KVM_HYPERV);
-            merge(brand_enum::HYPERV, brand_enum::KVM_HYPERV, brand_enum::KVM_HYPERV);
-            merge(brand_enum::HYPERV_VPC, brand_enum::QEMU_KVM_HYPERV, brand_enum::QEMU_KVM_HYPERV);
-            merge(brand_enum::HYPERV, brand_enum::QEMU_KVM_HYPERV, brand_enum::QEMU_KVM_HYPERV);
-
-            triple_merge(brand_enum::QEMU, brand_enum::KVM, brand_enum::KVM_HYPERV, brand_enum::QEMU_KVM_HYPERV);
-
-            merge(brand_enum::VMWARE, brand_enum::VMWARE_FUSION, brand_enum::VMWARE_FUSION);
-            merge(brand_enum::VMWARE, brand_enum::VMWARE_EXPRESS, brand_enum::VMWARE_EXPRESS);
-            merge(brand_enum::VMWARE, brand_enum::VMWARE_ESX, brand_enum::VMWARE_ESX);
-            merge(brand_enum::VMWARE, brand_enum::VMWARE_GSX, brand_enum::VMWARE_GSX);
-            merge(brand_enum::VMWARE, brand_enum::VMWARE_WORKSTATION, brand_enum::VMWARE_WORKSTATION);
-
-            merge(brand_enum::VMWARE_HARD, brand_enum::VMWARE, brand_enum::VMWARE_HARD);
-            merge(brand_enum::VMWARE_HARD, brand_enum::VMWARE_FUSION, brand_enum::VMWARE_HARD);
-            merge(brand_enum::VMWARE_HARD, brand_enum::VMWARE_EXPRESS, brand_enum::VMWARE_HARD);
-            merge(brand_enum::VMWARE_HARD, brand_enum::VMWARE_ESX, brand_enum::VMWARE_HARD);
-            merge(brand_enum::VMWARE_HARD, brand_enum::VMWARE_GSX, brand_enum::VMWARE_HARD);
-            merge(brand_enum::VMWARE_HARD, brand_enum::VMWARE_WORKSTATION, brand_enum::VMWARE_HARD);
+            // reconstruct active list
+            active_brands.clear();
+            for (size_t i = 0; i < MAX_BRANDS; ++i) {
+                if (current_active.test(i)) {
+                    active_brands.emplace_back(static_cast<brand_enum>(i), active_scores[i]);
+                }
+            }
 
             if (active_brands.size() > 1) {
                 std::sort(active_brands.begin(), active_brands.begin() + static_cast<std::ptrdiff_t>(active_brands.size()), [](
                     const brand_element_t& a,
                     const brand_element_t& b
-                ) {
-                    return a.second > b.second; // .second = brand score (usually u8)
-                });
+                    ) {
+                        return a.second > b.second; // .second is brand score
+                    });
             }
 
             memo::brand_list::store(active_brands, flags);
