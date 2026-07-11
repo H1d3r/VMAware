@@ -11,7 +11,8 @@ static void check(bool condition, const char* label) {
     if (condition) {
         std::cout << "  PASS  " << label << "\n";
         ++pass_count;
-    } else {
+    }
+    else {
         std::cerr << "  FAIL  " << label << "\n";
         ++fail_count;
     }
@@ -52,18 +53,18 @@ int main() {
     std::cout << "=== Mixed-flag: detected_count_num per-call scoping ===\n";
     {
         VM::detected_count(VM::HYPERVISOR_BIT);
-        const auto num_single = VM::detected_count_num.load();
+        const auto num_single = VM::detected_count_num; // Resolved compilation syntax error
 
         VM::detected_count();
-        const auto num_full = VM::detected_count_num.load();
+        const auto num_full = VM::detected_count_num;
 
         VM::detected_count(VM::HYPERVISOR_BIT);
-        const auto num_single_again = VM::detected_count_num.load();
+        const auto num_single_again = VM::detected_count_num;
 
         check(num_full >= num_single,
-              "detected_count_num for full run >= single-technique run");
+            "detected_count_num for full run >= single-technique run");
         check(num_single_again == num_single,
-              "detected_count_num recalculated per-call: restricted call matches first restricted call");
+            "detected_count_num recalculated per-call: restricted call matches first restricted call");
     }
 
     std::cout << "\n=== Mixed-flag: brand_scoreboard per-call scoping ===\n";
@@ -78,9 +79,9 @@ int main() {
         const auto scoreboard_after_single_brand_again = VM::core::brand_scoreboard;
 
         check(scoreboard_non_decreasing(scoreboard_after_single_brand, scoreboard_after_full_detect),
-              "brand_scoreboard scores >= after full run vs single-technique run");
+            "brand_scoreboard scores >= after full run vs single-technique run");
         check(scoreboards_equal(scoreboard_after_full_detect, scoreboard_after_single_brand_again),
-              "brand_scoreboard unchanged when brand() returns from single_brand cache");
+            "brand_scoreboard unchanged when brand() returns from single_brand cache");
     }
 
     // Phase 2: Same-flag stability tests (caches fully warmed from Phase 1)
@@ -91,13 +92,13 @@ int main() {
     std::cout << "\n=== VM::detected_count() consistency ===\n";
     {
         const auto dc1 = VM::detected_count();
-        const auto num1 = VM::detected_count_num.load();
+        const auto num1 = VM::detected_count_num;
 
         const auto dc2 = VM::detected_count();
-        const auto num2 = VM::detected_count_num.load();
+        const auto num2 = VM::detected_count_num;
 
         const auto dc3 = VM::detected_count();
-        const auto num3 = VM::detected_count_num.load();
+        const auto num3 = VM::detected_count_num;
 
         check(dc1 == dc2, "VM::detected_count() 2nd call matches 1st");
         check(dc1 == dc3, "VM::detected_count() 3rd call matches 1st");
@@ -125,13 +126,13 @@ int main() {
     std::cout << "\n=== VM::detect() consistency ===\n";
     {
         const bool result1 = VM::detect();
-        const auto num1 = VM::detected_count_num.load();
+        const auto num1 = VM::detected_count_num;
 
         const bool result2 = VM::detect();
-        const auto num2 = VM::detected_count_num.load();
+        const auto num2 = VM::detected_count_num;
 
         const bool result3 = VM::detect();
-        const auto num3 = VM::detected_count_num.load();
+        const auto num3 = VM::detected_count_num;
 
         check(result1 == result2, "VM::detect() 2nd call matches 1st");
         check(result1 == result3, "VM::detect() 3rd call matches 1st");
@@ -163,7 +164,8 @@ int main() {
     std::cout << "PASSED: " << pass_count << "\n";
     if (fail_count > 0) {
         std::cerr << "FAILED: " << fail_count << "\n";
-    } else {
+    }
+    else {
         std::cout << "FAILED: " << fail_count << "\n";
     }
 

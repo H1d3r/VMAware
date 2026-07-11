@@ -13506,21 +13506,23 @@ public:
         template <>
         struct is_all_enum_flags<> : std::true_type {};
 
-        // this will generate a std::bitset based on the arguments provided
-        template <typename... Args>
-        static VMAWARE_CONSTEXPR flagset arg_handler(Args... args) {
-            static_assert(is_all_enum_flags<Args...>::value, "argument handler only accepts enum_flags variables");
+        // overload for zero arguments to prevent C4127 constant conditional warning
+        static flagset arg_handler() {
+            flagset collector;
+            generate_default(collector);
+            return collector;
+        }
+
+        // overload for 1 or more arguments
+        template <typename T, typename... Args>
+        static VMAWARE_CONSTEXPR flagset arg_handler(T first, Args... args) {
+            static_assert(is_all_enum_flags<T, Args...>::value, "argument handler only accepts enum_flags variables");
 
             flagset collector;
-            if (sizeof...(Args) == 0) {
-                generate_default(collector);
-                return collector;
-            }
-
             // C++11 initializer list expansion trick to loop over the variadic arguments one by one
             using expander = int[];
             (void)expander {
-                0, (collector.set(static_cast<size_t>(args), true), 0)...
+                0, (collector.set(static_cast<size_t>(first), true), 0), (collector.set(static_cast<size_t>(args), true), 0)...
             };
 
             if (collector.test(DEFAULT)) {
@@ -13539,7 +13541,6 @@ public:
                 disable_experimental_techniques();
             }
 
-            // Direct bitwise operation for fast mask clearing (replaces loop)
             collector &= ~disabled_flag_collector;
 
             return collector;
