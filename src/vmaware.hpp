@@ -13188,7 +13188,7 @@ public:
         };
 
         // entry for the initialization list
-        struct technique_entry { // NOLINT(cppcoreguidelines-pro-type-member-init)
+        struct technique_entry { 
             enum_flags id;
             technique tech;
         };
@@ -13254,7 +13254,7 @@ public:
             return flag_bit < flags.size() && flags.test(flag_bit);
         }
 
-        // cache technique range mask 
+        // cache technique range mask
         static flagset get_techniques_mask() noexcept {
             static const flagset mask = []() {
                 flagset m;
@@ -13266,7 +13266,7 @@ public:
             return mask;
         }
 
-        // cache settings range mask 
+        // cache settings range mask
         static flagset get_settings_mask() noexcept {
             static const flagset mask = []() {
                 flagset m;
@@ -13274,7 +13274,7 @@ public:
                     m.set(i);
                 }
                 return m;
-            }();
+                }();
             return mask;
         }
 
@@ -13291,7 +13291,7 @@ public:
             u16 points = 0;
             detected_count_num = 0;
 
-            // Reset scoreboard at the start of a run to prevent score leakage
+            // reset scoreboard at the start of a run to prevent score leakage
             for (size_t i = 0; i < MAX_BRANDS; ++i) {
                 brand_scoreboard[i].score = 0;
                 brand_scoreboard[i].name = static_cast<brand_enum>(i);
@@ -13491,21 +13491,6 @@ public:
             }
         }
 
-        // C++11 compile-time template evaluator to replace runtime recursion
-        template <typename... Args>
-        struct is_all_enum_flags;
-
-        template <typename T, typename... Rest>
-        struct is_all_enum_flags<T, Rest...> : std::conditional<
-            std::is_same<typename std::decay<T>::type, enum_flags>::value,
-            is_all_enum_flags<Rest...>,
-            std::false_type
-        >::type {
-        };
-
-        template <>
-        struct is_all_enum_flags<> : std::true_type {};
-
         // SFINAE base case for compile-time validation of zero arguments
         template <typename... Args>
         static constexpr typename std::enable_if<sizeof...(Args) == 0, bool>::type
@@ -13513,7 +13498,7 @@ public:
             return true;
         }
 
-        // Recursive compile-time validation for 1 or more arguments
+        // recursive compile-time validation for 1 or more arguments
         template <typename T, typename... Args>
         static constexpr bool verify_flags() noexcept {
             return std::is_same<typename std::decay<T>::type, enum_flags>::value&& verify_flags<Args...>();
