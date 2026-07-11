@@ -13506,6 +13506,19 @@ public:
         template <>
         struct is_all_enum_flags<> : std::true_type {};
 
+        // SFINAE base case for compile-time validation of zero arguments
+        template <typename... Args>
+        static constexpr typename std::enable_if<sizeof...(Args) == 0, bool>::type
+            verify_flags() noexcept {
+            return true;
+        }
+
+        // Recursive compile-time validation for 1 or more arguments
+        template <typename T, typename... Args>
+        static constexpr bool verify_flags() noexcept {
+            return std::is_same<typename std::decay<T>::type, enum_flags>::value&& verify_flags<Args...>();
+        }
+
         // overload for zero arguments to prevent C4127 constant conditional warning
         static flagset arg_handler() {
             flagset collector;
@@ -13516,7 +13529,7 @@ public:
         // overload for 1 or more arguments
         template <typename T, typename... Args>
         static VMAWARE_CONSTEXPR flagset arg_handler(T first, Args... args) {
-            static_assert(is_all_enum_flags<T, Args...>::value, "argument handler only accepts enum_flags variables");
+            static_assert(verify_flags<T, Args...>(), "argument handler only accepts enum_flags variables");
 
             flagset collector;
             // C++11 initializer list expansion trick to loop over the variadic arguments one by one
@@ -13549,7 +13562,7 @@ public:
         // same as above but for VM::disable which only accepts technique flags
         template <typename... Args>
         static void disabled_arg_handler(Args... args) {
-            static_assert(is_all_enum_flags<Args...>::value, "disabled argument handler only accepts enum_flags variables");
+            static_assert(verify_flags<Args...>(), "disabled argument handler only accepts enum_flags variables");
             static_assert(sizeof...(Args) > 0, "VM::DISABLE() must contain at least one flag");
 
             using expander = int[];
