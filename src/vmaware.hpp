@@ -7746,289 +7746,206 @@ public:
         std::vector<pci_device> devices;
 
         #if (LINUX)
-         const std::string pci_path = "/sys/bus/pci/devices";
-         #if (VMA_CPP >= 17)
-            // std::filesystem throws exceptions when directories don't exist (SIGSEGV)
-            std::error_code ec;
-            auto dir_iter = std::filesystem::directory_iterator(pci_path, ec);
+            const std::string pci_path = "/sys/bus/pci/devices";
+            #if (VMA_CPP >= 17)
+                // std::filesystem throws exceptions when directories don't exist (SIGSEGV)
+                std::error_code ec;
+                auto dir_iter = std::filesystem::directory_iterator(pci_path, ec);
 
-            if (!ec) {
-                for (const auto& entry : dir_iter) {
-                    std::ifstream vf(entry.path() / "vendor");
-                    std::ifstream df(entry.path() / "device");
+                if (!ec) {
+                    for (const auto& entry : dir_iter) {
+                        std::ifstream vf(entry.path() / "vendor");
+                        std::ifstream df(entry.path() / "device");
 
-                    if (!vf || !df) {
+                        if (!vf || !df) {
+                            continue;
+                        }
+
+                        u16 vid = 0; u32 did = 0;
+                        vf >> std::hex >> vid;
+                        df >> std::hex >> did;
+                        devices.push_back({ vid, did });
+                    }
+                }
+            #else
+                std::unique_ptr<DIR, decltype(&closedir)> dir(opendir(pci_path.c_str()), closedir);
+                if (dir) {
+                    while (struct dirent* ent = readdir(dir.get())) {
+                        std::string name = ent->d_name;
+                        if (name == "." || name == "..") continue;
+                        std::string base = pci_path + "/" + name;
+                        std::ifstream vf(base + "/vendor"), df(base + "/device");
+                        if (!vf || !df) continue;
+                        u16 vid = 0; u32 did = 0;
+                        vf >> std::hex >> vid;
+                        df >> std::hex >> did;
+                        devices.push_back({ vid, did });
+                    }
+                }
+            #endif
+        #elif (WINDOWS)
+            constexpr DWORD MAX_MULTI_SZ = 64 * 1024;
+
+            auto hex_val = [](wchar_t c) noexcept -> int {
+                if (c >= L'0' && c <= L'9') return c - L'0';
+
+                const wchar_t lower = static_cast<wchar_t>((static_cast<int>(c) | 0x20));
+                if (lower >= L'a' && lower <= L'f') return lower - L'a' + 10;
+
+                return -1;
+            };
+
+            auto parse_hex = [&](const wchar_t* ptr, size_t maxDigits, size_t stopLen, unsigned long& out, size_t& consumed) noexcept -> bool {
+                out = 0;
+                consumed = 0;
+
+                const size_t limit = (stopLen < maxDigits) ? stopLen : maxDigits;
+
+                for (; consumed < limit; ++consumed) {
+                    const int v = hex_val(ptr[consumed]);
+                    if (v < 0) break;
+
+                    out = (out << 4) | static_cast<unsigned long>(v);
+                }
+
+                return consumed > 0;
+            };
+
+            std::unordered_set<unsigned long long> seen;
+
+            auto add_device = [&](u16 vid, u32 did) noexcept {
+                const unsigned long long key = (static_cast<unsigned long long>(vid) << 32) | static_cast<unsigned long long>(did);
+                if (seen.insert(key).second) {
+                    devices.push_back({ vid, did });
+                }
+            };
+
+            auto scan_text_ids = [&](const wchar_t* text) noexcept {
+                if (!text) return;
+
+                // USB: VID_ and then PID_
+                const wchar_t* p = text;
+                while ((p = wcsstr(p, L"VID_"))) {
+                    const wchar_t* v = p;
+                    p += 4;
+                    const wchar_t* d = wcsstr(v + 4, L"PID_");
+                    if (d && (d - v) < 64) {
+                        unsigned long parsed_v = 0, parsed_d = 0;
+                        size_t c_v = 0, c_d = 0;
+                        if (parse_hex(v + 4, 4, SIZE_MAX, parsed_v, c_v) &&
+                            parse_hex(d + 4, 8, SIZE_MAX, parsed_d, c_d)) {
+                            add_device(static_cast<u16>(parsed_v & 0xFFFFu), static_cast<u32>(parsed_d));
+                        }
+                    }
+                }
+
+                // PCI or HDAUDIO = VEN_ and then DEV_ after it
+                p = text;
+                while ((p = wcsstr(p, L"VEN_"))) {
+                    const wchar_t* v = p;
+                    p += 4;
+                    const wchar_t* d = wcsstr(v + 4, L"DEV_");
+
+                    if (!(d && (d - v) < 64)) {
                         continue;
                     }
 
-                    u16 vid = 0; u32 did = 0;
-                    vf >> std::hex >> vid;
-                    df >> std::hex >> did;
-                    devices.push_back({ vid, did });
-                }
-            }
-        #else
-         std::unique_ptr<DIR, decltype(&closedir)> dir(opendir(pci_path.c_str()), closedir);
-         if (dir) {
-             while (struct dirent* ent = readdir(dir.get())) {
-                 std::string name = ent->d_name;
-                 if (name == "." || name == "..") continue;
-                 std::string base = pci_path + "/" + name;
-                 std::ifstream vf(base + "/vendor"), df(base + "/device");
-                 if (!vf || !df) continue;
-                 u16 vid = 0; u32 did = 0;
-                 vf >> std::hex >> vid;
-                 df >> std::hex >> did;
-                 devices.push_back({ vid, did });
-             }
-         }
-        #endif
-        #elif (WINDOWS)
-        static constexpr const wchar_t* kroots[] = {
-            L"SYSTEM\\CurrentControlSet\\Enum\\PCI",
-            L"SYSTEM\\CurrentControlSet\\Enum\\USB",
-            L"SYSTEM\\CurrentControlSet\\Enum\\HDAUDIO"
-        };
+                    unsigned long parsed_v = 0;
+                    size_t c_v = 0;
 
-        enum root_type { RT_PCI, RT_USB, RT_HDAUDIO };
-        constexpr DWORD MAX_MULTI_SZ = 64 * 1024;
+                    if (!parse_hex(v + 4, 4, SIZE_MAX, parsed_v, c_v)) {
+                        continue;
+                    }
 
-        auto hex_val = [](wchar_t c) noexcept -> int {
-            if (c >= L'0' && c <= L'9') return c - L'0';
+                    const wchar_t* dev_start = const_cast<wchar_t*>(d + 4);
+                    const wchar_t* amp_after_dev = wcschr(dev_start, L'&');
+                    const size_t dev_len = amp_after_dev ? static_cast<size_t>(amp_after_dev - dev_start) : wcslen(dev_start);
 
-            const wchar_t lower = static_cast<wchar_t>((static_cast<int>(c) | 0x20));
-            if (lower >= L'a' && lower <= L'f') return lower - L'a' + 10;
+                    if (!(dev_len > 0 && dev_len <= 8)) {
+                        continue;
+                    }
 
-            return -1;
-        };
+                    unsigned long parsed_d = 0;
+                    size_t c_d = 0;
 
-        auto parse_hex = [&](const wchar_t* ptr, size_t maxDigits, size_t stopLen, unsigned long& out, size_t& consumed) noexcept -> bool {
-            out = 0;
-            consumed = 0;
-
-            const size_t limit = (stopLen < maxDigits) ? stopLen : maxDigits;
-
-            for (; consumed < limit; ++consumed) {
-                const int v = hex_val(ptr[consumed]);
-                if (v < 0) break;
-
-                // caller must ensure maxDigits doesn't exceed 8, because on Windows unsigned long is 32-bit
-                out = (out << 4) | static_cast<unsigned long>(v);
-            }
-
-            return consumed > 0;
-        };
-
-        std::unordered_set<unsigned long long> seen;
-
-        auto add_device = [&](u16 vid, u32 did) noexcept {
-            const unsigned long long key = (static_cast<unsigned long long>(vid) << 32) | static_cast<unsigned long long>(did);
-            if (seen.insert(key).second) {
-                devices.push_back({ vid, did });
-            }
-        };
-
-        auto scan_text_ids = [&](const wchar_t* text) noexcept {
-            if (!text) return;
-
-            // USB: VID_ and then PID_
-            const wchar_t* p = text;
-            while ((p = wcsstr(p, L"VID_"))) {
-                const wchar_t* v = p;
-                p += 4;
-                const wchar_t* d = wcsstr(v + 4, L"PID_");
-                if (d && (d - v) < 64) {
-                    unsigned long parsed_v = 0, parsed_d = 0;
-                    size_t c_v = 0, c_d = 0;
-                    if (parse_hex(v + 4, 4, SIZE_MAX, parsed_v, c_v) &&
-                        parse_hex(d + 4, 8, SIZE_MAX, parsed_d, c_d)) {
+                    if (parse_hex(dev_start, 8, dev_len, parsed_d, c_d) && c_d == dev_len) {
                         add_device(static_cast<u16>(parsed_v & 0xFFFFu), static_cast<u32>(parsed_d));
                     }
                 }
-            }
 
-            // PCI or HDAUDIO = VEN_ and then DEV_ after it
-            p = text;
-            while ((p = wcsstr(p, L"VEN_"))) {
-                const wchar_t* v = p;
-                p += 4;
-                const wchar_t* d = wcsstr(v + 4, L"DEV_");
+                // PCI Subsystem: SUBSYS_ (8 hex digits: SSSSVVVV)
+                p = text;
+                while ((p = wcsstr(p, L"SUBSYS_"))) {
+                    const wchar_t* s = p;
+                    p += 7;
 
-                if (!(d && (d - v) < 64)) {
-                    continue;
+                    unsigned long parsed_sub = 0;
+                    size_t c_sub = 0;
+
+                    if (parse_hex(s + 7, 8, 8, parsed_sub, c_sub) && c_sub == 8) {
+                        const u16 sub_vid = static_cast<u16>(parsed_sub & 0xFFFFu);
+                        const u32 sub_did = static_cast<u32>((parsed_sub >> 16) & 0xFFFFu);
+                        add_device(sub_vid, sub_did);
+                    }
                 }
+            };
 
-                unsigned long parsed_v = 0;
-                size_t c_v = 0;
-
-                if (!parse_hex(v + 4, 4, SIZE_MAX, parsed_v, c_v)) {
-                    continue;
-                }
-
-                const wchar_t* dev_start = const_cast<wchar_t*>(d + 4);
-                const wchar_t* amp_after_dev = wcschr(dev_start, L'&');
-                const size_t dev_len = amp_after_dev ? static_cast<size_t>(amp_after_dev - dev_start) : wcslen(dev_start);
-
-                // for HDAUDIO expect 4 digits and for PCI allow up to 8
-                if (!(dev_len > 0 && dev_len <= 8)) {
-                    continue;
-                }
-
-                unsigned long parsed_d = 0;
-                size_t c_d = 0;
-
-                // parse exactly devLen digits (fail if any char is non-hex)
-                if (parse_hex(dev_start, 8, dev_len, parsed_d, c_d) && c_d == dev_len) {
-                    add_device(static_cast<u16>(parsed_v & 0xFFFFu), static_cast<u32>(parsed_d));
-                }
-            }
-
-            // PCI Subsystem: SUBSYS_ (8 hex digits: SSSSVVVV)
-            p = text;
-            while ((p = wcsstr(p, L"SUBSYS_"))) {
-                const wchar_t* s = p;
-                p += 7; // advance past "SUBSYS_" to prevent infinite loops
-
-                unsigned long parsed_sub = 0;
-                size_t c_sub = 0;
-
-                // Parse exactly 8 hex characters following "SUBSYS_"
-                if (parse_hex(s + 7, 8, 8, parsed_sub, c_sub) && c_sub == 8) {
-                    const u16 sub_vid = static_cast<u16>(parsed_sub & 0xFFFFu);         // Lower 16 bits (Subsystem Vendor ID)
-                    const u32 sub_did = static_cast<u32>((parsed_sub >> 16) & 0xFFFFu); // Upper 16 bits (Subsystem Device ID)
-                    add_device(sub_vid, sub_did);
-                }
-            }
-        };
-
-        // process the hardware ID on an instance key
-        auto process_hardware_id_reg = [&](HKEY h_inst) noexcept {
-            // most HardwareIDs fit within 512 bytes
-            static thread_local std::vector<wchar_t> buf;
-            if (buf.empty()) buf.resize(512);
-
-            DWORD type = 0;
-            DWORD cb_data = static_cast<DWORD>(buf.size() * sizeof(wchar_t));
-
-            LONG rv = RegGetValueW(
-                h_inst,
+            HDEVINFO h_dev_info = SetupDiGetClassDevsW(
                 nullptr,
-                L"HardwareID",
-                RRF_RT_REG_MULTI_SZ,
-                &type,
-                buf.data(),
-                &cb_data
+                nullptr,
+                nullptr,
+                DIGCF_ALLCLASSES | DIGCF_PRESENT
             );
 
-            if (rv == ERROR_MORE_DATA) {
-                if (cb_data > MAX_MULTI_SZ) {
-                    return;
+            if (h_dev_info != INVALID_HANDLE_VALUE) {
+                SP_DEVINFO_DATA dev_info_data{};
+                dev_info_data.cbSize = sizeof(SP_DEVINFO_DATA);
+
+                for (DWORD i = 0; SetupDiEnumDeviceInfo(h_dev_info, i, &dev_info_data); ++i) {
+                    DWORD reg_type = 0;
+                    DWORD required_size = 0;
+
+                    SetupDiGetDeviceRegistryPropertyW(
+                        h_dev_info,
+                        &dev_info_data,
+                        SPDRP_HARDWAREID,
+                        &reg_type,
+                        nullptr,
+                        0,
+                        &required_size
+                    );
+
+                    if (required_size == 0 || required_size > MAX_MULTI_SZ) {
+                        continue;
+                    }
+
+                    static thread_local std::vector<wchar_t> buf;
+                    const size_t needed_wchars = (required_size + sizeof(wchar_t) - 1) / sizeof(wchar_t);
+                    if (buf.size() < needed_wchars + 2) {
+                        buf.resize(needed_wchars + 2);
+                    }
+
+                    if (SetupDiGetDeviceRegistryPropertyW(
+                        h_dev_info,
+                        &dev_info_data,
+                        SPDRP_HARDWAREID,
+                        &reg_type,
+                        reinterpret_cast<PBYTE>(buf.data()),
+                        static_cast<DWORD>(buf.size() * sizeof(wchar_t)),
+                        nullptr
+                    )) {
+                        if (reg_type == REG_MULTI_SZ) {
+                            buf[needed_wchars] = L'\0';
+                            buf[needed_wchars + 1] = L'\0';
+
+                            for (wchar_t* p = buf.data(); *p; p += wcslen(p) + 1) {
+                                scan_text_ids(p);
+                            }
+                        }
+                    }
                 }
-
-                // allocate a buffer large enough to hold the entire MULTI_SZ
-                // (+1 for safety null terminator logic below)
-                buf.resize((cb_data / sizeof(wchar_t)) + 2);
-
-                rv = RegGetValueW(
-                    h_inst,
-                    nullptr,
-                    L"HardwareID",
-                    RRF_RT_REG_MULTI_SZ,
-                    &type,
-                    buf.data(),
-                    &cb_data
-                );
+                SetupDiDestroyDeviceInfoList(h_dev_info);
             }
-
-            if (rv != ERROR_SUCCESS || type != REG_MULTI_SZ || cb_data <= sizeof(wchar_t)) {
-                return;
-            }
-
-            // guarantee terminating NUL
-            // RegGetValueW with RRF_RT_REG_MULTI_SZ usually handles this but for safety
-            const size_t wchar_count = cb_data / sizeof(wchar_t);
-            if (wchar_count < buf.size()) buf[wchar_count] = L'\0';
-            else buf.back() = L'\0';
-
-            for (wchar_t* p = buf.data(); *p; p += wcslen(p) + 1) {
-                scan_text_ids(p);
-            }
-        };
-
-        // all instance subkeys under a given device key
-        auto enum_instances = [&](HKEY h_dev) noexcept {
-            wchar_t inst_name[256];
-
-            for (DWORD j = 0;; ++j) {
-                // reset size for each iteration as RegEnumKeyExW modifies it
-                DWORD cb_inst = _countof(inst_name);
-
-                const LONG st2 = RegEnumKeyExW(
-                    h_dev,
-                    j,
-                    inst_name,
-                    &cb_inst,
-                    nullptr,
-                    nullptr,
-                    nullptr,
-                    nullptr
-                );
-                if (st2 == ERROR_NO_MORE_ITEMS) break;
-                if (st2 != ERROR_SUCCESS) continue;
-
-                HKEY h_inst = nullptr;
-                if (RegOpenKeyExW(h_dev, inst_name, 0, KEY_READ, &h_inst) != ERROR_SUCCESS) continue;
-
-                process_hardware_id_reg(h_inst);
-                RegCloseKey(h_inst);
-            }
-        };
-
-        // all device subkeys under a given root key
-        auto enum_devices = [&](HKEY h_root) noexcept {
-            wchar_t device_name[256];
-
-            for (DWORD i = 0;; ++i) {
-                DWORD cb_name = _countof(device_name);
-
-                const LONG status = RegEnumKeyExW(
-                    h_root,
-                    i,
-                    device_name,
-                    &cb_name,
-                    nullptr,
-                    nullptr,
-                    nullptr,
-                    nullptr
-                );
-                if (status == ERROR_NO_MORE_ITEMS) break;
-                if (status != ERROR_SUCCESS) continue;
-
-                HKEY h_dev = nullptr;
-                if (RegOpenKeyExW(h_root, device_name, 0, KEY_READ, &h_dev) != ERROR_SUCCESS) continue;
-
-                enum_instances(h_dev);
-                RegCloseKey(h_dev);
-            }
-        };
-
-        // for each rootPath we open the root key once
-        for (size_t root_idx = 0; root_idx < _countof(kroots); ++root_idx) {
-            const wchar_t* root_path = kroots[root_idx];
-            HKEY root = nullptr;
-            if (RegOpenKeyExW(
-                HKEY_LOCAL_MACHINE,
-                root_path,
-                0,
-                KEY_READ,
-                &root
-            ) != ERROR_SUCCESS) {
-                continue;
-            }
-
-            enum_devices(root);
-            RegCloseKey(root);
-        }
         #endif
 
         for (const auto d : devices) {
