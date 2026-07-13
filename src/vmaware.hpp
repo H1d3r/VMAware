@@ -638,6 +638,7 @@ public:
         AZURE_HYPERV,
         SIMPLEVISOR,
         HYPERV_ROOT,
+        HYPERV_SPOOF,
         UML,
         POWERVM,
         GCE,
@@ -3893,7 +3894,7 @@ public:
                 return memo::hyperx::fetch();
             }
 
-            // Check if hypervisor feature bit in CPUID Leaf 1, ECX bit 31 is enabled
+            // check if hypervisor feature bit in CPUID Leaf 1, ECX bit 31 is enabled
             auto is_hyperv_present = []() noexcept -> bool {
                 u32 unused, ecx = 0;
                 cpu::cpuid(unused, unused, ecx, unused, 1);
@@ -3911,11 +3912,11 @@ public:
             };
 
             /**
-              * On Hyper-V virtual machines, the cpuid function reports an EAX value of 11
-              * This value is tied to the Hyper-V partition model, where each virtual machine runs as a child partition
-              * These child partitions have limited privileges and access to hypervisor resources, 
+              * on Hyper-V virtual machines, the cpuid function reports an EAX value of 11
+              * this value is tied to the Hyper-V partition model, where each virtual machine runs as a child partition
+              * these child partitions have limited privileges and access to hypervisor resources, 
               * which is reflected in the maximum input value for hypervisor CPUID information as 11
-              * Essentially, it indicates that the hypervisor is managing the VM and that the VM is not running directly on hardware but rather in a virtualized environment
+              * essentially, it indicates that the hypervisor is managing the VM and that the VM is not running directly on hardware but rather in a virtualized environment
             */
             auto eax = []() noexcept -> u32 {
                 u32 eax_reg, unused = 0;
@@ -3925,7 +3926,7 @@ public:
                 return eax_reg & 0xFF;
             };
 
-            // Check whether a hypervisor is nested within a Hyper-V partition
+            // check whether a hypervisor is nested within a Hyper-V partition
             auto is_hyperv_nested = []() noexcept -> bool {
                 u32 eax = 0, ebx = 0, ecx = 0, edx = 0;
                 cpu::cpuid(eax, ebx, ecx, edx, 0x40000004);
@@ -3933,6 +3934,72 @@ public:
                 const bool nested_partition_bit = (eax & (1u << 12)) != 0;
 
                 return nested_partition_bit;
+            };
+
+            // check if the Windows Hypervisor Platform interface is responsive and confirms a running hypervisor
+            auto is_hyperv_interface_present = []() noexcept -> bool {
+                enum WHV_CAPABILITY_CODE {
+                    WHvCapabilityCodeHypervisorPresent = 0x00000000,
+                };
+
+                typedef HRESULT(__stdcall* whv_get_capability_fn)(
+                    WHV_CAPABILITY_CODE CapabilityCode,
+                    VOID* CapabilityBuffer,
+                    UINT32 CapabilityBufferSize,
+                    UINT32* WrittenBufferSize
+                );
+
+                HMODULE h_whp = LoadLibraryW(L"WinHvPlatform.dll");
+                if (!h_whp) {
+                    return false;
+                }
+
+                auto whv_get_capability = reinterpret_cast<whv_get_capability_fn>(
+                    GetProcAddress(h_whp, "WHvGetCapability")
+                );
+
+                bool is_present = false;
+                if (whv_get_capability) {
+                    BOOL present_val = FALSE;
+                    UINT32 written = 0;
+                    HRESULT hr = whv_get_capability(
+                        WHvCapabilityCodeHypervisorPresent,
+                        &present_val,
+                        sizeof(present_val),
+                        &written
+                    );
+                    if (SUCCEEDED(hr)) {
+                        is_present = (present_val == TRUE);
+                    }
+                }
+
+                FreeLibrary(h_whp);
+                return is_present;
+            };
+
+            // check if the host-only virtualization infrastructure driver is present
+            auto is_hyperv_service_running = []() noexcept -> bool {
+                const wchar_t* service_name = L"vid";
+                SC_HANDLE sc_manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+                if (!sc_manager) {
+                    return false;
+                }
+
+                SC_HANDLE service = OpenServiceW(sc_manager, service_name, SERVICE_QUERY_STATUS);
+                if (!service) {
+                    CloseServiceHandle(sc_manager);
+                    return false;
+                }
+
+                SERVICE_STATUS status = {};
+                bool is_running = false;
+                if (QueryServiceStatus(service, &status)) {
+                    is_running = (status.dwCurrentState == SERVICE_RUNNING);
+                }
+
+                CloseServiceHandle(service);
+                CloseServiceHandle(sc_manager);
+                return is_running;
             };
 
             hyperx_state state = HYPERV_UNKNOWN;
@@ -3943,7 +4010,7 @@ public:
             }
             else {
                 if (!is_root_partition()) {
-                    // A QEMU/KVM guest running with Hyper-V enlightenments presents "Microsoft Hv" at
+                    // a QEMU/KVM guest running with Hyper-V enlightenments presents "Microsoft Hv" at
                     // leaf 0x40000000 (so the Windows guest uses the fast Hyper-V ABI) while KVM relocates
                     // its own "KVMKVMKVM" signature to leaf 0x40000100. That secondary signature is an
                     // unambiguous tell of QEMU/KVM. A guest is not a root partition, so this must be
@@ -3969,7 +4036,7 @@ public:
                     }
                 }
                 else {
-                    // Windows machine running under Hyper-V type 1
+                    // windows machine running under Hyper-V type 1
                     std::string brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor + 0x100);
 
                     if (util::find(brand_str, "KVM")) {
@@ -3978,7 +4045,7 @@ public:
                         state = HYPERV_ENLIGHTENMENT;
                     }
                     else {
-                        // If we reach here, we do some sanity checks to ensure a hypervisor is not trying to spoof itself as Hyper-V, attempting to bypass some detections
+                        // if we reach here, we do some sanity checks to ensure a hypervisor is not trying to spoof itself as Hyper-V, attempting to bypass some detections
                         brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
 
                         bool is_hyper_v_host = false;
@@ -4007,14 +4074,23 @@ public:
                         ULONG_PTR idt_base = 0;
                         memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
 
-                        // if running under Hyper-V in AMD64 (doesnt matter the VTL/partition level), this value is hardcoded and intercepted/emulated at kernel level
+                        // if running under Hyper-V in AMD64 (doesnt matter the VTL/partition level), this value is hardcoded and emulated at kernel level to prevent kernel address leakage
                         // specifically at KiPreprocessFault -> KiOpDecode -> KiOpLocateDecodeEntry (KiOp_SLDTSTRSMSW)
-                        // this is intercepted by the kernel before handling execution to the hypervisor, so it's a decent safeguard against basic cpuid spoofing
                         // additionally, brand has to be "Microsoft Hv"
-                        is_hyper_v_host = idt_base == 0xfffff80000001000 && brand_str == "Microsoft Hv";
+                        const bool base_hardware_checks = (idt_base == 0xfffff80000001000) && (brand_str == "Microsoft Hv");
                     #else
-                        is_hyper_v_host = brand_str == "Microsoft Hv";
+                        const bool base_hardware_checks = (brand_str == "Microsoft Hv");
                     #endif
+
+                        if (base_hardware_checks) {
+                            const bool host_drivers_active = is_hyperv_service_running();
+                            const bool whp_api_active = is_hyperv_interface_present();
+
+                            debug("HYPER-X: Hyper-V service running: ", host_drivers_active);
+                            debug("HYPER-X: Hyper-V interface running: ", whp_api_active);
+
+                            is_hyper_v_host = host_drivers_active && whp_api_active;
+                        }
 
                         if (is_hyper_v_host) {
                             debug("HYPER-X: Detected Hyper-V host machine");
@@ -4023,6 +4099,7 @@ public:
                         }
                         else {
                             debug("HYPER-X: Detected hypervisor trying to spoof itself as Hyper-V");
+                            core::add(brand_enum::HYPERV_SPOOF, 150);
                             state = HYPERV_SPOOFED;
                         }
                     }
@@ -4621,6 +4698,7 @@ public:
         static constexpr const char* AZURE_HYPERV = "Microsoft Azure Hyper-V";
         static constexpr const char* SIMPLEVISOR = "SimpleVisor";
         static constexpr const char* HYPERV_ROOT = "Hyper-V root partition (host system)";
+        static constexpr const char* HYPERV_SPOOF = "Impersonated Microsoft Hyper-V";
         static constexpr const char* UML = "User-mode Linux";
         static constexpr const char* POWERVM = "IBM PowerVM";
         static constexpr const char* GCE = "Google Compute Engine (KVM)";
@@ -4641,7 +4719,7 @@ public:
         static constexpr const char* NEKO_PROJECT = "Neko Project II";
         static constexpr const char* NOIRVISOR = "NoirVisor";
         static constexpr const char* QIHOO = "Qihoo 360 Sandbox";
-        static constexpr const char* DBVM = "DBVM";
+        static constexpr const char* DBVM = "Dark Byte's VM";
         static constexpr const char* UTM = "UTM";
         static constexpr const char* COMPAQ = "Compaq FX!32";
         static constexpr const char* INSIGNIA = "Insignia RealPC";
@@ -4704,7 +4782,7 @@ public:
 
             // if filtering emptied the vector, fall back to NULL_BRAND
             if (active_brands.empty()) {
-                active_brands.emplace_back(brand_enum::NULL_BRAND, 1);
+                active_brands.emplace_back(brand_enum::NULL_BRAND, 0);
             }
 
             // capture initial hit presence
@@ -4861,6 +4939,7 @@ public:
                 case brand_enum::AZURE_HYPERV: return VM::brands::AZURE_HYPERV;
                 case brand_enum::SIMPLEVISOR: return VM::brands::SIMPLEVISOR;
                 case brand_enum::HYPERV_ROOT: return VM::brands::HYPERV_ROOT;
+                case brand_enum::HYPERV_SPOOF: return VM::brands::HYPERV_SPOOF;
                 case brand_enum::UML: return VM::brands::UML;
                 case brand_enum::POWERVM: return VM::brands::POWERVM;
                 case brand_enum::GCE: return VM::brands::GCE;
@@ -13970,7 +14049,8 @@ public:
             case brand_enum::BAREVISOR: return "Hypervisor (type 1)";
             case brand_enum::HYPERPLATFORM: return "Hypervisor (type 1)";
             case brand_enum::MINIVISOR: return "Hypervisor (type 1)";
-            case brand_enum::HYPERV_ROOT: return "Host machine"; // This refers to the type 1 hypervisor where Windows normally runs under, we put "Host machine" to clarify you're not running under a traditional VM if this is detected
+            case brand_enum::HYPERV_ROOT: return "Host machine"; // this refers to the type 1 hypervisor where Windows normally runs under, we put "Host machine" to clarify you're not running under a traditional VM if this is detected
+            case brand_enum::HYPERV_SPOOF: return "Unknown"; // this refers to any hypervisor trying to disguise itself as a legitimate Hyper-V instance
             case brand_enum::NULL_BRAND: return "Unknown";
             case brand_enum::INVALID: return "Invalid";
         }
