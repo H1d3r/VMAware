@@ -255,9 +255,7 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 <summary>Is a kernel-mode component planned to be developed?</summary>
 <br>
 
-> No. A kernel-component would require serious auditing. It would also be a dead end for VM bypassing, so it's not fun >:(.
->
-> In our opinion, there are also no good user-mode solutions for VM detection, and we want to cover this demand. We can still detect most stealthy virtualised environments while being completely user-mode. 
+> No. In our opinion, there are no good user-mode solutions for VM detection, and we want to devote all our time to meeting this demand. We can still detect most stealthy virtualised environments while being completely user-mode. 
 
 </details>
 
@@ -266,7 +264,7 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 <summary>Is it thread-safe?</summary>
 <br>
 
-> No. Don't call this library with multiple threads simultaneously, we don't take more than 1s to run.
+> No. Do not call functions of this library with multiple threads simultaneously, we don't take more than 1s to run.
 
 </details>
 
