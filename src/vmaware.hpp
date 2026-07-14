@@ -27,6 +27,7 @@
  *      - virtfunc (https://github.com/virtfunc)
  *      - Wiisus (https://github.com/wiisus)
  *      - Max Ufer (https://github.com/Manny684)
+ *      - everdox (https://github.com/everdox)
  *  - Repository: https://github.com/NotRequiem/VMAware
  *  - Docs: https://github.com/NotRequiem/VMAware/docs/documentation.md
  *  - Full credits: https://github.com/NotRequiem/VMAware#credits-and-contributors-%EF%B8%8F
@@ -12515,6 +12516,7 @@ public:
     /**
      * @brief Check whether a hypervisor does not correctly emulate instructions in compatibility mode
      * @category Windows, x86_64
+     * @author Idea by @NickEverdox (https://github.com/everdox)
      * @implements VM::EIP_OVERFLOW
      */
     [[nodiscard]] static bool eip_overflow() {
