@@ -1,5 +1,13 @@
 # Scoring Criteria for VM Detection Techniques
 
+VMAware uses several detection techniques to detect virtual environments. Each technique has its own score.
+
+These scores represent the confidence level that VMAware is running inside a virtual environment when a particular technique produces a positive result.
+
+Assigning appropriate scores to each technique is important, as they directly affect the accuracy and reliability of the library's VM detection capabilities.
+
+Scores are adjusted subjectively based on experimental testing, following this criteria:
+
 ## 1. Reliability (Maximum Weight: 50%) 
 *Assess the technique’s consistency in accurately detecting VMs.*
 *Ranges from 5 to 50%, with higher scores indicating greater reliability.*

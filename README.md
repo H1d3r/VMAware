@@ -144,7 +144,7 @@ The module file and function version is located [here](auxiliary/vmaware_downloa
 ## Documentation and code overview 📒
 You can view the full docs [here](docs/documentation.md). All the details such as functions, techniques, settings, and examples are provided. Trust me, it's not too intimidating ;)
 
-If you want to learn about the architecture and design of the library, head over to https://deepwiki.com/NotRequiem/VMAware.
+If you want to have a general concept of our architecture, head over to https://deepwiki.com/NotRequiem/VMAware.
 
 Information described in DeepWiki or other non official sources may not be accurate.
 
@@ -157,12 +157,12 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 
 | Language | Repository | Details | Author |
 |:---------|:---------------:|:--------:|:------:|
-| <img src="assets/language_icons/8172-ruby-programming-language.webp" width="20"> Ruby | [link](https://github.com/NotRequiem/VMAware/tree/main/gem) | Official Ruby port embedded in the VMAware repository, but Windows is not supported. | [Adam Ruman](https://github.com/addam128) |
+| <img src="assets/language_icons/8172-ruby-programming-language.webp" width="20"> Ruby | [link](https://github.com/NotRequiem/VMAware/tree/main/gem) | Official Ruby port embedded in the VMAware repository. Windows is not supported. | [Adam Ruman](https://github.com/addam128) |
 | <img src="assets/language_icons/js.png" width="20"> JS | [link](https://github.com/Kyun-J/node-vm-detect) | Very good API, actively maintained. | [Kyun-J](https://github.com/Kyun-J) |
 | <img src="assets/language_icons/rust-logo-512x512.png" width="20"> Rust | [link](https://github.com/MarcelDev/vmaware-rs) | Very good API, well tested, actively maintained | [Marcel](https://github.com/MarcelDev) |
 
 > [!WARNING]
-> Although unofficial ports exists, they are not tried and tested compared to our official ones. Additionally, all the ports are subject to potential false positives due to the complexity of the C++ code it originates from. Outside of this list, ports that use AI are unable to map our techniques accurately (or worse, completely fails). Use them at your own risk.
+> Although unofficial ports exists, they are not tried and tested compared to our official ones. Use them at your own risk.
 
 <br>
 
@@ -182,9 +182,7 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 
 > It's designed for security researchers, VM engineers, anticheat developers, and pretty much anybody who needs a practical and rock-solid VM detection mechanism in their project. The library is useful for malware analysts testing the concealment of their VMs and for proprietary software developers aiming to protect their applications from reverse engineering. It's an effective tool to benchmark how well a VM can hide itself from detection.
 > 
-> Additionally, software could adjust the behaviour of their program based on the detected environment. It could be useful for debugging and testing purposes, while system administrators could manage configurations differently. Finally, some applications might want to legally restrict usage in VMs as a license clause to prevent unauthorized distribution or testing.
->
-> There are also projects that utilise our tool such as [AutoVirt](https://github.com/Scrut1ny/AutoVirt), which is an advanced malware analysis project that we helped strengthen their hypervisor environment and undetectability.
+> Additionally, software could adjust the behaviour of their program based on the detected environment. It could be useful for debugging purposes, while system administrators could manage configurations differently. Finally, some applications might want to legally restrict usage in VMs as a license clause to prevent unauthorized distribution or testing.
 
 </details>
 
@@ -193,32 +191,19 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 <br>
 
 > There's already loads of projects that have the same goal such as 
-<a href="https://github.com/CheckPointSW/InviZzzible">InviZzzible</a>, <a href="https://github.com/a0rtega/pafish">pafish</a> and <a href="https://github.com/LordNoteworthy/al-khaser">Al-Khaser</a>. But the difference between the aforementioned projects is that they don't provide a programmable interface to interact with the detection mechanisms, on top of having little to no support for non-Windows systems. Additionally, the VM detections in all those projects are often not sophisticated enough to be practically applied to real-world scenarios while not providing enough VM detection techniques. An additional hurdle is that they are all GPL projects, so using them for proprietary projects (which would be the main audience for such a functionality), is out of the question. 
->
-> Pafish and InviZzzible have been abandoned for years. Although Al-Khaser does receive occasional updates and has a wide scope of detections that VMAware doesn't provide (anti-debugging, anti-injection, and so on), it still falls short due to the previously mentioned problems above.
+<a href="https://github.com/CheckPointSW/InviZzzible">InviZzzible</a>, <a href="https://github.com/a0rtega/pafish">pafish</a> and <a href="https://github.com/LordNoteworthy/al-khaser">Al-Khaser</a>. The difference between the aforementioned projects is that they don't provide a programmable interface to interact with the detection mechanisms, on top of having little to no support for non-Windows systems. Additionally, the VM detections in all those projects are often not sophisticated enough to be practically applied to real-world scenarios. An additional hurdle is that they are all GPL projects, so using them for proprietary projects (which would be the main audience for such a functionality), is out of the question. Pafish and InviZzzible have been abandoned for years.
 > 
-> While those projects have been useful to VMAware to some extent, we wanted to make them far better. Our goal was to make the detection techniques to be accessible programmatically in a cross-platform and flexible way for everybody to get something useful out of it rather than providing just a CLI tool. It also contains a larger quantity of techniques, so it's basically just a VM detection framework on steroids that focuses on practical and realistic usability for any scenario.
+> While those projects have been useful to VMAware to some extent, we wanted to make them far better. Our goal was to make the detection techniques to be accessible programmatically in a cross-platform and flexible way for everybody to get something useful out of it rather than providing just a CLI tool. In summary, this is a VM detection framework that focuses on practical and realistic usability for any scenario, aiming to provide the most accurate result of the environment where your software is running under.
 
 </details>
-
-<!--
-<details>
-<summary>How does it compare to paid VM detection libraries?</summary>
-<br>
-
-> There are several paid software solutions available for protecting software licenses from reverse engineering or cracking, such as <a href="https://docs.sentinel.thalesgroup.com/home.htm">Thales' Sentinel RMS</a> and <a href="https://vmpsoft.com/">VMProtect</a>. These tools include VM detection as part of their feature set, though their primary focus is not necessarily VM detection unlike this project.
-</details>
--->
 
 <details>
 <summary>Wouldn't it make it inferior for having the project open source?</summary>
 <br>
 
-> The only downside to VMAware is that it's fully open source, which makes the job of bypassers easier compared to having it closed source. However, We'd argue that's a worthy tradeoff by having as many VM detection techniques in an open and interactive manner rather than trying to obfuscate. Having it open source means we can have valuable community feedback to strengthen the library more effectively and accurately through discussions, collaborations, and competition against anti-anti-vm projects and malware analysis tools which try to hide it's a VM. 
+> VMAware is fully open source, which makes the job of bypassers easier compared to having it closed source. However, We'd argue that's a worthy tradeoff by having as many VM detection techniques in an open and interactive manner. It means we can have valuable community feedback to strengthen the library more effectively and accurately through discussions, collaborations, and competition against anti-anti-vm projects and malware analysis tools which try to hide their presence. 
 > 
-> All of this combined has further advanced the forefront innovations in the field of VM detections much more productively, compared to having it closed source. This is what made the project the best VM detection framework out there, and bypassing it has shown to be an immense challenge due to the sheer number of sophisticated and never-before-seen techniques we employ that other VM detectors don't use whether open or closed source (to our knowledge).
->
-> In other words, it's about better quality AND quantity, better feedback, and better openness over security through obfuscation. It's the same reason why OpenSSH, OpenSSL, the Linux kernel, and other security-based software projects are relatively secure because of how there's more people helping to make it better compared to people trying to probe the source code with malicious intent. VMAware has this philosophy, and if you know anything about security, you should be familiar with the phrase: "Security through obfuscation is NOT security".
+> All of this combined has further advanced the forefront innovations in the field of VM detections much more productively, compared to having it closed source. In other words, it's about better quality AND quantity, better feedback, and better openness over security through obfuscation. It's the same reason why OpenSSH, OpenSSL, the Linux kernel, and other security-based software projects are relatively secure because of how there's more people helping to make it better compared to people trying to probe the source code with malicious intent. VMAware has this philosophy, and if you know anything about security, you should be familiar with the phrase: "Security through obfuscation is NOT security".
 
 </details>
 
@@ -228,6 +213,10 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 <br>
 
 > Publicly known hardeners are not effective and most of them on Windows have been beaten, but this doesn't mean that the lib is immune to them. Custom hardeners that we may not be aware of might have a theoretical advantage, but they are substantially more difficult to produce.
+> 
+> We continously track both open and closed source projects and bypasses to detect them. Windows is the most targeted operating system for bypassing VM detections, so our main focus is to strengthen detections for this platform.
+>
+> Currently, no public repository, project or code base in general is able to fully bypass on Windows. When a working public bypass is found, it usually gets fixed in a couple of days. Our arms race is mostly battled against private methods gatekept by cheaters to bypass both VMAware and anti-cheats.
 
 </details>
 
@@ -236,17 +225,17 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 <summary>How is it developed?</summary>
 <br>
 
-> Based on online research (ranging from scientific papers to private game-hacking forums and Discord servers), we identify the methods currently used to hide VMs and investigate generic detection techniques capable of finding them, while continuously tracking their activity so we stay one step ahead.
+> By researching, we identify the methods currently used to hide VMs and investigate generic detection techniques capable of detecting those methods.
 >
-> Once we have production-ready code, we upload it directly to the main branch and begin testing in real environments. 
+> Once we have production-ready code, we upload it to this repository and begin experimental testing in real environments. All code in any github branch is experimental, while the latest release represent our stable code.
 >
-> Products that include our library run our detection algorithms on hundreds or even thousands of devices and quietly report back if a VM is detected; those reports are later manually checked for false positives.
+> Some products that use our project run our library on thousands of systems, collaborating with us to report back how VMAware behaved in such systems. All those reports are manually checked by us for false positives or any other problem in general.
 >
-> If experimental tests and public documentation/databases indicate that false positives have been resolved, we keep the changes in main and assign scores to new detections based on their effectiveness, reliability, and how they operate together with other techniques.
+> While techniques are evaluated, scores for those techniques are dynamically adjusted based on their effectiveness, reliability, and how they operate together with other detection techniques. The criteria used to put our scores can be found [here](docs/score_system.md).
 >
-> Fixes for other cases (compilation errors, possible security vulnerabilities, etc.) are merged into main immediately.
+> Using GitHub Actions, we automatically monitor if both compilation and runtime problems occur in every platform we target, each time a new commit is uploaded to our repository.
 >
-> When the library has accumulated enough changes compared to previous versions, we publish a release and explain those changes in detail.
+> When the library has accumulated enough changes under our view, we publish a release and explain those changes in detail. Before releasing, we do a security audit to ensure the new published version is safe.
 
 </details>
 
@@ -266,9 +255,9 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 <summary>Is a kernel-mode component planned to be developed?</summary>
 <br>
 
-> No. A kernel-component would require serious auditing and a digitally signed driver. It would also be a dead end for VM bypassing ( so it's not fun >:( )
+> No. A kernel-component would require serious auditing. It would also be a dead end for VM bypassing, so it's not fun >:(.
 >
-> In summary, we can still detect your ass while being completely user-mode.
+> In our opinion, there are also no good user-mode solutions for VM detection, and we want to cover this demand. We can still detect most stealthy virtualised environments while being completely user-mode. 
 
 </details>
 
@@ -287,10 +276,11 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 <br>
 
 > By default, VMAware targets Windows 10-11 when compiling for Windows. 
-> If you want to compile for older Windows versions, you just need to tell us the target platform that you want to compile the library for with a WIN32 macro.
-> For example, if you want to compile VMAware for Windows 7, include `#define _WIN32_WINNT _WIN32_WINNT_WIN7` at the top of vmaware.hpp.
 > 
-> In older Windows terminals, ANSI colors are not supported, but you can run the CLI with the `--no-ansi` argument.
+> If you want to compile for older Windows versions, you just need to tell us the target platform that you want to compile the library for with a Windows preprocessor definition.
+> 
+> For example, if you want to compile VMAware for Windows 7, add `#define _WIN32_WINNT _WIN32_WINNT_WIN7` at the top of vmaware.hpp. Note that in older Windows terminals, ANSI colors are not supported, but you can run the CLI with the `--no-ansi` argument.
+> 
 > Older versions than Windows 7 are NOT supported.
 
 </details>
@@ -310,8 +300,6 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 If you have any suggestions, ideas, or any sort of contribution, feel free to ask! I'll be more than happy to discuss either in the [issue](https://github.com/NotRequiem/VMAware/issues) or [discussion](https://github.com/NotRequiem/VMAware/discussions) sections. If you want to personally ask something in private, contact `shenzken` on Discord.
 
 For email inquiries: `vmaware.support@gmail.com`
-
-And if you found this project useful, a star would be appreciated :)
 
 <br>
 
