@@ -8,7 +8,7 @@
    <br><br>
    <b>VMAware</b> (VM + Aware) is a cross-platform C++ framework for virtual machine detection.
    <br><br>
-   <a href="README_CN.md">中文 🇨🇳</a> | <a href="README_FR.md">Français 🇫🇷</a> | <a href="README_KR.md">한국어 🇰🇷</a>
+   <a href="README_CN.md">中文 🇨🇳</a> | <a href="README_FR.md">Français 🇫🇷</a> | <a href="README_KR.md">한국어 🇰🇷</a> | <a href="README_RU.md">Русский 🇷🇺</a>
 </div>
 
 - - -
