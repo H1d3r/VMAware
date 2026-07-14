@@ -56,14 +56,14 @@
  *
  *
  * ============================== SECTIONS ==================================
- * - enums for publicly accessible techniques  => line 481
- * - struct for internal cpu operations        => line 736
- * - struct for internal memoization           => line 3006
- * - struct for internal utility functions     => line 3585
- * - struct for internal core components       => line 13328
- * - start of VM detection technique list      => line 5192
- * - start of public VM detection functions    => line 13733
- * - start of externally defined variables     => line 14536
+ * - enums for publicly accessible techniques  => line 478
+ * - struct for internal cpu operations        => line 754
+ * - struct for internal memoization           => line 2853
+ * - struct for internal utility functions     => line 3419
+ * - struct for internal core components       => line 13125
+ * - start of VM detection technique list      => line 5017
+ * - start of public VM detection functions    => line 13515
+ * - start of externally defined variables     => line 14322
  *
  *
  * ============================== EXAMPLE ===================================
@@ -12101,6 +12101,7 @@ public:
      * @brief Check whether a hypervisor uses EPT/NPT hooking to intercept hardware breakpoints
      * @note This hypervisor detection also affects debuggers
      * @category Windows, x86
+     * @author @NickEverdox (https://github.com/everdox) - ERMSB check
      * @implements VM::HYPERVISOR_HOOK
      */
     [[nodiscard]] static bool hypervisor_hook() {

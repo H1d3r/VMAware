@@ -368,7 +368,8 @@ And if you found this project useful, a star would be appreciated :)
 - [Wiisus](https://github.com/wiisus)
 - [Marcel](https://github.com/MarcelDev)
 - [Max Ufer](https://github.com/Manny684)
-
+- [Everdox](https://github.com/everdox)
+ 
 <br>
 
 ## Legal 📜
