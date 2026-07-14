@@ -398,6 +398,7 @@
     #pragma comment(lib, "powrprof.lib")
     #pragma comment(lib, "advapi32.lib")
     #pragma comment(lib, "gdi32.lib")
+    #pragma comment(lib, "user32.lib")
 #elif (LINUX)
     #if (x86)
         #include <cpuid.h>
