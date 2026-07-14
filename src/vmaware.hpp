@@ -3943,34 +3943,36 @@ public:
                     WHvCapabilityCodeHypervisorPresent = 0x00000000,
                 };
 
-                typedef HRESULT(__stdcall* whv_get_capability_fn)(
-                    WHV_CAPABILITY_CODE CapabilityCode,
-                    VOID* CapabilityBuffer,
-                    UINT32 CapabilityBufferSize,
-                    UINT32* WrittenBufferSize
-                );
-
                 HMODULE h_whp = LoadLibraryW(L"WinHvPlatform.dll");
                 if (!h_whp) {
                     return false;
                 }
 
-                auto whv_get_capability = reinterpret_cast<whv_get_capability_fn>(
-                    GetProcAddress(h_whp, "WHvGetCapability")
-                );
+                const char* names[] = { "WHvGetCapability" };
+                void* funcs[1] = { nullptr };
+
+                get_function_address(h_whp, names, funcs, 1);
 
                 bool is_present = false;
-                if (whv_get_capability) {
+                if (funcs[0]) {
+                    using fnWHvGetCapability = HRESULT(__stdcall*)(
+                        WHV_CAPABILITY_CODE CapabilityCode,
+                        void* CapabilityBuffer,
+                        UINT32 CapabilityBufferSize,
+                        UINT32* WrittenBufferSize
+                    );
+
+                    const auto pWHvGetCapability = reinterpret_cast<fnWHvGetCapability>(funcs[0]);
                     BOOL present_val = FALSE;
                     UINT32 written = 0;
-                    HRESULT hr = whv_get_capability(
+                    HRESULT hr = pWHvGetCapability(
                         WHvCapabilityCodeHypervisorPresent,
                         &present_val,
                         sizeof(present_val),
                         &written
                     );
                     if (SUCCEEDED(hr)) {
-                        is_present = (present_val == TRUE);
+                        is_present = (present_val == 1);
                     }
                 }
 
@@ -3980,7 +3982,7 @@ public:
 
             // check if the host-only virtualization infrastructure driver is present
             auto is_hyperv_service_running = []() noexcept -> bool {
-                const wchar_t* service_name = L"vid";
+                const wchar_t* service_name = L"vid"; // others like vmbus are not always running in host partitions
                 SC_HANDLE sc_manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
                 if (!sc_manager) {
                     return false;
@@ -4011,13 +4013,6 @@ public:
             }
             else {
                 if (!is_root_partition()) {
-                    // a QEMU/KVM guest running with Hyper-V enlightenments presents "Microsoft Hv" at
-                    // leaf 0x40000000 (so the Windows guest uses the fast Hyper-V ABI) while KVM relocates
-                    // its own "KVMKVMKVM" signature to leaf 0x40000100. That secondary signature is an
-                    // unambiguous tell of QEMU/KVM. A guest is not a root partition, so this must be
-                    // checked here -- otherwise the enlightenment check exists only in the
-                    // is_root_partition() branch below, leaving enlightened guests (the common
-                    // case) misdetected as genuine Hyper-V.
                     const std::string enlightenment_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor + 0x100); // 0x40000100
 
                     if (util::find(enlightenment_str, "KVM")) {
@@ -4026,7 +4021,7 @@ public:
                         state = HYPERV_ENLIGHTENMENT;
                     }
                     else if (eax() == 11 && is_hyperv_present()) {
-                        // Windows machine running under Hyper-V type 2
+                        // windows machine running under Hyper-V type 2
                         debug("HYPER-X: Detected Hyper-V guest VM");
                         core::add(brand_enum::HYPERV);
                         state = HYPERV_REAL_VM;
