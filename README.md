@@ -16,25 +16,24 @@
 The library is:
 - Very easy to use
 - Cross-platform (Windows + MacOS + Linux)
-- Multi-architecture support (amd64, arm64, armhf, armel, i386, mips64el, ppc64el, riscv64, s390x)
-- Features around 90 unique VM detection techniques [[list](https://github.com/NotRequiem/VMAware/blob/main/docs/documentation.md#flag-table)]
-- Features the most cutting-edge techniques
-- Able to detect around 70 VM brands including VMware, VirtualBox, QEMU, Hyper-V, and much more [[list](https://github.com/NotRequiem/VMAware/blob/main/docs/documentation.md#brand-table)]
+- Multi-architecture compatible (amd64, arm64, armhf, armel, i386, mips64el, ppc64el, riscv64, s390x)
+- Equipped with around 90 unique VM detection techniques [[list](https://github.com/NotRequiem/VMAware/blob/main/docs/documentation.md#flag-table)]
+- Built with the most cutting-edge techniques
+- Capable of detecting around 70 VM brands, including VMware, VirtualBox, QEMU, Hyper-V, and many more [[list](https://github.com/NotRequiem/VMAware/blob/main/docs/documentation.md#brand-table)]
 - Able to beat VM hardeners
-- Very flexible, with total fine-grained control over which techniques get executed
-- Able to detect various VM and semi-VM technologies like hypervisors, emulators, containers, sandboxes, and so on
+- Very flexible, with fine-grained control over which techniques get executed
+- Capable of detecting various VM and semi-VM technologies, including hypervisors, emulators, containers, sandboxes, and more
+- Memoized, meaning past results are cached and retrieved if ran again for performance benefits 
 - Available with C++11 and above
-- Contains an ecosystem of ports to other languages such as Rust, JavaScript, and Ruby
+- Backed by an ecosystem of ports to other languages such as Rust, JavaScript, and Ruby
 - Header-only
 - Free of any external dependencies
-- Memoized, meaning past results are cached and retrieved if ran again for performance benefits 
 - Fully MIT-licensed, allowing unrestricted use and distribution
 
 <br>
 
 > [!NOTE]
 > We are looking for translators willing to translate this README into your native language. If you'd like to contribute, feel free to give us a PR! 
-
 
 ## Example 🧪
 ```cpp
@@ -369,6 +368,7 @@ And if you found this project useful, a star would be appreciated :)
 - [Marcel](https://github.com/MarcelDev)
 - [Max Ufer](https://github.com/Manny684)
 - [Everdox](https://github.com/everdox)
+- [snackapps](https://github.com/snackapps)
  
 <br>
 
