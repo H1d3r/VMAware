@@ -491,7 +491,6 @@ public:
         AUDIO,
         DISPLAY,
         DLL,
-        VMWARE_BACKDOOR,
         WINE,
         VIRTUAL_REGISTRY,
         MUTEX,
@@ -9153,67 +9152,6 @@ public:
 
 
     /**
-     * @brief Check for official VMware io port backdoor technique
-     * @category Windows, x86_32
-     * @author Code from ScoopyNG by Tobias Klein, technique founded by Ken Kato
-     * @copyright BSD clause 2
-     * @implements VM::VMWARE_BACKDOOR
-     */
-    [[nodiscard]] static bool vmware_backdoor() {
-        bool is_vm = false;
-    #if (x86_32 && !CLANG)
-        u32 a = 0;
-        u32 b = 0;
-
-        constexpr std::array<i16, 2> ioports = { { 'VX' , 'VY' } };
-        i16 ioport;
-
-        for (u8 i = 0; i < ioports.size(); ++i) {
-            ioport = ioports[i];
-            for (u8 cmd = 0; cmd < 0x2c; ++cmd) {
-                __try {
-                    __asm {
-                        push eax
-                        push ebx
-                        push ecx
-                        push edx
-
-                        mov eax, 'VMXh'
-                        movzx ecx, cmd
-                        mov dx, ioport
-                        in eax, dx      // <- key point is here
-
-                        mov a, ebx
-                        mov b, ecx
-
-                        pop edx
-                        pop ecx
-                        pop ebx
-                        pop eax
-                    }
-
-                    is_vm = true;
-                    break;
-                }
-                __except (EXCEPTION_EXECUTE_HANDLER) {}
-            }
-        }
-
-        if (is_vm) {
-            switch (b) {
-                case 1:  return core::add(brand_enum::VMWARE_EXPRESS);
-                case 2:  return core::add(brand_enum::VMWARE_ESX);
-                case 3:  return core::add(brand_enum::VMWARE_GSX);
-                case 4:  return core::add(brand_enum::VMWARE_WORKSTATION);
-                default: return core::add(brand_enum::VMWARE);
-            }
-        }
-    #endif
-        return is_vm;
-    }
-
-
-    /**
      * @brief Check for mutex strings of VM brands
      * @category Windows
      * @author from VMDE project
@@ -13819,7 +13757,6 @@ public:
             case VMWARE_SCSI: return "VMWARE_SCSI";
             case VMWARE_DMESG: return "VMWARE_DMESG";
             case VMWARE_STR: return "VMWARE_STR";
-            case VMWARE_BACKDOOR: return "VMWARE_BACKDOOR";
             case MUTEX: return "MUTEX";
             case THREAD_MISMATCH: return "THREAD_MISMATCH";
             case CUCKOO_DIR: return "CUCKOO_DIR";
@@ -14424,7 +14361,6 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::DLL, {50, VM::dll}},
             {VM::AUDIO, {25, VM::audio}},
             {VM::DISPLAY, {25, VM::display}},
-            {VM::VMWARE_BACKDOOR, {100, VM::vmware_backdoor}},
             {VM::VIRTUAL_REGISTRY, {90, VM::virtual_registry}},
             {VM::MUTEX, {100, VM::mutex}},
             {VM::VPC_INVALID, {75, VM::vpc_invalid}},

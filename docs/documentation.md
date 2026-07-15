@@ -538,7 +538,6 @@ VMAware provides a convenient way to not only check for VMs, but also have the f
 | `VM::VMWARE_SCSI` | Check for VMware string in /proc/scsi/scsi | 🐧 | 40% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6657) |
 | `VM::VMWARE_DMESG` | Check for VMware-specific device name in dmesg output | 🐧 | 65% | Admin |  | Disabled by default | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L6676) |
 | `VM::VMWARE_STR` | Check str assembly instruction method for VMware | 🪟 | 35% |  | 32-bit |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9138) |
-| `VM::VMWARE_BACKDOOR` | Check for official VMware io port backdoor technique | 🪟 | 100% |  | 32-bit |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9163) |
 | `VM::MUTEX` | Check for mutex strings of VM brands | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9224) |
 | `VM::THREAD_MISMATCH` | Check if the system's thread count matches the expected thread count for the detected CPU model | 🐧🪟🍏 | 50% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L5246) |
 | `VM::CUCKOO_DIR` | Check for cuckoo directory using crt and WIN API directory functions | 🪟 | 30% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L9310) |

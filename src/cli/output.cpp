@@ -567,7 +567,6 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::VMWARE_SCSI, "/proc/scsi/scsi file");
     checker(VM::VMWARE_DMESG, "VMware dmesg");
     checker(VM::VMWARE_STR, "STR instruction");
-    checker(VM::VMWARE_BACKDOOR, "VMware IO port backdoor");
     checker(VM::MUTEX, "mutex strings");
     checker(VM::THREAD_MISMATCH, "thread count mismatch");
     checker(VM::CUCKOO_DIR, "Cuckoo directory");
