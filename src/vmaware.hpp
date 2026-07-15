@@ -536,10 +536,6 @@ public:
         DMESG,
         HWMON,
         LINUX_USER_HOST,
-        VMWARE_IOMEM,
-        VMWARE_IOPORTS,
-        VMWARE_SCSI,
-        VMWARE_DMESG,
         QEMU_VIRTUAL_DMI,
         QEMU_USB,
         HYPERVISOR_DIR,
@@ -6318,23 +6314,6 @@ public:
 
 
     /**
-     * @brief Check for VMware string in /proc/iomem
-     * @category Linux
-     * @author idea from ScoopyNG by Tobias Klein
-     * @implements VM::VMWARE_IOMEM
-     */
-    [[nodiscard]] static bool vmware_iomem() {
-        const std::string iomem_file = util::read_file("/proc/iomem");
-
-        if (util::find(iomem_file, "VMware")) {
-            return core::add(brand_enum::VMWARE);
-        }
-
-        return false;
-    }
-
-
-    /**
      * @brief Check for the presence of BlueStacks-specific folders
      * @category ARM, Linux
      * @implements VM::BLUESTACKS_FOLDERS
@@ -6647,59 +6626,6 @@ public:
 
 
     /**
-     * @brief Check for VMware string in /proc/scsi/scsi
-     * @category Linux
-     * @author idea from ScoopyNG by Tobias Klein
-     * @implements VM::VMWARE_SCSI
-     */
-    [[nodiscard]] static bool vmware_scsi() {
-        const std::string scsi_file = util::read_file("/proc/scsi/scsi");
-
-        if (util::find(scsi_file, "VMware")) {
-            return core::add(brand_enum::VMWARE);
-        }
-
-        return false;
-    }
-
-        
-    /**
-     * @brief Check for VMware-specific device name in dmesg output
-     * @category Linux
-     * @author idea from ScoopyNG by Tobias Klein
-     * @note Disabled by default
-     * @warning Permissions required
-     * @implements VM::VMWARE_DMESG
-     */
-    [[nodiscard]] static bool vmware_dmesg() {
-        if (!util::is_admin()) {
-            return false;
-        }
-
-        if (!util::exists("/usr/bin/dmesg")) {
-            return false;
-        }
-
-        auto dmesg_output = util::sys_result("dmesg");
-        const std::string& dmesg_o = *dmesg_output;
-
-        if (dmesg_o.empty()) {
-            return false;
-        }
-
-        if (util::find(dmesg_o, "BusLogic BT-958")) {
-            return core::add(brand_enum::VMWARE);
-        }
-
-        if (util::find(dmesg_o, "pcnet32")) {
-            return core::add(brand_enum::VMWARE);
-        }
-
-        return false;
-    }
-
-
-    /**
      * @brief Check for potential VM info in /proc/sysinfo
      * @author idea from https://github.com/ShellCode33/VM-Detection/blob/master/vmdetect/linux.go
      * @category Linux
@@ -6845,23 +6771,6 @@ public:
             return core::add(brand_enum::PODMAN);
         }
 
-        return false;
-    }
-
-
-    /**
-     * @brief Check for VMware string in /proc/ioports
-     * @category Linux
-     * @author idea from ScoopyNG by Tobias Klein
-     * @implements VM::VMWARE_IOPORTS
-     */
-    [[nodiscard]] static bool vmware_ioports() {
-        const std::string ioports_file = util::read_file("/proc/ioports");
-    
-        if (util::find(ioports_file, "VMware")) {
-            return core::add(brand_enum::VMWARE);
-        }
-    
         return false;
     }
 
@@ -13752,10 +13661,6 @@ public:
             case MAC_SIP: return "MAC_SIP";
             case VPC_INVALID: return "VPC_INVALID";
             case SYSTEM_REGISTERS: return "SYSTEM_REGISTERS";
-            case VMWARE_IOMEM: return "VMWARE_IOMEM";
-            case VMWARE_IOPORTS: return "VMWARE_IOPORTS";
-            case VMWARE_SCSI: return "VMWARE_SCSI";
-            case VMWARE_DMESG: return "VMWARE_DMESG";
             case VMWARE_STR: return "VMWARE_STR";
             case MUTEX: return "MUTEX";
             case THREAD_MISMATCH: return "THREAD_MISMATCH";
@@ -14315,7 +14220,6 @@ VM::u8 VM::detected_count_num = 0;
 
 std::vector<VM::enum_flags> VM::disabled_techniques = []() {
     std::vector<VM::enum_flags> c;
-    c.push_back(VM::VMWARE_DMESG);
     return c;
 }();
 
@@ -14391,10 +14295,6 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::DMESG, {55, VM::dmesg}},
             {VM::HWMON, {35, VM::hwmon}},
             {VM::LINUX_USER_HOST, {10, VM::linux_user_host}},
-            {VM::VMWARE_IOMEM, {65, VM::vmware_iomem}},
-            {VM::VMWARE_IOPORTS, {70, VM::vmware_ioports}},
-            {VM::VMWARE_SCSI, {40, VM::vmware_scsi}},
-            {VM::VMWARE_DMESG, {65, VM::vmware_dmesg}},
             {VM::QEMU_VIRTUAL_DMI, {40, VM::qemu_virtual_dmi}},
             {VM::QEMU_USB, {20, VM::qemu_USB}},
             {VM::HYPERVISOR_DIR, {20, VM::hypervisor_dir}},

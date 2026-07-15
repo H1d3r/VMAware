@@ -83,7 +83,6 @@ static bool are_perms_required(const VM::enum_flags flag) {
     }
 
     switch (flag) {
-        case VM::VMWARE_DMESG:
         case VM::DMIDECODE:
         case VM::DMESG:
         case VM::QEMU_USB:
@@ -562,10 +561,6 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::HANDLES, "device handles");
     checker(VM::VPC_INVALID, "VPC invalid instructions");
     checker(VM::SYSTEM_REGISTERS, "task segment and descriptor tables");
-    checker(VM::VMWARE_IOMEM, "/proc/iomem file");
-    checker(VM::VMWARE_IOPORTS, "/proc/ioports file");
-    checker(VM::VMWARE_SCSI, "/proc/scsi/scsi file");
-    checker(VM::VMWARE_DMESG, "VMware dmesg");
     checker(VM::VMWARE_STR, "STR instruction");
     checker(VM::MUTEX, "mutex strings");
     checker(VM::THREAD_MISMATCH, "thread count mismatch");
