@@ -5688,8 +5688,7 @@ public:
         bool is_intel = cpu::is_intel();
         double threshold = 2.5;
         if (util::hyper_x() == HYPERV_HOST) {
-            if (is_intel) threshold = 17.5;
-            else          threshold = 45.0;
+            threshold = 50.0;
         }
 
         // shared state and results
