@@ -5490,7 +5490,7 @@ public:
         if (found) {
             debug("CPU model = ", model_name);
 
-        #if (WINDOWS && __VMAWARE_DEBUG__)
+        #if (WINDOWS && defined __VMAWARE_DEBUG__)
             const char* manufacturer = "";
             const char* model = "";
             util::get_manufacturer_model(&manufacturer, &model);
