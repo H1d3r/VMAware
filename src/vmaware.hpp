@@ -3427,6 +3427,7 @@ public:
             timer::timer_tick_t& r_pre,
             timer::timer_tick_t& r_post
         ) noexcept {
+        #if (x86)
             switch (count) {
             case 1:
                 r_pre = counter;
@@ -3471,6 +3472,7 @@ public:
                 r_post = counter;
                 break;
             }
+        #endif
         }
 
         // fully unrolled timing paths for AMD (LFENCE) or older Intel
@@ -3480,6 +3482,7 @@ public:
             timer::timer_tick_t& r_pre,
             timer::timer_tick_t& r_post
         ) noexcept {
+        #if (x86)
             switch (count) {
             case 1:
                 r_pre = counter; 
@@ -3547,6 +3550,7 @@ public:
                 r_post = counter;
                 break;
             }
+        #endif
         }
 
         // we dont use cpu::cpuid on purpose
