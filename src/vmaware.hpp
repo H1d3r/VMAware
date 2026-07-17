@@ -3073,6 +3073,7 @@ public:
 
         #define VMAWARE_STR2(x) #x
         #define VMAWARE_STR(x) VMAWARE_STR2(x)
+
         [[nodiscard]] static u32 get_ct_seed() {
             constexpr char s[] = __DATE__ " " __TIME__ " " __FILE__ " " VMAWARE_STR(__LINE__);
             u32 h = 2166136261u;
@@ -3306,33 +3307,261 @@ public:
             return 1ull << logical;
         }
 
+        static void warmup_cpu(const bool is_intel) noexcept {
+            // signal Intel Speed Shift / AMD CPPC to force maximum non-AVX Turbo/P-state frequency transition
+            uint64_t val = 0x5a5a5a5a5a5a5a5aULL;
+            for (uint32_t i = 0; i < 2'000'000; ++i) {
+                val = (val ^ i) * 6364136223846793005ULL + 1442695040888963407ULL;
+            }
+            volatile uint64_t compiler_sink = val;
+            VMAWARE_UNUSED(compiler_sink);
+
+            // warm up the decoded i-cache (DSB), BTB, and microcode sequencer
+            if (is_intel) {
+                for (int i = 0; i < 5000; ++i) {
+                    _serialize();
+                    std::atomic_signal_fence(std::memory_order_seq_cst);
+                }
+            }
+            else {
+                for (int i = 0; i < 5000; ++i) {
+                    _mm_lfence();
+                    std::atomic_signal_fence(std::memory_order_seq_cst);
+                }
+            }
+        }
+
+        [[nodiscard]] static inline size_t clamp_c11(const size_t val, const size_t min_val, const size_t max_val) {
+            return (val < min_val) ? min_val : ((val > max_val) ? max_val : val);
+        }
+
+        [[nodiscard]] static size_t get_instruction_count(volatile const timer::timer_tick_t& shared_counter, const bool is_intel) {
+        #define CAL_DEP_10(reg)  reg += 1; reg += 1; reg += 1; reg += 1; reg += 1; \
+                             reg += 1; reg += 1; reg += 1; reg += 1; reg += 1;
+
+        #define CAL_DEP_100(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) \
+                             CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg)
+
+            size_t count = 0;
+
+            constexpr int TRIALS = 15;
+            timer::timer_tick_t min_dep_ticks = (std::numeric_limits<timer::timer_tick_t>::max)();
+            timer::timer_tick_t min_instr_ticks = (std::numeric_limits<timer::timer_tick_t>::max)();
+
+            // 1. measure the minimum ticks for a 100-cycle dependency chain (our cycle reference)
+            for (int t = 0; t < TRIALS; ++t) {
+                timer::timer_tick_t sync = shared_counter;
+                while (shared_counter == sync); // align to tick boundary
+
+                timer::timer_tick_t start = shared_counter;
+                std::atomic_signal_fence(std::memory_order_seq_cst);
+
+                volatile uint64_t reg = 0;
+                CAL_DEP_100(reg);
+
+                std::atomic_signal_fence(std::memory_order_seq_cst);
+                timer::timer_tick_t end = shared_counter;
+                timer::timer_tick_t diff = end - start;
+
+                if (diff < min_dep_ticks && diff > 0) {
+                    min_dep_ticks = diff;
+                }
+            }
+
+            // 2. measure the minimum ticks for a single execution of the target serializing instruction
+            for (int t = 0; t < TRIALS; ++t) {
+                timer::timer_tick_t sync = shared_counter;
+                while (shared_counter == sync);
+
+                timer::timer_tick_t start = shared_counter;
+                std::atomic_signal_fence(std::memory_order_seq_cst);
+
+                if (is_intel) {
+                    _serialize();
+                }
+                else {
+                    _mm_lfence();
+                }
+
+                std::atomic_signal_fence(std::memory_order_seq_cst);
+                timer::timer_tick_t end = shared_counter;
+                timer::timer_tick_t diff = end - start;
+
+                if (diff < min_instr_ticks && diff > 0) {
+                    min_instr_ticks = diff;
+                }
+            }
+
+            // if counter resolution was too coarse to capture differences
+            if (min_dep_ticks == (std::numeric_limits<timer::timer_tick_t>::max)() || min_instr_ticks == 0) {
+                debug("TIMER: Calibration did not produce accurate results, applying most stable configuration possible");
+                count = is_intel ? 3 : 8; // sane defaults collected across multiple experimental tests
+                return count;
+            }
+
+            // physical latency of the serializing instruction in CPU cycles
+            const double cycles_per_tick = 100.0 / static_cast<double>(min_dep_ticks);
+            const double instr_latency_cycles = static_cast<double>(min_instr_ticks) * cycles_per_tick;
+
+            // CPUID is roughly equal to SERIALIZE latency + microcode overhead
+            constexpr double microcode_lookup_overhead = 80.0; // average overhead of a microcode table lookup when checking for the 0x0 leaf in all microarchitectures
+            const double estimated_cpuid_cycles = instr_latency_cycles + microcode_lookup_overhead;
+            const double calculated_ratio = estimated_cpuid_cycles / instr_latency_cycles;
+
+            // clamp the instruction count to realistic physical ranges
+            const size_t final_count = static_cast<size_t>(calculated_ratio + 0.5);
+            if (is_intel) {
+                count = clamp_c11(final_count, 1, 6);
+            }
+            else {
+                count = clamp_c11(final_count, 2, 12); // LFENCE is naturally faster than SERIALIZE
+            }
+
+            return count;
+        }
+
+        // fully unrolled timing paths for Intel (SERIALIZE)
+        VMAWARE_FORCE_INLINE static void serialize(
+            const size_t count,
+            volatile const timer::timer_tick_t& counter,
+            timer::timer_tick_t& r_pre,
+            timer::timer_tick_t& r_post
+        ) noexcept {
+            switch (count) {
+            case 1:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _serialize();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            case 2:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _serialize(); _serialize();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            case 3:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _serialize(); _serialize(); _serialize();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            case 4:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _serialize(); _serialize(); _serialize(); _serialize();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            case 5:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _serialize(); _serialize(); _serialize(); _serialize(); _serialize();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            default:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _serialize(); _serialize(); _serialize(); _serialize(); _serialize(); _serialize();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            }
+        }
+
+        // fully unrolled timing paths for AMD (LFENCE) or older Intel
+        VMAWARE_FORCE_INLINE static void lfence(
+            const size_t count,
+            volatile const timer::timer_tick_t& counter,
+            timer::timer_tick_t& r_pre,
+            timer::timer_tick_t& r_post
+        ) noexcept {
+            switch (count) {
+            case 1:
+                r_pre = counter; 
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _mm_lfence();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            case 2:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _mm_lfence(); _mm_lfence();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            case 3:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _mm_lfence(); _mm_lfence(); _mm_lfence();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            case 4:
+                r_pre = counter; 
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            case 5:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            case 6:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            case 7:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            case 8:
+                r_pre = counter;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            default: // case 9+ and safety fallback
+                r_pre = counter; 
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); 
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                r_post = counter;
+                break;
+            }
+        }
+
         // we dont use cpu::cpuid on purpose
         static VMAWARE_FORCE_INLINE void vmexit() {
         #if (x86)
             #if (GCC || CLANG)
-                u32 a = 0, c = 0, d = 0;
-                #if (x86_64)
+                u32 a = 0;
+                u32 b, c, d;
                 __asm__ volatile (
-                    "pushq %%rbx\n\t" // better than doing something like xchgq %%rbx, %%rdi\n\t to swap rbx to rdi avoiding GCC pushing/popping rbx on the stack
-                    "cpuid\n\t"
-                    "popq %%rbx\n\t"
-                    : "+a"(a), "+c"(c), "=d"(d) // + mapping forces compiler to use registers, avoids stack spills
-                    :
-                    : "cc"
-                    );
-                #else
-                __asm__ volatile (
-                    "pushl %%ebx\n\t"
-                    "cpuid\n\t"
-                    "popl %%ebx\n\t"
-                    : "+a"(a), "+c"(c), "=d"(d)
-                    :
-                    : "cc"
-                    );
-                #endif
+                    "cpuid"
+                    : "+a"(a), "=b"(b), "=c"(c), "=d"(d)
+                );
             #else
-                i32 dummy[4];
-                __cpuidex(dummy, 0x0, 0); // leaf 0 instead of invalid ones like 0x20000000 because it's the most stable, even if it's the fastest one (we target context switch latency only)
+                int dummy[4];
+                __cpuid(dummy, 0);
             #endif
         #endif
         }
@@ -5729,6 +5958,8 @@ public:
             __attribute__((__target__("serialize")))
         #endif
         {
+            // if the CPU running this code supports SERIALIZE, it should be used as the reference for our vmexit (CPUID), as SERIALIZE is the closest architectural match to CPUID
+            // if SERIALIZE is not supported, LFENCE is the second closest architectural match to CPUID in terms of microarchitecture behavior that can't be intercepted in VMCB/VMCS
             if (is_intel) {
                 // SERIALIZE requires Ice Lake or newer
                 u32 l7_eax = 0, l7_ebx = 0, l7_ecx = 0, l7_edx = 0;
@@ -5748,7 +5979,7 @@ public:
             SetThreadPriorityBoost(current_thread, TRUE); // disable dynamic thread priority adjustments by Windows, not turbo boosts by the hardware itself
 
             // important so that hypervisor can't predict how many samples we will collect
-            // stack-only / ASLR-derived component (no APIs, no rdtsc)
+            // stack-only / ASLR-derived component (no APIs, no interceptable instructions by hypervisors)
             u64 seed = 0;
             seed ^= static_cast<u64>(ct_seed);
 
@@ -5778,28 +6009,27 @@ public:
             std::uniform_int_distribution<size_t> batch_dist(30000, 70000);
             const size_t BATCH_SIZE = batch_dist(gen);
 
-            SleepEx(0, FALSE); // try to get fresh quantum before starting warm-up phase, give time to kernel to setup priorities
+            SleepEx(0, FALSE); // try to get fresh quantum before starting warm-up phase, give time to the kernel to setup priorities
 
             std::vector<timer::timer_tick_t> vm_samples(BATCH_SIZE), ref_samples(BATCH_SIZE); // pre page-fault MMU, wwe wont warm-up cpuid samples for the P-states intentionally
             VirtualLock(vm_samples.data(), BATCH_SIZE * sizeof(timer::timer_tick_t)); // lock the memory for the samples to prevent page faults if permissions are enough
             VirtualLock(ref_samples.data(), BATCH_SIZE * sizeof(timer::timer_tick_t));
 
-            state.start_test.store(true, std::memory_order_release); // _mm_pause can be exited conditionally, spam hit L3
+            // clear pending execution state only for the first loop iteration, legacy fallback for _serialize
+            _mm_mfence(); // force all previous memory operations to commit to the cache hierarchy and empty store buffer
+            _mm_lfence(); // prevent any subsequent instructions from decoding or executing until all previous instructions in the reorder buffer have retired
+
+            state.start_test.store(true, std::memory_order_release); 
 
             // independent multi-trial state initialization
+            constexpr int TRIALS = 3;
             timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
             timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
-            constexpr int TRIALS = 3;
 
             // cache and cpu scheduler warm-up won't affect anything in the measurement loop, so ramp up frequency/P-states to a high non-AVX Turbo/P-state without vmexits
-            u64 val = static_cast<u64>(seed) ^ 0x5a5a5a5a5a5a5a5aULL;
+            timer::warmup_cpu(is_intel);
 
-            for (u32 i = 0; i < 12'000'000; ++i) {
-                val = (val ^ i) * 6364136223846793005ULL + 1442695040888963407ULL;
-            }
-
-            volatile u64 compiler_sink = val;
-            VMAWARE_UNUSED(compiler_sink);
+            const size_t instruction_count = timer::get_instruction_count(state.counter, is_intel); // must be placed after the warmup
 
             for (int trial = 0; trial < TRIALS; ++trial) {
                 size_t valid = 0;
@@ -5820,15 +6050,12 @@ public:
                         // SERIALIZE/LFENCE check is before CPUID on purpose, so that possible pauses when cpuid is executed do not affect SERIALIZE/LFENCE too. The hv needs to wait for cpuid to pause the thread
                         // the amount of instructions (8 in case of LFENCE) are enough for the Cross-Core/Cross-CCD MESI RFO cache bounce in the data race so that the counter thread sees an increment
                         sync = state.counter;
-                        while (state.counter == sync); // fastest busy-waiting strategy, PAUSE affects cache, calling APIs like SwitchToThread() would be even worse
-                        r_pre = state.counter;
-                        std::atomic_signal_fence(std::memory_order_seq_cst); // ensure compiler-level ordering
-                        _serialize();
-                        std::atomic_signal_fence(std::memory_order_seq_cst);
-                        r_post = state.counter;
+                        while (state.counter == sync); // fastest busy-waiting strategy, PAUSE can conditionally exit, calling APIs like SwitchToThread() would be even worse
+                        
+                        timer::serialize(instruction_count, state.counter, r_pre, r_post);
 
                         sync = state.counter;
-                        while (state.counter == sync); // sync to our counter tick again
+                        while (state.counter == sync); // sync to our counter tick again by spam hitting L3
                         sync = state.counter;
                         while (state.counter == sync); // and again
 
@@ -5859,40 +6086,27 @@ public:
                 }
                 else {
                     while (valid < BATCH_SIZE && invalid < local_max_attempts) {
-                        // cpuid and serialize/lfence interpolated so that any turbo boost, thermal throttling, speculation (for the loop overhead itself, not for the serializing instructions), etc affects samples equally
+                        // this block's logic is the same as above but using LFENCE instead of SERIALIZE, read code comments above
                         timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
-                        // this is done as a counter to both legitimate and malicious hypervisors interrupts that may pause the counter thread while we measure
                         sync = state.counter;
-                        while (state.counter == sync); // infer if counter got enough quantum momentum (so its currently scheduled)
-
-                        // SERIALIZE/LFENCE check is before CPUID on purpose, so that possible pauses when cpuid is executed do not affect SERIALIZE/LFENCE too. The hv needs to wait for cpuid to pause the thread
-                        // the amount of instructions (8 in case of LFENCE) are enough for the Cross-Core/Cross-CCD MESI RFO cache bounce in the data race so that the counter thread sees an increment
+                        while (state.counter == sync); 
                         sync = state.counter;
                         while (state.counter == sync);
-                        r_pre = state.counter;
-                        std::atomic_signal_fence(std::memory_order_seq_cst);
-                        _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
-                        std::atomic_signal_fence(std::memory_order_seq_cst);
-                        r_post = state.counter;
 
+                        timer::lfence(instruction_count, state.counter, r_pre, r_post);
+                        
                         sync = state.counter;
-                        while (state.counter == sync); // sync to our counter tick again
+                        while (state.counter == sync); 
                         sync = state.counter;
-                        while (state.counter == sync); // and again
+                        while (state.counter == sync); 
 
                         v_pre = state.counter;
-                        std::atomic_signal_fence(std::memory_order_seq_cst); // _ReadWriteBarrier() aka dont emit runtime fences
-
-                        // the only way a legitimate interrupt can make the check false flag is if most of the samples were contaminated just in the cpuid samples but not in the serialize/lfence samples
-                        // still possible tho, but it's as accurate we can get on user-mode without relying on any other hardware clock or cross-referencing with the counter thread mid-execution
-                        // this is why the score of this technique is not enough to determine a VM
+                        std::atomic_signal_fence(std::memory_order_seq_cst); 
                         timer::vmexit();
-
                         std::atomic_signal_fence(std::memory_order_seq_cst);
                         v_post = state.counter;
 
-                        // we dont filter by cycles spent here (for example by querying thread cycle time) because the point of this function is to not use TSC or any other clock
                         if (v_post > v_pre && r_post > r_pre) {
                             vm_samples[valid] = v_post - v_pre;
                             ref_samples[valid] = r_post - r_pre;
@@ -5902,7 +6116,6 @@ public:
                             invalid++;
                         }
 
-                        // burn cycles executing a random number of instructions in each loop iteration, so that the hypervisor doesn't know when to pause the counter thread
                         timer::burn_random_cycles(ct_seed, v_post, r_post);
                     }
                 }
@@ -12708,7 +12921,7 @@ public:
         using tbsip_context_close_fn = TBS_RESULT(__stdcall*)(TBS_HCONTEXT);
         using tbsi_get_tcg_log_fn = TBS_RESULT(__stdcall*)(TBS_HCONTEXT, PBYTE, PUINT32);
 
-        auto parse_log = [](const std::vector<u8>& logData) noexcept -> bool {
+        auto parse_log = [](const std::vector<u8>& log_data) noexcept -> bool {
             auto read_u16 = [](const u8* ptr) noexcept -> u16 {
                 u16 val = 0;
                 memcpy(&val, ptr, sizeof(u16));
@@ -12739,12 +12952,12 @@ public:
                 return val;
             };
 
-            if (logData.size() < sizeof(TCG_PCR_EVENT_HEADER)) {
+            if (log_data.size() < sizeof(TCG_PCR_EVENT_HEADER)) {
                 return false;
             }
 
-            const u8* pBuffer = logData.data();
-            const size_t total_size = logData.size();
+            const u8* pBuffer = log_data.data();
+            const size_t total_size = log_data.size();
 
             // Validate the mandatory Spec ID Event header (legacy format)
             const TCG_PCR_EVENT_HEADER first_hdr = read_hdr(pBuffer);
