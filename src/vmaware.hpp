@@ -3050,12 +3050,13 @@ public:
 
 #if (WINDOWS)
     // timer helper functionalities
+    #if (x86)
     struct timer {
-    #if (x86_64)
-        using timer_tick_t = u64;
-    #else
-        using timer_tick_t = u32;
-    #endif
+        #if (x86_64)
+            using timer_tick_t = u64;
+        #else
+            using timer_tick_t = u32;
+        #endif
 
         #if (MSVC)
             #pragma warning(push)
@@ -3427,7 +3428,6 @@ public:
             timer::timer_tick_t& r_pre,
             timer::timer_tick_t& r_post
         ) noexcept {
-        #if (x86)
             switch (count) {
             case 1:
                 r_pre = counter;
@@ -3472,7 +3472,6 @@ public:
                 r_post = counter;
                 break;
             }
-        #endif
         }
 
         // fully unrolled timing paths for AMD (LFENCE) or older Intel
@@ -3482,7 +3481,6 @@ public:
             timer::timer_tick_t& r_pre,
             timer::timer_tick_t& r_post
         ) noexcept {
-        #if (x86)
             switch (count) {
             case 1:
                 r_pre = counter; 
@@ -3550,12 +3548,10 @@ public:
                 r_post = counter;
                 break;
             }
-        #endif
         }
 
         // we dont use cpu::cpuid on purpose
         static VMAWARE_FORCE_INLINE void vmexit() {
-        #if (x86)
             #if (GCC || CLANG)
                 u32 a = 0;
                 u32 b, c, d;
@@ -3567,7 +3563,6 @@ public:
                 int dummy[4];
                 __cpuid(dummy, 0);
             #endif
-        #endif
         }
 
         [[nodiscard]] static timer_tick_t calculate_latency(const std::vector<timer_tick_t>& samples_in) {
@@ -3622,6 +3617,7 @@ public:
             std::atomic_signal_fence(std::memory_order_acq_rel);
         }
     };
+    #endif
 #endif
 
     // miscellaneous functionalities
