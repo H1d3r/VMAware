@@ -492,7 +492,7 @@ public:
         EIP_OVERFLOW,
         SVM_EXCEPTIONS,
         HYPERV_NESTED,
-        TPM,
+        MEASURED_BOOT,
 
         // Linux and Windows
         SYSTEM_REGISTERS,
@@ -675,7 +675,7 @@ public:
     static u16 technique_count; // get total number of techniques
 
     static std::vector<enum_flags> disabled_techniques;
-    static constexpr std::array<enum_flags, 1> experimental_techniques{ { TPM } };
+    static constexpr std::array<enum_flags, 1> experimental_techniques{ { TPM_PASSTHROUGH } };
 
 #if (WINDOWS)
     using brand_score_t = i32;
@@ -12888,9 +12888,9 @@ public:
     /**
      * @brief Check measured boot logs exported by the TPM
      * @category Windows
-     * @implements VM::TPM
+     * @implements VM::MEASURED_BOOT
      */
-    [[nodiscard]] static bool tpm() {
+    [[nodiscard]] static bool measured_boot() {
         using TBS_RESULT = UINT32;
         using TBS_HCONTEXT = void*;
 
@@ -12959,7 +12959,7 @@ public:
             const u8* pBuffer = log_data.data();
             const size_t total_size = log_data.size();
 
-            // Validate the mandatory Spec ID Event header (legacy format)
+            // validate Spec ID Event header (legacy format)
             const TCG_PCR_EVENT_HEADER first_hdr = read_hdr(pBuffer);
             if (first_hdr.pcrIndex != 0 || first_hdr.eventType != 0x00000003 /* EV_NO_ACTION */) {
                 return false;
@@ -13002,7 +13002,7 @@ public:
                 }
             };
 
-            // Move pointer to sequential crypto-agile TCG_PCR_EVENT2 items
+            // move pointer to sequential crypto-agile TCG_PCR_EVENT2 items
             size_t current_offset = first_event_data_offset + spec_id_size;
 
             while (current_offset < total_size) {
@@ -13058,7 +13058,7 @@ public:
 
                 if (pcrIndex == 0 && eventType == 0x00000008) {
                     if (eventSize == 2 && payload[0] == 0x00 && payload[1] == 0x00) {
-                        debug("TPM: Detected null payload");
+                        debug("MEASURED_BOOT: Detected null payload");
                         return true;
                     }
                 }
@@ -13070,7 +13070,7 @@ public:
 
                         if ((base_addr == 0x830000 && blob_len == 0xD0000) ||
                             (base_addr == 0x900000 && blob_len == 0xE80000)) {
-                            debug("TPM: Detected OVMF's memory bounds of the SEC and PEI execution phases");
+                            debug("MEASURED_BOOT: Detected OVMF's memory bounds of the SEC and PEI execution phases");
                             return true;
                         }
                     }
@@ -13142,6 +13142,9 @@ public:
         FreeLibrary(hTbs);
         return vm_detected;
     }
+
+
+
     // ADD NEW TECHNIQUE FUNCTION HERE
 
     #if (CLANG)
@@ -13906,7 +13909,7 @@ public:
             case SVM_EXCEPTIONS: return "SVM_EXCEPTIONS";
             case CGROUP: return "CGROUP";
             case HYPERV_NESTED: return "HYPERV_NESTED";
-            case TPM: return "TPM";
+            case MEASURED_BOOT: return "MEASURED_BOOT";
             // END OF TECHNIQUE LIST
             case DEFAULT: return "DEFAULT"; 
             case ALL: return "ALL"; 
@@ -14430,7 +14433,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::TRAP, {100, VM::trap}},
             {VM::KVM_INTERCEPTION, {150, VM::kvm_interception}},
             {VM::SVM_EXCEPTIONS, {150, VM::svm_exceptions}},
-            {VM::TPM, {100, VM::tpm}},
+            {VM::MEASURED_BOOT, {100, VM::measured_boot}},
             {VM::INTERRUPT_SHADOW, {100, VM::interrupt_shadow}},
             {VM::EIP_OVERFLOW, {100, VM::eip_overflow}},
             {VM::HYPERVISOR_HOOK, {100, VM::hypervisor_hook}},

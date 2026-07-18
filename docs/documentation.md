@@ -589,7 +589,7 @@ VMAware provides a convenient way to not only check for VMs, but also have the f
 | `VM::SVM_EXCEPTIONS` | Check whether a hypervisor leaks EFER.SVME into guest context via SVM instruction fault type | 🪟 | 150% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12707) |
 | `VM::CGROUP` | Check for cgroup paths in /proc/self/cgroup | 🐧 | 70% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L7043) |
 | `VM::HYPERV_NESTED` | Check whether a hypervisor is nested within a Hyper-V partition | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12846) |
-| `VM::TPM` | Check measured boot logs exported by the TPM | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12856) |
+| `VM::MEASURED_BOOT` | Check measured boot logs exported by the TPM | 🪟 | 100% |  |  |  | [link](https://github.com/NotRequiem/VMAware/tree/main/src/vmaware.hpp#L12856) |
 <!-- END OF TECHNIQUE DOCUMENTATION -->
 
 <br>
