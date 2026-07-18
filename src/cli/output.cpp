@@ -615,7 +615,8 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::SVM_EXCEPTIONS, "SVM exceptions");
     checker(VM::CGROUP, "cgroup namespace");
     checker(VM::HYPERV_NESTED, "nested virtualization");
-    checker(VM::MEASURED_BOOT, "Measured boot logs");
+    checker(VM::MEASURED_BOOT, "measured boot logs");
+    checker(VM::TPM_PASSTHROUGH, "TPM passthrough");
     checker(VM::TIMER, "timing anomalies");
 
     const auto t2 = std::chrono::high_resolution_clock::now();

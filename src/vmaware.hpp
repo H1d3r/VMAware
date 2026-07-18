@@ -371,6 +371,7 @@
     #include <initguid.h>
     #include <devpkey.h>
     #include <devguid.h>
+    #include <bcrypt.h>
 
     #pragma comment(lib, "setupapi.lib")
     #pragma comment(lib, "powrprof.lib")
@@ -493,6 +494,7 @@ public:
         SVM_EXCEPTIONS,
         HYPERV_NESTED,
         MEASURED_BOOT,
+        TPM_PASSTHROUGH, 
 
         // Linux and Windows
         SYSTEM_REGISTERS,
@@ -3310,11 +3312,11 @@ public:
 
         static void warmup_cpu(const bool is_intel) noexcept {
             // signal Intel Speed Shift / AMD CPPC to force maximum non-AVX Turbo/P-state frequency transition
-            uint64_t val = 0x5a5a5a5a5a5a5a5aULL;
-            for (uint32_t i = 0; i < 2'000'000; ++i) {
+            u64 val = 0x5a5a5a5a5a5a5a5aULL;
+            for (u32 i = 0; i < 2'000'000; ++i) {
                 val = (val ^ i) * 6364136223846793005ULL + 1442695040888963407ULL;
             }
-            volatile uint64_t compiler_sink = val;
+            volatile u64 compiler_sink = val;
             VMAWARE_UNUSED(compiler_sink);
 
             // warm up the decoded i-cache (DSB), BTB, and microcode sequencer
@@ -3357,7 +3359,7 @@ public:
                 timer::timer_tick_t start = shared_counter;
                 std::atomic_signal_fence(std::memory_order_seq_cst);
 
-                volatile uint64_t reg = 0;
+                volatile u64 reg = 0;
                 CAL_DEP_100(reg);
 
                 std::atomic_signal_fence(std::memory_order_seq_cst);
@@ -13144,6 +13146,468 @@ public:
     }
 
 
+    /**
+     * @brief Check whether a TPM has been passed through to a VM
+     * @category Windows
+     * @implements VM::TPM_PASSTHROUGH
+     */
+    [[nodiscard]] static bool tpm_passthrough() {
+    #pragma pack(push, 1)
+        struct tcg_pcr_event_header {
+            u32 pcr_index;
+            u32 event_type;
+            u8 digest[20];
+            u32 event_size;
+        };
+    #pragma pack(pop)
+
+        struct tracked_event {
+            u32 event_type;
+            u8 digest[32];
+            u32 digest_size;
+        };
+
+        struct tracked_event_list {
+            tracked_event* items = nullptr;
+            u32 count = 0;
+            u32 capacity = 0;
+
+            void push(const tracked_event& ev) noexcept {
+                if (count == capacity) {
+                    const u32 new_cap = capacity ? capacity * 2 : 16;
+                    tracked_event* const new_items = static_cast<tracked_event*>(realloc(items, new_cap * sizeof(tracked_event)));
+                    if (new_items) {
+                        items = new_items;
+                        capacity = new_cap;
+                    }
+                }
+                if (count < capacity) {
+                    items[count++] = ev;
+                }
+            }
+
+            void free_list() noexcept {
+                if (items) {
+                    free(items);
+                    items = nullptr;
+                }
+                count = 0;
+                capacity = 0;
+            }
+        };
+
+        struct alg_size_pair {
+            u16 alg_id;
+            u16 digest_size;
+        };
+
+        struct alg_size_map {
+            alg_size_pair pairs[16] = {};
+            u32 count = 0;
+
+            void set(const u16 alg_id, const u16 digest_size) noexcept {
+                for (u32 i = 0; i < count; i++) {
+                    if (pairs[i].alg_id == alg_id) {
+                        pairs[i].digest_size = digest_size;
+                        return;
+                    }
+                }
+                if (count < 16) {
+                    pairs[count].alg_id = alg_id;
+                    pairs[count].digest_size = digest_size;
+                    count++;
+                }
+            }
+
+            u16 get(const u16 alg_id, bool* const found) const noexcept {
+                for (u32 i = 0; i < count; i++) {
+                    if (pairs[i].alg_id == alg_id) {
+                        if (found) *found = true;
+                        return pairs[i].digest_size;
+                    }
+                }
+                if (found) *found = false;
+                return 0;
+            }
+        };
+
+        struct tbs_context_params_2 {
+            u32 version;
+            u32 as_uint32;
+        };
+
+        using TBS_HCONTEXT = void*;
+        using TBS_RESULT = unsigned long;
+
+        using tbsip_context_close_t = TBS_RESULT(__stdcall*)(TBS_HCONTEXT);
+
+        HMODULE bcrypt_dll = nullptr;
+        HMODULE tbs_dll = nullptr;
+        TBS_HCONTEXT h_tbs_context = nullptr;
+        u8* log_buffer = nullptr;
+        tracked_event_list pcr_events[24] = {};
+        bool passthrough_detected = false;
+
+        auto free_resources = [&]() noexcept {
+            for (u32 i = 0; i < 24; ++i) {
+                pcr_events[i].free_list();
+            }
+            if (log_buffer) {
+                free(log_buffer);
+                log_buffer = nullptr;
+            }
+            if (h_tbs_context && tbs_dll) {
+                const char* close_name[] = { "Tbsip_Context_Close" };
+                void* close_func[1] = { nullptr };
+                util::get_function_address(tbs_dll, close_name, close_func, 1);
+                const auto p_tbsip_context_close = reinterpret_cast<tbsip_context_close_t>(close_func[0]);
+                if (p_tbsip_context_close) {
+                    p_tbsip_context_close(h_tbs_context);
+                }
+                h_tbs_context = nullptr;
+            }
+            if (tbs_dll) {
+                FreeLibrary(tbs_dll);
+                tbs_dll = nullptr;
+            }
+            if (bcrypt_dll) {
+                FreeLibrary(bcrypt_dll);
+                bcrypt_dll = nullptr;
+            }
+        };
+
+        bcrypt_dll = LoadLibraryW(L"bcrypt.dll");
+        if (!bcrypt_dll) {
+            return false;
+        }
+
+        tbs_dll = LoadLibraryW(L"tbs.dll");
+        if (!tbs_dll) {
+            free_resources();
+            return false;
+        }
+
+        const char* bcrypt_names[] = {
+            "BCryptOpenAlgorithmProvider",
+            "BCryptGetProperty",
+            "BCryptCreateHash",
+            "BCryptHashData",
+            "BCryptFinishHash",
+            "BCryptDestroyHash",
+            "BCryptCloseAlgorithmProvider"
+        };
+        void* bcrypt_funcs[7] = { nullptr };
+        util::get_function_address(bcrypt_dll, bcrypt_names, bcrypt_funcs, 7);
+
+        using bcrypt_open_algorithm_provider_t = NTSTATUS(__stdcall*)(BCRYPT_ALG_HANDLE*, LPCWSTR, LPCWSTR, ULONG);
+        using bcrypt_get_property_t = NTSTATUS(__stdcall*)(BCRYPT_HANDLE, LPCWSTR, PUCHAR, ULONG, ULONG*, ULONG);
+        using bcrypt_create_hash_t = NTSTATUS(__stdcall*)(BCRYPT_ALG_HANDLE, BCRYPT_HASH_HANDLE*, PUCHAR, ULONG, PUCHAR, ULONG, ULONG);
+        using bcrypt_hash_data_t = NTSTATUS(__stdcall*)(BCRYPT_HASH_HANDLE, PUCHAR, ULONG, ULONG);
+        using bcrypt_finish_hash_t = NTSTATUS(__stdcall*)(BCRYPT_HASH_HANDLE, PUCHAR, ULONG, ULONG);
+        using bcrypt_destroy_hash_t = NTSTATUS(__stdcall*)(BCRYPT_HASH_HANDLE);
+        using bcrypt_close_algorithm_provider_t = NTSTATUS(__stdcall*)(BCRYPT_ALG_HANDLE, ULONG);
+
+        const auto p_bcrypt_open_algorithm_provider = reinterpret_cast<bcrypt_open_algorithm_provider_t>(bcrypt_funcs[0]);
+        const auto p_bcrypt_get_property = reinterpret_cast<bcrypt_get_property_t>(bcrypt_funcs[1]);
+        const auto p_bcrypt_create_hash = reinterpret_cast<bcrypt_create_hash_t>(bcrypt_funcs[2]);
+        const auto p_bcrypt_hash_data = reinterpret_cast<bcrypt_hash_data_t>(bcrypt_funcs[3]);
+        const auto p_bcrypt_finish_hash = reinterpret_cast<bcrypt_finish_hash_t>(bcrypt_funcs[4]);
+        const auto p_bcrypt_destroy_hash = reinterpret_cast<bcrypt_destroy_hash_t>(bcrypt_funcs[5]);
+        const auto p_bcrypt_close_algorithm_provider = reinterpret_cast<bcrypt_close_algorithm_provider_t>(bcrypt_funcs[6]);
+
+        if (!p_bcrypt_open_algorithm_provider || !p_bcrypt_get_property || !p_bcrypt_create_hash ||
+            !p_bcrypt_hash_data || !p_bcrypt_finish_hash || !p_bcrypt_destroy_hash || !p_bcrypt_close_algorithm_provider) {
+            free_resources();
+            return false;
+        }
+
+        const char* tbs_names[] = {
+            "Tbsi_Context_Create",
+            "Tbsi_Get_TCG_Log_Ex",
+            "Tbsip_Submit_Command",
+            "Tbsip_Context_Close"
+        };
+        void* tbs_funcs[4] = { nullptr };
+        util::get_function_address(tbs_dll, tbs_names, tbs_funcs, 4);
+
+        using tbsi_context_create_t = TBS_RESULT(__stdcall*)(const void*, TBS_HCONTEXT*);
+        using tbsi_get_tcg_log_ex_t = TBS_RESULT(__stdcall*)(u32, u8*, u32*);
+        using tbsip_submit_command_t = TBS_RESULT(__stdcall*)(TBS_HCONTEXT, u32, u32, const u8*, u32, u8*, u32*);
+
+        const auto p_tbsi_context_create = reinterpret_cast<tbsi_context_create_t>(tbs_funcs[0]);
+        const auto p_tbsi_get_tcg_log_ex = reinterpret_cast<tbsi_get_tcg_log_ex_t>(tbs_funcs[1]);
+        const auto p_tbsip_submit_command = reinterpret_cast<tbsip_submit_command_t>(tbs_funcs[2]);
+        const auto p_tbsip_context_close = reinterpret_cast<tbsip_context_close_t>(tbs_funcs[3]);
+
+        if (!p_tbsi_context_create || !p_tbsi_get_tcg_log_ex || !p_tbsip_submit_command || !p_tbsip_context_close) {
+            free_resources();
+            return false;
+        }
+
+        auto calculate_sha256 = [&](const u8* const data, const u32 size, u8* const out_digest) noexcept -> bool {
+            BCRYPT_ALG_HANDLE h_alg = nullptr;
+            BCRYPT_HASH_HANDLE h_hash = nullptr;
+            DWORD cb_hash_object = 0;
+            DWORD cb_data = sizeof(DWORD);
+
+            NTSTATUS status = p_bcrypt_open_algorithm_provider(&h_alg, L"SHA256", nullptr, 0);
+            if (status != 0) return false;
+
+            status = p_bcrypt_get_property(h_alg, L"ObjectLength", reinterpret_cast<PBYTE>(&cb_hash_object), cb_data, &cb_data, 0);
+            if (status != 0) {
+                p_bcrypt_close_algorithm_provider(h_alg, 0);
+                return false;
+            }
+
+            u8* const hash_object = static_cast<u8*>(_malloca(cb_hash_object));
+            if (!hash_object) {
+                p_bcrypt_close_algorithm_provider(h_alg, 0);
+                return false;
+            }
+
+            status = p_bcrypt_create_hash(h_alg, &h_hash, hash_object, cb_hash_object, nullptr, 0, 0);
+            if (status != 0) {
+                _freea(hash_object);
+                p_bcrypt_close_algorithm_provider(h_alg, 0);
+                return false;
+            }
+
+            status = p_bcrypt_hash_data(h_hash, const_cast<PUCHAR>(data), size, 0);
+            if (status == 0) {
+                status = p_bcrypt_finish_hash(h_hash, out_digest, 32, 0);
+            }
+
+            p_bcrypt_destroy_hash(h_hash);
+            _freea(hash_object);
+            p_bcrypt_close_algorithm_provider(h_alg, 0);
+            return (status == 0);
+        };
+
+        auto read_tpm_pcr = [&](const TBS_HCONTEXT h_context, const u32 pcr_index, const u16 alg_id, u8* const out_digest, u32* const out_digest_size) noexcept -> bool {
+            u8 cmd[20] = { 0 };
+            cmd[0] = 0x80; cmd[1] = 0x01;
+            cmd[2] = 0x00; cmd[3] = 0x00; cmd[4] = 0x00; cmd[5] = 0x14;
+            cmd[6] = 0x00; cmd[7] = 0x00; cmd[8] = 0x01; cmd[9] = 0x7E;
+            cmd[10] = 0x00; cmd[11] = 0x00; cmd[12] = 0x00; cmd[13] = 0x01;
+
+            cmd[14] = static_cast<u8>((alg_id >> 8) & 0xFF);
+            cmd[15] = static_cast<u8>(alg_id & 0xFF);
+            cmd[16] = 0x03;
+            cmd[17] = 0x00;
+            cmd[18] = 0x00;
+            cmd[19] = 0x00;
+            cmd[17 + (pcr_index / 8)] = static_cast<u8>(1 << (pcr_index % 8));
+
+            u8 resp[256] = { 0 };
+            u32 resp_size = sizeof(resp);
+
+            const TBS_RESULT hr = p_tbsip_submit_command(h_context, 0, 200, cmd, sizeof(cmd), resp, &resp_size);
+            if (hr != 0) return false;
+
+            if (resp_size < 10) return false;
+            const u32 code = (static_cast<u32>(resp[6]) << 24) |
+                (static_cast<u32>(resp[7]) << 16) |
+                (static_cast<u32>(resp[8]) << 8) |
+                resp[9];
+            if (code != 0) return false;
+
+            u32 offset = 14;
+
+            if (offset + 4 > resp_size) return false;
+            const u32 sel_count = (static_cast<u32>(resp[offset]) << 24) |
+                (static_cast<u32>(resp[offset + 1]) << 16) |
+                (static_cast<u32>(resp[offset + 2]) << 8) |
+                resp[offset + 3];
+            offset += 4;
+            if (sel_count != 1) return false;
+
+            offset += 2;
+            if (offset + 1 > resp_size) return false;
+            const u8 ret_sizeof_select = resp[offset];
+            offset += 1 + ret_sizeof_select;
+
+            if (offset + 4 > resp_size) return false;
+            const u32 digest_count = (static_cast<u32>(resp[offset]) << 24) |
+                (static_cast<u32>(resp[offset + 1]) << 16) |
+                (static_cast<u32>(resp[offset + 2]) << 8) |
+                resp[offset + 3];
+            offset += 4;
+            if (digest_count != 1) return false;
+
+            if (offset + 2 > resp_size) return false;
+            const u16 digest_size = static_cast<u16>((resp[offset] << 8) | resp[offset + 1]);
+            offset += 2;
+
+            if (offset + digest_size > resp_size) return false;
+            if (out_digest) {
+                memcpy(out_digest, resp + offset, digest_size > 32 ? 32 : digest_size);
+            }
+            if (out_digest_size) {
+                *out_digest_size = digest_size;
+            }
+            return true;
+        };
+
+        // establish context
+        const tbs_context_params_2 params = { 2, 5 };
+
+        const TBS_RESULT hr = p_tbsi_context_create(&params, &h_tbs_context);
+        if (hr != 0) {
+            free_resources();
+            return false;
+        }
+
+        // get raw log size and allocate log buffer
+        u32 log_size = 0;
+        const TBS_RESULT hr_log_sz = p_tbsi_get_tcg_log_ex(0, nullptr, &log_size);
+        if (hr_log_sz != 0x80284005 && hr_log_sz != 0) {
+            free_resources();
+            return false;
+        }
+
+        log_buffer = static_cast<u8*>(malloc(log_size));
+        if (!log_buffer) {
+            free_resources();
+            return false;
+        }
+
+        const TBS_RESULT hr_log_rd = p_tbsi_get_tcg_log_ex(0, log_buffer, &log_size);
+        if (hr_log_rd != 0) {
+            free_resources();
+            return false;
+        }
+
+        // trace algorithm layouts and map indices
+        alg_size_map alg_to_size;
+        alg_to_size.set(0x0004, 20);
+        alg_to_size.set(0x000B, 32);
+
+        size_t offset = 0;
+
+        if (offset + sizeof(tcg_pcr_event_header) <= log_size) {
+            const auto* const first_header = reinterpret_cast<const tcg_pcr_event_header*>(log_buffer + offset);
+            offset += sizeof(tcg_pcr_event_header);
+
+            if (offset + first_header->event_size <= log_size) {
+                const u8* const first_event_data = log_buffer + offset;
+                offset += first_header->event_size;
+
+                if (first_header->event_type == 0x03 && first_header->event_size >= 24) {
+                    if (memcmp(first_event_data, "Spec ID Event03", 15) == 0) {
+                        const u8 num_algs = *reinterpret_cast<const u8*>(first_event_data + 23);
+                        u32 alg_offset = 24;
+                        for (u32 i = 0; i < num_algs; ++i) {
+                            if (alg_offset + 4 > first_header->event_size) break;
+                            const u16 alg_id = *reinterpret_cast<const u16*>(first_event_data + alg_offset);
+                            const u16 digest_size = *reinterpret_cast<const u16*>(first_event_data + alg_offset + 2);
+                            alg_to_size.set(alg_id, digest_size);
+                            alg_offset += 4;
+                        }
+                    }
+                }
+            }
+        }
+
+        // process log packets sequentially
+        while (offset < log_size) {
+            if (offset + 8 > log_size) break;
+            const u32 pcr_index = *reinterpret_cast<const u32*>(log_buffer + offset);
+            const u32 event_type = *reinterpret_cast<const u32*>(log_buffer + offset + 4);
+            offset += 8;
+
+            if (offset + 4 > log_size) break;
+            const u32 digest_count = *reinterpret_cast<const u32*>(log_buffer + offset);
+            offset += 4;
+
+            struct temp_digest {
+                u16 alg_id;
+                u8 digest[64];
+                u32 size;
+            };
+
+            temp_digest temp_digests[16] = { 0 };
+            u32 temp_digest_count = 0;
+            bool parse_success = true;
+
+            for (u32 i = 0; i < digest_count; ++i) {
+                if (offset + 2 > log_size) { parse_success = false; break; }
+                const u16 alg_id = *reinterpret_cast<const u16*>(log_buffer + offset);
+                offset += 2;
+
+                bool found = false;
+                const u16 size = alg_to_size.get(alg_id, &found);
+                if (!found) { parse_success = false; break; }
+                if (offset + size > log_size) { parse_success = false; break; }
+
+                if (temp_digest_count < 16) {
+                    temp_digests[temp_digest_count].alg_id = alg_id;
+                    temp_digests[temp_digest_count].size = size;
+                    memcpy(temp_digests[temp_digest_count].digest, log_buffer + offset, size);
+                    temp_digest_count++;
+                }
+                offset += size;
+            }
+
+            if (!parse_success) break;
+
+            if (offset + 4 > log_size) break;
+            const u32 event_size = *reinterpret_cast<const u32*>(log_buffer + offset);
+            offset += 4;
+
+            if (offset + event_size > log_size) break;
+            offset += event_size;
+
+            for (u32 i = 0; i < temp_digest_count; ++i) {
+                if (temp_digests[i].alg_id == 0x000B && pcr_index < 24) { // tpm_alg_sha256
+                    tracked_event ev{};
+                    ev.event_type = event_type;
+                    ev.digest_size = temp_digests[i].size;
+                    memset(ev.digest, 0, 32);
+                    memcpy(ev.digest, temp_digests[i].digest, temp_digests[i].size > 32 ? 32 : temp_digests[i].size);
+                    pcr_events[pcr_index].push(ev);
+                }
+            }
+        }
+
+        // perform step-by-step state reconstruction
+        u8 reconstructed_pcrs[24][32];
+        memset(reconstructed_pcrs, 0, sizeof(reconstructed_pcrs));
+
+        for (u32 pcr_idx = 0; pcr_idx < 8; ++pcr_idx) {
+            u8 current_pcr[32] = { 0 };
+            for (u32 j = 0; j < pcr_events[pcr_idx].count; ++j) {
+                const auto& ev = pcr_events[pcr_idx].items[j];
+                if (ev.event_type == 0x00000003) {
+                    continue;
+                }
+                u8 concat[64];
+                memcpy(concat, current_pcr, 32);
+                memcpy(concat + 32, ev.digest, 32);
+                if (!calculate_sha256(concat, 64, current_pcr)) {
+                    free_resources();
+                    return false;
+                }
+            }
+            memcpy(reconstructed_pcrs[pcr_idx], current_pcr, 32);
+        }
+
+        // compare logs with active system registers
+        for (u32 pcr_idx = 0; pcr_idx < 8; ++pcr_idx) {
+            u8 actual_pcr[32] = { 0 };
+            u32 actual_pcr_size = 0;
+            if (read_tpm_pcr(h_tbs_context, pcr_idx, 0x000B, actual_pcr, &actual_pcr_size)) {
+                if (actual_pcr_size != 32 || memcmp(actual_pcr, reconstructed_pcrs[pcr_idx], 32) != 0) {
+                    if (pcr_idx != 0 && pcr_idx != 6) {
+                        debug("TPM_PASSTHROUGH: Detected mismatch on hardware PCR ", pcr_idx);
+                        passthrough_detected = true;
+                    }
+                }
+            }
+        }
+
+        free_resources();
+        return passthrough_detected;
+    }
 
     // ADD NEW TECHNIQUE FUNCTION HERE
 
@@ -13910,6 +14374,7 @@ public:
             case CGROUP: return "CGROUP";
             case HYPERV_NESTED: return "HYPERV_NESTED";
             case MEASURED_BOOT: return "MEASURED_BOOT";
+            case TPM_PASSTHROUGH: return "TPM_PASSTHROUGH";
             // END OF TECHNIQUE LIST
             case DEFAULT: return "DEFAULT"; 
             case ALL: return "ALL"; 
@@ -14438,8 +14903,9 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::EIP_OVERFLOW, {100, VM::eip_overflow}},
             {VM::HYPERVISOR_HOOK, {100, VM::hypervisor_hook}},
             {VM::SINGLE_STEP, {100, VM::single_step}},
-            {VM::HYPERV_NESTED, {100, VM::hyperv_nested}},
+            {VM::TPM_PASSTHROUGH, {100, VM::tpm_passthrough}},
             {VM::NVRAM, {100, VM::nvram}},
+            {VM::HYPERV_NESTED, {100, VM::hyperv_nested}},
             {VM::CPU_HEURISTIC, {90, VM::cpu_heuristic}},
             {VM::ACPI_SIGNATURE, {100, VM::acpi_signature}},
             {VM::CLOCK, {45, VM::clock}},
