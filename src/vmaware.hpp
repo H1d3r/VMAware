@@ -1098,13 +1098,31 @@ public:
             return false;
         }
 
+        struct constexpr_hash {
+            // 8 rounds of CRC32-C bit reflection recursively
+            static constexpr u32 crc32_bits(u32 crc, int bits) {
+                return (bits == 0) ? crc :
+                    crc32_bits((crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0), bits - 1);
+            }
+
+            // over string
+            static constexpr u32 crc32_str(const char* s, u32 crc) {
+                return (*s == '\0') ? crc :
+                    crc32_str(s + 1, crc32_bits(crc ^ static_cast<u8>(*s), 8));
+            }
+
+            static constexpr u32 get(const char* s) {
+                return crc32_str(s, 0);
+            }
+        };
+
         // this forces the compiler to calculate the hash when initializing the array while staying C++11 compatible
         struct cpu_entry {
             u32 hash;
             u32 threads;
 
             constexpr cpu_entry(const char* m, u32 t)
-                : hash(util::hash::constexpr_hash::get(m)), threads(t) {
+                : hash(constexpr_hash::get(m)), threads(t) {
             }
         };
 
@@ -1117,7 +1135,7 @@ public:
         };
 
         static void get_intel_core_db(const cpu_entry*& out_ptr, size_t& out_size) {
-            static const cpu_entry db[] = {
+            static constexpr cpu_entry db[] = {
                 // i3 series
                 { "i3-1000G1", 4 },
                 { "i3-1000G4", 4 },
@@ -2131,7 +2149,7 @@ public:
         }
 
         static void get_intel_xeon_db(const cpu_entry*& out_ptr, size_t& out_size) {
-            static const cpu_entry db[] = {
+            static constexpr cpu_entry db[] = {
                 { "D-1518", 8 },
                 { "D-1520", 8 },
                 { "D-1521", 8 },
@@ -2272,7 +2290,7 @@ public:
         }
 
         static void get_intel_ultra_db(const cpu_entry*& out_ptr, size_t& out_size) {
-            static const cpu_entry db[] = {
+            static constexpr cpu_entry db[] = {
                 // Series 2 (Arrow Lake - Desktop/Mobile) - No HT on P-Cores
                 { "285K", 24 },
                 { "265K", 20 },
@@ -3334,7 +3352,7 @@ public:
             }
         }
 
-        [[nodiscard]] static inline size_t clamp_c11(const size_t val, const size_t min_val, const size_t max_val) {
+        [[nodiscard]] static constexpr size_t clamp_c11(const size_t val, const size_t min_val, const size_t max_val) {
             return (val < min_val) ? min_val : ((val > max_val) ? max_val : val);
         }
 
@@ -3624,32 +3642,16 @@ public:
 
     // miscellaneous functionalities
     struct util {
-        static bool is_unsupported(const VM::enum_flags flag) {
-            // cross platform?
-            if (
-                (flag >= VM::HYPERVISOR_BIT) &&
-                (flag <= VM::KGT_SIGNATURE)
-            ) {
-                return false;
-            }
-
+        [[nodiscard]] static constexpr bool is_unsupported(const VM::enum_flags flag) noexcept {
+            return (flag >= VM::HYPERVISOR_BIT && flag <= VM::KGT_SIGNATURE) ? false :
             #if (LINUX)
-                return (!(
-                    (flag >= LINUX_START) &&
-                    (flag <= LINUX_END)
-                ));
+                !(flag >= LINUX_START && flag <= LINUX_END);
             #elif (WINDOWS)
-                return (!(
-                    (flag >= WINDOWS_START) &&
-                    (flag <= WINDOWS_END)
-                ));
+                !(flag >= WINDOWS_START && flag <= WINDOWS_END);
             #elif (APPLE) 
-                return (!(
-                    (flag >= MACOS_START) &&
-                    (flag <= MACOS_END)
-                ));
+                !(flag >= MACOS_START && flag <= MACOS_END);
             #else
-                return false;
+                false;
             #endif
         }
 
@@ -4036,11 +4038,11 @@ public:
                     return false;
                 }
 
-                const char* names[] = { "GetProcessInformation" };
-                void* funcs[ARRAYSIZE(names)] = {};
-                util::get_function_address(ntdll, names, funcs, 1);
+                constexpr const char* function_names[] = { "GetProcessInformation" };
+                void* functions[ARRAYSIZE(function_names)] = {};
+                util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-                get_process_information_fn get_proc_info = reinterpret_cast<get_process_information_fn>(funcs[0]);
+                get_process_information_fn get_proc_info = reinterpret_cast<get_process_information_fn>(functions[0]);
                 if (get_proc_info) {
                     struct PROCESS_MACHINE_INFORMATION {
                         USHORT ProcessMachine;
@@ -4153,13 +4155,13 @@ public:
                     return false;
                 }
 
-                const char* names[] = { "WHvGetCapability" };
-                void* funcs[1] = { nullptr };
+                constexpr const char* function_names[] = { "WHvGetCapability" };
+                void* functions[ARRAYSIZE(function_names)] = {};
 
-                get_function_address(h_whp, names, funcs, 1);
+                get_function_address(h_whp, function_names, functions, ARRAYSIZE(function_names));
 
                 bool is_present = false;
-                if (funcs[0]) {
+                if (functions[0]) {
                     using fnWHvGetCapability = HRESULT(__stdcall*)(
                         WHV_CAPABILITY_CODE CapabilityCode,
                         void* CapabilityBuffer,
@@ -4167,7 +4169,7 @@ public:
                         UINT32* WrittenBufferSize
                     );
 
-                    const auto pWHvGetCapability = reinterpret_cast<fnWHvGetCapability>(funcs[0]);
+                    const auto pWHvGetCapability = reinterpret_cast<fnWHvGetCapability>(functions[0]);
                     BOOL present_val = FALSE;
                     UINT32 written = 0;
                     HRESULT hr = pWHvGetCapability(
@@ -4315,7 +4317,7 @@ public:
 
     #if (WINDOWS)
         // retrieves the addresses of specified functions from a loaded module using the export directory, manual implementation of GetProcAddress
-        static void get_function_address(const HMODULE hModule, const char* names[], void** functions, const size_t count) {
+        static void get_function_address(const HMODULE hModule, const char* const names[], void** const functions, const size_t count) {
             using func_map = std::unordered_map<std::string, void*>;
             static std::unordered_map<HMODULE, func_map> function_cache;
 
@@ -4831,24 +4833,6 @@ public:
                 return crc32c_sw(crc, data, len);
             #endif
             }
-
-            struct constexpr_hash {
-                // 8 rounds of CRC32-C bit reflection recursively
-                static constexpr u32 crc32_bits(u32 crc, int bits) {
-                    return (bits == 0) ? crc :
-                        crc32_bits((crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0), bits - 1);
-                }
-
-                // over string
-                static constexpr u32 crc32_str(const char* s, u32 crc) {
-                    return (*s == '\0') ? crc :
-                        crc32_str(s + 1, crc32_bits(crc ^ static_cast<u8>(*s), 8));
-                }
-
-                static constexpr u32 get(const char* s) {
-                    return crc32_str(s, 0);
-                }
-            };
         };
     };
 
@@ -8233,8 +8217,8 @@ public:
                 return false;
 
             const char* function_names[] = { "NtQuerySystemInformation" };
-            void* functions[1] = { nullptr };
-            util::get_function_address(ntdll, function_names, functions, 1);
+            void* functions[ARRAYSIZE(function_names)] = {};
+            util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
             using nt_query_sysinfo_t = NTSTATUS(__stdcall*)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
             nt_query_sysinfo_t nt_query = reinterpret_cast<nt_query_sysinfo_t>(functions[0]);
@@ -8389,14 +8373,7 @@ public:
             const void* p = memchr(s, 0, max);
             if (!p) return max;
             return static_cast<size_t>(static_cast<const char*>(p) - s);
-        };
-        
-        using ntopenfile_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, ULONG, ULONG);
-        using nt_device_io_control_file_fn = NTSTATUS(__stdcall*)(HANDLE, HANDLE, PVOID, PVOID, PIO_STATUS_BLOCK, ULONG, PVOID, ULONG, PVOID, ULONG);
-        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
-        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
-        using ntclose_fn = NTSTATUS(__stdcall*)(HANDLE);
-        using rtl_init_unicode_string_fn = void(__stdcall*)(PUNICODE_STRING, PCWSTR);
+        };  
 
         constexpr u8 MAX_PHYSICAL_DRIVES = 4;
         constexpr size_t MAX_DESCRIPTOR_SIZE = 64 * 1024;
@@ -8405,7 +8382,7 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return result;
 
-        const char* names[] = {
+        constexpr const char* function_names[] = {
             "RtlInitUnicodeString",
             "NtOpenFile",
             "NtDeviceIoControlFile",
@@ -8414,15 +8391,22 @@ public:
             "NtFlushInstructionCache",
             "NtClose"
         };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_fn>(funcs[0]);
-        const auto nt_open_file = reinterpret_cast<ntopenfile_fn>(funcs[1]);
-        const auto nt_device_io_control_file = reinterpret_cast<nt_device_io_control_file_fn>(funcs[2]);
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(funcs[3]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(funcs[4]);
-        const auto nt_close = reinterpret_cast<ntclose_fn>(funcs[6]);
+        using ntopenfile_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, ULONG, ULONG);
+        using nt_device_io_control_file_fn = NTSTATUS(__stdcall*)(HANDLE, HANDLE, PVOID, PVOID, PIO_STATUS_BLOCK, ULONG, PVOID, ULONG, PVOID, ULONG);
+        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
+        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
+        using ntclose_fn = NTSTATUS(__stdcall*)(HANDLE);
+        using rtl_init_unicode_string_fn = void(__stdcall*)(PUNICODE_STRING, PCWSTR);
+
+        const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_fn>(functions[0]);
+        const auto nt_open_file = reinterpret_cast<ntopenfile_fn>(functions[1]);
+        const auto nt_device_io_control_file = reinterpret_cast<nt_device_io_control_file_fn>(functions[2]);
+        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[3]);
+        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[4]);
+        const auto nt_close = reinterpret_cast<ntclose_fn>(functions[6]);
 
         if (!rtl_init_unicode_string || !nt_open_file || !nt_device_io_control_file ||
             !nt_allocate_virtual_memory || !nt_free_virtual_memory || !nt_close) {
@@ -9015,16 +8999,16 @@ public:
     [[nodiscard]] static bool power_capabilities() {
         const HMODULE ntdll = util::get_ntdll();
 
-        const char* names[] = { "NtPowerInformation" }; // Win8
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        constexpr const char* function_names[] = { "NtPowerInformation" }; // Win8
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        if (!funcs[0]) return false;
+        if (!functions[0]) return false;
 
         using nt_power_information_fn = NTSTATUS(__stdcall*)(POWER_INFORMATION_LEVEL,
             PVOID, ULONG,
             PVOID, ULONG);
-        const auto nt_power_information = reinterpret_cast<nt_power_information_fn>(funcs[0]);
+        const auto nt_power_information = reinterpret_cast<nt_power_information_fn>(functions[0]);
 
         SYSTEM_POWER_CAPABILITIES caps{};
         const NTSTATUS status = nt_power_information(
@@ -9076,14 +9060,14 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = { "NtOpenKey", "NtQueryValueKey", "RtlInitUnicodeString", "NtClose" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        constexpr const char* function_names[] = { "NtOpenKey", "NtQueryValueKey", "RtlInitUnicodeString", "NtClose" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(funcs[0]);
-        const auto nt_query_value_key = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PUNICODE_STRING, ULONG, PVOID, ULONG, PULONG)>(funcs[1]);
-        const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(funcs[2]);
-        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(funcs[3]);
+        const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[0]);
+        const auto nt_query_value_key = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PUNICODE_STRING, ULONG, PVOID, ULONG, PULONG)>(functions[1]);
+        const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(functions[2]);
+        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[3]);
 
         if (!nt_open_key || !nt_query_value_key || !rtl_init_unicode_string || !nt_close) 
             return false;
@@ -9263,17 +9247,17 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
+        constexpr const char* function_names[] = { "NtOpenMutant", "RtlInitUnicodeString", "NtClose" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
         using rtl_init_unicode_string_fn = void(__stdcall*)(PUNICODE_STRING DestinationString, PCWSTR SourceString);
         using ntclose_fn = NTSTATUS(__stdcall*)(HANDLE Handle);
         using nt_open_mutant_fn = NTSTATUS(__stdcall*)(PHANDLE MutantHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes);
 
-        const char* names[] = { "NtOpenMutant", "RtlInitUnicodeString", "NtClose" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
-
-        const auto nt_open_mutant = reinterpret_cast<nt_open_mutant_fn>(funcs[0]);
-        const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_fn>(funcs[1]);
-        const auto nt_close = reinterpret_cast<ntclose_fn>(funcs[2]);
+        const auto nt_open_mutant = reinterpret_cast<nt_open_mutant_fn>(functions[0]);
+        const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_fn>(functions[1]);
+        const auto nt_close = reinterpret_cast<ntclose_fn>(functions[2]);
 
         if (!nt_open_mutant || !rtl_init_unicode_string || !nt_close) {
             return false;
@@ -9346,28 +9330,29 @@ public:
      * @implements VM::CUCKOO_DIR
      */
     [[nodiscard]] static bool cuckoo_dir() {
+        const HMODULE ntdll = util::get_ntdll();
+        if (!ntdll) return false;
+
+        constexpr const char* function_names[] = { "NtOpenFile", "RtlInitUnicodeString", "NtClose" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
         using nt_openfile_t = NTSTATUS(__stdcall*)(PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
             POBJECT_ATTRIBUTES ObjectAttributes, PIO_STATUS_BLOCK IoStatusBlock,
             ULONG ShareAccess, ULONG OpenOptions);
         using rtl_init_unicode_string_t = void(__stdcall*)(PUNICODE_STRING DestinationString, PCWSTR SourceString);
         using ntclose_t = NTSTATUS(__stdcall*)(HANDLE Handle);
 
-        const HMODULE ntdll = util::get_ntdll();
-        if (!ntdll) return false;
 
-        const char* names[] = { "NtOpenFile", "RtlInitUnicodeString", "NtClose" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
-
-        const auto nt_open_file = reinterpret_cast<nt_openfile_t>(funcs[0]);
-        const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_t>(funcs[1]);
-        const auto nt_close = reinterpret_cast<ntclose_t>(funcs[2]);
+        const auto nt_open_file = reinterpret_cast<nt_openfile_t>(functions[0]);
+        const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_t>(functions[1]);
+        const auto nt_close = reinterpret_cast<ntclose_t>(functions[2]);
 
         if (!nt_open_file || !rtl_init_unicode_string || !nt_close) {
             return false;
         }
 
-        const wchar_t* native_path = L"\\??\\C:\\Cuckoo";
+        constexpr const wchar_t* native_path = L"\\??\\C:\\Cuckoo";
         UNICODE_STRING path;
         rtl_init_unicode_string(&path, native_path);
 
@@ -9411,19 +9396,19 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = { "NtOpenFile", "RtlInitUnicodeString", "NtClose" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        constexpr const char* function_names[] = { "NtOpenFile", "RtlInitUnicodeString", "NtClose" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto nt_open_file = reinterpret_cast<ntopenfile_t>(funcs[0]);
-        const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_t>(funcs[1]);
-        const auto nt_close = reinterpret_cast<ntclose_t>(funcs[2]);
+        const auto nt_open_file = reinterpret_cast<ntopenfile_t>(functions[0]);
+        const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_t>(functions[1]);
+        const auto nt_close = reinterpret_cast<ntclose_t>(functions[2]);
 
         if (!nt_open_file || !rtl_init_unicode_string || !nt_close) {
             return false;
         }
 
-        const wchar_t* pipe_path = L"\\??\\pipe\\cuckoo";
+        constexpr const wchar_t* pipe_path = L"\\??\\pipe\\cuckoo";
         UNICODE_STRING pipe;
         rtl_init_unicode_string(&pipe, pipe_path);
 
@@ -9498,6 +9483,14 @@ public:
         using SYSTEM_MODULE_INFORMATION_EX = _SYSTEM_MODULE_INFORMATION_EX;
         using PSYSTEM_MODULE_INFORMATION_EX = _SYSTEM_MODULE_INFORMATION_EX*;
 
+        constexpr ULONG system_module_information = 11;
+        const HMODULE ntdll = util::get_ntdll();
+        if (!ntdll) return false;
+
+        constexpr const char* function_names[] = { "NtQuerySystemInformation", "NtAllocateVirtualMemory", "NtFreeVirtualMemory" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
         using nt_query_system_information_fn = NTSTATUS(__stdcall*)(ULONG SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength);
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(
             HANDLE ProcessHandle,
@@ -9509,17 +9502,9 @@ public:
         );
         using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE ProcessHandle, PVOID* BaseAddress, PSIZE_T RegionSize, ULONG FreeType);
 
-        constexpr ULONG system_module_information = 11;
-        const HMODULE ntdll = util::get_ntdll();
-        if (!ntdll) return false;
-
-        const char* names[] = { "NtQuerySystemInformation", "NtAllocateVirtualMemory", "NtFreeVirtualMemory" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
-
-        const auto nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(funcs[0]);
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(funcs[1]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(funcs[2]);
+        const auto nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(functions[0]);
+        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[1]);
+        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[2]);
 
         if (nt_query_system_information == nullptr || nt_allocate_virtual_memory == nullptr || nt_free_virtual_memory == nullptr)
             return false;
@@ -9611,14 +9596,14 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = { "RtlInitUnicodeString", "NtOpenKey", "NtQueryKey", "NtClose" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        constexpr const char* function_names[] = { "RtlInitUnicodeString", "NtOpenKey", "NtQueryKey", "NtClose" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(funcs[0]);
-        const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(funcs[1]);
-        const auto nt_query_key = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, KEY_INFORMATION_CLASS, PVOID, ULONG, PULONG)>(funcs[2]);
-        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(funcs[3]);
+        const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(functions[0]);
+        const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[1]);
+        const auto nt_query_key = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, KEY_INFORMATION_CLASS, PVOID, ULONG, PULONG)>(functions[2]);
+        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[3]);
 
         if (!rtl_init_unicode_string || !nt_open_key || !nt_query_key || !nt_close) {
             return false;
@@ -9727,13 +9712,13 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = { "RtlInitUnicodeString", "NtOpenFile", "NtClose" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, (ULONG)(sizeof(names) / sizeof(names[0])));
+        constexpr const char* function_names[] = { "RtlInitUnicodeString", "NtOpenFile", "NtClose" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(funcs[0]);
-        const auto nt_open_file = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, ULONG, ULONG)>(funcs[1]);
-        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(funcs[2]);
+        const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(functions[0]);
+        const auto nt_open_file = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, ULONG, ULONG)>(functions[1]);
+        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[2]);
 
         if (!rtl_init_unicode_string || !nt_open_file || !nt_close) {
             return false;
@@ -9887,11 +9872,11 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;        
 
-        const char* names[] = { "NtQuerySystemInformation" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        constexpr const char* function_names[] = { "NtQuerySystemInformation" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const nt_query_system_information_fn nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(funcs[0]);
+        const nt_query_system_information_fn nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(functions[0]);
         if (nt_query_system_information) {
             SYSTEM_HYPERVISOR_DETAIL_INFORMATION hypervisor_information{};
 
@@ -9944,20 +9929,20 @@ public:
             UNICODE_STRING Name;
         };
 
-        using POBJECT_NAME_INFORMATION = OBJECT_NAME_INFORMATION*;
-        using nt_open_key_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES );
-        using nt_query_object_fn = NTSTATUS(__stdcall*)(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
-    
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
     
-        const char* names[] = { "NtOpenKey", "NtQueryObject", "NtClose" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        constexpr const char* function_names[] = { "NtOpenKey", "NtQueryObject", "NtClose" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
     
-        const auto nt_open_key = reinterpret_cast<nt_open_key_fn>(funcs[0]);
-        const auto nt_query_object = reinterpret_cast<nt_query_object_fn>(funcs[1]);
-        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(funcs[2]);
+        using POBJECT_NAME_INFORMATION = OBJECT_NAME_INFORMATION*;
+        using nt_open_key_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+        using nt_query_object_fn = NTSTATUS(__stdcall*)(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+
+        const auto nt_open_key = reinterpret_cast<nt_open_key_fn>(functions[0]);
+        const auto nt_query_object = reinterpret_cast<nt_query_object_fn>(functions[1]);
+        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[2]);
 
         if (!nt_open_key || !nt_query_object || !nt_close)
             return false;
@@ -10048,14 +10033,14 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = { "RtlInitUnicodeString", "NtOpenKey", "NtQueryKey", "NtClose" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        constexpr const char* function_names[] = { "RtlInitUnicodeString", "NtOpenKey", "NtQueryKey", "NtClose" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(funcs[0]);
-        const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(funcs[1]);
-        const auto nt_query_key = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, KEY_INFORMATION_CLASS, PVOID, ULONG, PULONG)>(funcs[2]);
-        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(funcs[3]);
+        const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(functions[0]);
+        const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[1]);
+        const auto nt_query_key = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, KEY_INFORMATION_CLASS, PVOID, ULONG, PULONG)>(functions[2]);
+        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[3]);
 
         if (!rtl_init_unicode_string || !nt_open_key || !nt_query_key || !nt_close) {
             return false;
@@ -10284,18 +10269,18 @@ public:
             }
         }
 
-        // We must preserve RBX because CPUID clobbers it, and RBX is a non-volatile 
+        // we must preserve RBX because CPUID clobbers it, and RBX is a non-volatile 
         // register in x64. If we don't restore it, the calling function (VM::check) crashes
         // we use MOV R8, RBX instead of PUSH RBX. Pushing to the stack without 
         // unwind metadata breaks SEH in x64 (OS cannot find the handler), causing a crash
         constexpr u8 trampoline[] = {
-            0x49, 0x89, 0xD8,                     // mov r8, rbx      (save rbx to volatile register r8)
+            0x49, 0x89, 0xD8,                     // mov r8, rbx (save rbx to volatile register r8)
             0x9C,                                 // pushfq
             0x81, 0x04, 0x24,                     // OR DWORD PTR [RSP], 0x10100 (Set TF)
             0x00, 0x01, 0x01, 0x00,
             0x9D,                                 // popfq
             0x0F, 0xA2,                           // cpuid 
-            0x4C, 0x89, 0xC3,                     // mov rbx, r8      (restore rbx from r8) - trap happens here
+            0x4C, 0x89, 0xC3,                     // mov rbx, r8  (restore rbx from r8) - trap happens here
             0xC3                                  // ret
         };
         SIZE_T trampoline_size = sizeof(trampoline);
@@ -10303,7 +10288,7 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = {
+        constexpr const char* function_names[] = {
             "NtAllocateVirtualMemory",
             "NtProtectVirtualMemory",
             "NtFreeVirtualMemory",
@@ -10312,8 +10297,8 @@ public:
             "NtGetContextThread",
             "NtSetContextThread"
         };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
         using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
@@ -10324,13 +10309,13 @@ public:
         using nt_set_context_thread_fn = NTSTATUS(__stdcall*)(HANDLE, PCONTEXT);
 
         // volatile ensures these are loaded from stack after SEH unwind when compiled with aggresive optimizations
-        nt_allocate_virtual_memory_fn volatile nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(funcs[0]);
-        nt_protect_virtual_memory_fn volatile nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(funcs[1]);
-        nt_free_virtual_memory_fn volatile nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(funcs[2]);
-        nt_flush_instruction_cache_fn volatile nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(funcs[3]);
-        nt_close_fn volatile nt_close = reinterpret_cast<nt_close_fn>(funcs[4]);
-        nt_get_context_thread_fn volatile nt_get_context_thread = reinterpret_cast<nt_get_context_thread_fn>(funcs[5]);
-        nt_set_context_thread_fn volatile nt_set_context_thread = reinterpret_cast<nt_set_context_thread_fn>(funcs[6]);
+        nt_allocate_virtual_memory_fn volatile nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
+        nt_protect_virtual_memory_fn volatile nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
+        nt_free_virtual_memory_fn volatile nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[2]);
+        nt_flush_instruction_cache_fn volatile nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[3]);
+        nt_close_fn volatile nt_close = reinterpret_cast<nt_close_fn>(functions[4]);
+        nt_get_context_thread_fn volatile nt_get_context_thread = reinterpret_cast<nt_get_context_thread_fn>(functions[5]);
+        nt_set_context_thread_fn volatile nt_set_context_thread = reinterpret_cast<nt_set_context_thread_fn>(functions[6]);
 
         if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_flush_instruction_cache ||
             !nt_free_virtual_memory || !nt_get_context_thread || !nt_set_context_thread || !nt_close) {
@@ -10374,9 +10359,9 @@ public:
             return false;
         }
 
-        // Set DR0 to trampoline + 14 (Instruction: mov rbx, r8)
-        // Offset calculation: mov_r8_rbx(3) + pushfq(1) + or(7) + popfq(1) + cpuid(2) = 14
-        // This is where single step traps after CPUID, and where we want the collision
+        // set DR0 to trampoline + 14 (Instruction: mov rbx, r8)
+        // offset calculation: mov_r8_rbx(3) + pushfq(1) + or(7) + popfq(1) + cpuid(2) = 14
+        // this is where single step traps after CPUID, and where we want the collision
         const uintptr_t expected_trap_address = reinterpret_cast<uintptr_t>(exec_mem) + 14;
 
         // set Dr0 to trampoline+offset
@@ -10392,25 +10377,25 @@ public:
             return false;
         }
 
-        // Context structure to pass data to the static SEH handler
+        // context structure to pass data to the static SEH handler
         struct trap_context {
             uintptr_t expectedTrapAddr;
             u8* hitCount;
             bool* hypervisor_caught;
         };
 
-        // Static class for SEH filtering to avoid Release mode Lambda corruption
+        // static struct for SEH filtering to avoid release mode Lambda corruption
         struct SEH_Trap {
             static LONG Vet(u32 code, EXCEPTION_POINTERS* info, trap_context* ctx) noexcept {
-                // Lambda returns LONG to support EXCEPTION_CONTINUE_EXECUTION
+                // lambda returns LONG to support EXCEPTION_CONTINUE_EXECUTION
                 if (code != static_cast<DWORD>(0x80000004L)) {
                     return EXCEPTION_CONTINUE_SEARCH;
                 }
 
-                // Verify exception happened at our calculated offset
+                // verify exception happened at our calculated offset
                 if (reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress) != ctx->expectedTrapAddr) {
-                    info->ContextRecord->EFlags &= ~0x100; // Clear TF
-                    info->ContextRecord->Dr7 &= ~1;        // Clear DR0 Enable
+                    info->ContextRecord->EFlags &= ~0x100; // clear TF
+                    info->ContextRecord->Dr7 &= ~1;        // clear DR0 Enable
                     *ctx->hypervisor_caught = true;
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
@@ -10422,15 +10407,15 @@ public:
                 const u64 status = info->ContextRecord->Dr6;
 
                 if ((status & required_bits) != required_bits) {
-                    if (util::hyper_x() != HYPERV_HOST) // detects type 1 Hyper-V too, which we consider legitimate
+                    if (util::hyper_x() != HYPERV_HOST)
                         *ctx->hypervisor_caught = true;
                 }
 
-                // Clear Trap Flag to stop single stepping
+                // clear Trap Flag to stop single stepping
                 info->ContextRecord->EFlags &= ~0x100;
 
-                // Clear DR7 Local Enable 0 to disable the hardware breakpoint
-                // If we don't do this, the next instruction will trigger the breakpoint again immediately
+                // clear DR7 Local Enable 0 to disable the hardware breakpoint
+                // if we don't do this, the next instruction will trigger the breakpoint again immediately
                 info->ContextRecord->Dr7 &= ~1;
 
                 // executes mov rbx, r8 (restore), and returns
@@ -10444,10 +10429,10 @@ public:
             reinterpret_cast<void(*)()>(exec_mem)();
         }
         __except (SEH_Trap::Vet(_exception_code(), reinterpret_cast<EXCEPTION_POINTERS*>(_exception_info()), &ctx)) {
-            // This block is effectively unreachable because vetExceptions returns CONTINUE_EXECUTION or CONTINUE_SEARCH
+            // this block is effectively unreachable because vetExceptions returns CONTINUE_EXECUTION or CONTINUE_SEARCH
         }
 
-        // If the hypervisor swallowed the exception entirely, hitCount will be 0
+        // if the hypervisor swallowed the exception entirely, hitCount will be 0
         if (hitCount != 1) {
             hypervisor_caught = true;
         }
@@ -10488,14 +10473,14 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFlushInstructionCache", "NtFreeVirtualMemory" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        constexpr const char* function_names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFlushInstructionCache", "NtFreeVirtualMemory" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto nt_allocate_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG)>(funcs[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG)>(funcs[1]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T)>(funcs[2]);
-        const auto nt_free_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG)>(funcs[3]);
+        const auto nt_allocate_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG)>(functions[0]);
+        const auto nt_protect_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG)>(functions[1]);
+        const auto nt_flush_instruction_cache = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T)>(functions[2]);
+        const auto nt_free_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG)>(functions[3]);
 
         if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_flush_instruction_cache || !nt_free_virtual_memory) {
             return false;
@@ -10583,17 +10568,17 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = {
+        constexpr const char* function_names[] = {
             "NtAllocateVirtualMemory", "NtProtectVirtualMemory",
             "NtFlushInstructionCache", "NtFreeVirtualMemory"
         };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto nt_alloc   = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG)>(funcs[0]);
-        const auto nt_protect = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG)>(funcs[1]);
-        const auto nt_flush   = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T)>(funcs[2]);
-        const auto nt_free    = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG)>(funcs[3]);
+        const auto nt_alloc   = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG)>(functions[0]);
+        const auto nt_protect = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG)>(functions[1]);
+        const auto nt_flush   = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T)>(functions[2]);
+        const auto nt_free    = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG)>(functions[3]);
 
         if (!nt_alloc || !nt_protect || !nt_flush || !nt_free) return false;
 
@@ -10708,16 +10693,16 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFlushInstructionCache", "NtFreeVirtualMemory", "NtGetContextThread", "NtSetContextThread" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        constexpr const char* function_names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFlushInstructionCache", "NtFreeVirtualMemory", "NtGetContextThread", "NtSetContextThread" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto nt_allocate_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG)>(funcs[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG)>(funcs[1]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T)>(funcs[2]);
-        const auto nt_free_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG)>(funcs[3]);
-        const auto nt_get_context_thread = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PCONTEXT)>(funcs[4]);
-        const auto nt_set_context_thread = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PCONTEXT)>(funcs[5]);
+        const auto nt_allocate_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG)>(functions[0]);
+        const auto nt_protect_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG)>(functions[1]);
+        const auto nt_flush_instruction_cache = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T)>(functions[2]);
+        const auto nt_free_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG)>(functions[3]);
+        const auto nt_get_context_thread = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PCONTEXT)>(functions[4]);
+        const auto nt_set_context_thread = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PCONTEXT)>(functions[5]);
 
         if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_flush_instruction_cache || !nt_free_virtual_memory || !nt_get_context_thread || !nt_set_context_thread) {
             return false;
@@ -10872,19 +10857,19 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = { "NtOpenDirectoryObject", "NtQueryDirectoryObject", "NtClose" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        constexpr const char* function_names[] = { "NtOpenDirectoryObject", "NtQueryDirectoryObject", "NtClose" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto nt_open_directory_object = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(funcs[0]);
-        const auto nt_query_directory_object = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, ULONG, BOOLEAN, BOOLEAN, PULONG, PULONG)>(funcs[1]);
-        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(funcs[2]);
+        const auto nt_open_directory_object = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[0]);
+        const auto nt_query_directory_object = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, ULONG, BOOLEAN, BOOLEAN, PULONG, PULONG)>(functions[1]);
+        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[2]);
 
         if (!nt_open_directory_object || !nt_query_directory_object || !nt_close) return false;
 
         // Prepare to open the root "\Device" directory in the Object Manager namespace
         // This is different from the file system and we are looking for kernel objects created by drivers
-        const wchar_t* device_dir_path = L"\\Device";
+        constexpr const wchar_t* device_dir_path = L"\\Device";
         dir_name.Buffer = (PWSTR)device_dir_path;
         dir_name.Length = (USHORT)(wcslen(device_dir_path) * sizeof(wchar_t));
         dir_name.MaximumLength = dir_name.Length + sizeof(wchar_t);
@@ -11049,14 +11034,9 @@ public:
 
         struct VARIABLE_NAME { ULONG NextEntryOffset; GUID VendorGuid; WCHAR Name[1]; };
         using variable_name_ptr = VARIABLE_NAME*;
-        using nt_enumerate_system_environment_values_ex_fn = NTSTATUS(__stdcall*)(ULONG, PVOID, PULONG);
-        using nt_query_system_environment_value_ex_fn = NTSTATUS(__stdcall*)(PUNICODE_STRING VariableName, LPGUID VendorGuid, PVOID Value, PULONG ValueLength, PULONG Attributes);
-        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
-        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
-
         bool detection_result = false;
 
-        // Handles and Buffers
+        // handles and buffers
         HANDLE token_handle = nullptr;
         PVOID enum_base_buffer = nullptr;
         BYTE* pk_default_buf = nullptr;
@@ -11065,7 +11045,12 @@ public:
         DWORD previous_privileges_size = sizeof(previous_privileges);
         LUID luid_struct{};
 
-        // Function Pointers
+        using nt_enumerate_system_environment_values_ex_fn = NTSTATUS(__stdcall*)(ULONG, PVOID, PULONG);
+        using nt_query_system_environment_value_ex_fn = NTSTATUS(__stdcall*)(PUNICODE_STRING VariableName, LPGUID VendorGuid, PVOID Value, PULONG ValueLength, PULONG Attributes);
+        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
+        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
+
+        // function pointers
         nt_enumerate_system_environment_values_ex_fn nt_enumerate_values = nullptr;
         nt_allocate_virtual_memory_fn nt_allocate_memory = nullptr;
         nt_free_virtual_memory_fn nt_free_memory = nullptr;
@@ -11074,7 +11059,7 @@ public:
         const HANDLE current_process_handle = reinterpret_cast<HANDLE>(-1LL);
 
         // -------------------------------------------------------------------------
-        // Helper Lambdas
+        // helper lambdas
         // -------------------------------------------------------------------------
 
         auto buffer_contains_ascii_ci = [](const BYTE* data, size_t len, const char* pat) noexcept -> bool {
@@ -11160,7 +11145,7 @@ public:
             return false;
         };
 
-        auto cleanup = [&](auto& ptr) {
+        auto cleanup = [&](auto& ptr) noexcept {
             if (ptr) {
                 PVOID base = ptr;
                 SIZE_T size = 0;
@@ -11170,7 +11155,7 @@ public:
         };
 
         // -------------------------------------------------------------------------
-        // Main Logic Block
+        // main logic block
         // -------------------------------------------------------------------------
 
         do {
@@ -11190,17 +11175,17 @@ public:
 
             privilege_state_saved = true;
 
-            const HMODULE ntdll_module = util::get_ntdll();
-            if (!ntdll_module) break;
+            const HMODULE ntdll = util::get_ntdll();
+            if (!ntdll) break;
 
-            const char* func_names[] = { "NtEnumerateSystemEnvironmentValuesEx", "NtAllocateVirtualMemory", "NtFreeVirtualMemory", "NtQuerySystemEnvironmentValueEx" };
-            void* resolved_funcs[sizeof(func_names) / sizeof(func_names[0])] = {};
-            util::get_function_address(ntdll_module, func_names, resolved_funcs, sizeof(func_names) / sizeof(func_names[0]));
+            constexpr const char* function_names[] = { "NtEnumerateSystemEnvironmentValuesEx", "NtAllocateVirtualMemory", "NtFreeVirtualMemory", "NtQuerySystemEnvironmentValueEx" };
+            void* functions[ARRAYSIZE(function_names)] = {};
+            util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-            nt_enumerate_values = reinterpret_cast<nt_enumerate_system_environment_values_ex_fn>(resolved_funcs[0]);
-            nt_allocate_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(resolved_funcs[1]);
-            nt_free_memory = reinterpret_cast<nt_free_virtual_memory_fn>(resolved_funcs[2]);
-            nt_query_value = reinterpret_cast<nt_query_system_environment_value_ex_fn>(resolved_funcs[3]);
+            nt_enumerate_values = reinterpret_cast<nt_enumerate_system_environment_values_ex_fn>(functions[0]);
+            nt_allocate_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[1]);
+            nt_free_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[2]);
+            nt_query_value = reinterpret_cast<nt_query_system_environment_value_ex_fn>(functions[3]);
 
             if (!nt_enumerate_values || !nt_allocate_memory || !nt_free_memory || !nt_query_value) break;
 
@@ -11231,7 +11216,7 @@ public:
             }
 
             // ---------------------------------------------------------------------
-            // Constants & Data
+            // constants and data
             // ---------------------------------------------------------------------
             constexpr const char redhat_sig_ascii[] = "red hat";
             constexpr const wchar_t redhat_sig_wide[] = L"red hat";
@@ -11242,7 +11227,7 @@ public:
             bool should_break_loop = false;
 
             // ---------------------------------------------------------------------
-            // Iteration Loop
+            // iteration loop
             // ---------------------------------------------------------------------
             while (true) {
                 const uintptr_t base_address = reinterpret_cast<uintptr_t>(enum_base_buffer);
@@ -11290,14 +11275,14 @@ public:
                     var_name_view = std::wstring(name_ptr, real_chars);
                 }
 
-                // Presence checks
+                // presence checks
                 if (!var_name_view.empty() && var_name_view.rfind(L"VMM", 0) == 0) {
                     debug("NVRAM: Detected hypervisor signature");
                     should_break_loop = true;
                     break;
                 }
 
-                // Read variables
+                // read variables
                 if (var_name_view == L"PKDefault" && pk_default_buf == nullptr)
                     (void)read_variable_to_buffer(std::wstring(var_name_view), current_var->VendorGuid, pk_default_buf, pk_default_len);
 
@@ -11533,18 +11518,19 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFlushInstructionCache", "NtFreeVirtualMemory" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        constexpr const char* function_names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFlushInstructionCache", "NtFreeVirtualMemory" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
         using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
         using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
         using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(funcs[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(funcs[1]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(funcs[2]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(funcs[3]);
+
+        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
+        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
+        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[2]);
+        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[3]);
 
         if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_flush_instruction_cache || !nt_free_virtual_memory) {
             return false;
@@ -12040,24 +12026,24 @@ public:
     #if (!x86)
         return false;
     #else
+        const HMODULE ntdll = util::get_ntdll();
+        if (!ntdll) return false;
+
+        constexpr const char* function_names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFreeVirtualMemory", "NtFlushInstructionCache", "NtClose" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
         using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
         using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
         using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
         using nt_close_fn = NTSTATUS(__stdcall*)(HANDLE);
 
-        const HMODULE ntdll = util::get_ntdll();
-        if (!ntdll) return false;
-
-        const char* names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFreeVirtualMemory", "NtFlushInstructionCache", "NtClose" };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
-
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(funcs[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(funcs[1]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(funcs[2]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(funcs[3]);
-        const auto nt_close = reinterpret_cast<nt_close_fn>(funcs[4]);
+        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
+        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
+        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[2]);
+        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[3]);
+        const auto nt_close = reinterpret_cast<nt_close_fn>(functions[4]);
 
         if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_free_virtual_memory || !nt_flush_instruction_cache || !nt_close)
             return false;
@@ -12148,7 +12134,7 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = {
+        constexpr const char* function_names[] = {
             "NtAllocateVirtualMemory",
             "NtFreeVirtualMemory",
             "NtGetContextThread",
@@ -12162,8 +12148,8 @@ public:
             "NtClose",
             "NtSetInformationThread"
         };
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
         using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
@@ -12179,19 +12165,19 @@ public:
         using nt_set_information_thread_fn = NTSTATUS(__stdcall*)(HANDLE, ULONG, PVOID, ULONG);
 
         // volatile ensures these are loaded from stack after SEH unwind when compiled with aggressive optimizations
-        nt_allocate_virtual_memory_fn volatile nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(funcs[0]);
-        nt_free_virtual_memory_fn volatile nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(funcs[1]);
-        net_get_context_thread_fn volatile nt_get_context_thread = reinterpret_cast<net_get_context_thread_fn>(funcs[2]);
-        nt_set_context_thread_fn volatile nt_set_context_thread = reinterpret_cast<nt_set_context_thread_fn>(funcs[3]);
-        rtl_add_vectored_exception_handler_fn volatile rtl_add_vectored_exception_handler = reinterpret_cast<rtl_add_vectored_exception_handler_fn>(funcs[4]);
-        rtl_remove_vectored_exception_handler_fn volatile rtl_remove_vectored_exception_handler = reinterpret_cast<rtl_remove_vectored_exception_handler_fn>(funcs[5]);
-        nt_protect_virtual_memory_fn volatile nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(funcs[6]);
+        nt_allocate_virtual_memory_fn volatile nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
+        nt_free_virtual_memory_fn volatile nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[1]);
+        net_get_context_thread_fn volatile nt_get_context_thread = reinterpret_cast<net_get_context_thread_fn>(functions[2]);
+        nt_set_context_thread_fn volatile nt_set_context_thread = reinterpret_cast<nt_set_context_thread_fn>(functions[3]);
+        rtl_add_vectored_exception_handler_fn volatile rtl_add_vectored_exception_handler = reinterpret_cast<rtl_add_vectored_exception_handler_fn>(functions[4]);
+        rtl_remove_vectored_exception_handler_fn volatile rtl_remove_vectored_exception_handler = reinterpret_cast<rtl_remove_vectored_exception_handler_fn>(functions[5]);
+        nt_protect_virtual_memory_fn volatile nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[6]);
 
-        nt_query_system_information_fn volatile nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(funcs[7]);
-        nt_create_thread_ex_fn volatile nt_create_thread_ex = reinterpret_cast<nt_create_thread_ex_fn>(funcs[8]);
-        nt_wait_for_single_object_fn volatile nt_wait_for_single_object = reinterpret_cast<nt_wait_for_single_object_fn>(funcs[9]);
-        nt_close_fn volatile nt_close = reinterpret_cast<nt_close_fn>(funcs[10]);
-        nt_set_information_thread_fn volatile nt_set_information_thread = reinterpret_cast<nt_set_information_thread_fn>(funcs[11]);
+        nt_query_system_information_fn volatile nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(functions[7]);
+        nt_create_thread_ex_fn volatile nt_create_thread_ex = reinterpret_cast<nt_create_thread_ex_fn>(functions[8]);
+        nt_wait_for_single_object_fn volatile nt_wait_for_single_object = reinterpret_cast<nt_wait_for_single_object_fn>(functions[9]);
+        nt_close_fn volatile nt_close = reinterpret_cast<nt_close_fn>(functions[10]);
+        nt_set_information_thread_fn volatile nt_set_information_thread = reinterpret_cast<nt_set_information_thread_fn>(functions[11]);
 
         if (!nt_allocate_virtual_memory || !nt_free_virtual_memory || !nt_get_context_thread ||
             !nt_set_context_thread || !rtl_add_vectored_exception_handler || !rtl_remove_vectored_exception_handler ||
@@ -12465,25 +12451,25 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = {
+        constexpr const char* function_names[] = {
             "NtAllocateVirtualMemory",
             "NtProtectVirtualMemory",
             "NtFlushInstructionCache",
             "NtFreeVirtualMemory"
         };
 
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
         using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
         using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
         using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
 
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(funcs[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(funcs[1]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(funcs[2]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(funcs[3]);
+        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
+        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
+        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[2]);
+        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[3]);
 
         if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory ||
             !nt_flush_instruction_cache || !nt_free_virtual_memory) {
@@ -12577,7 +12563,7 @@ public:
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;
 
-        const char* names[] = {
+        constexpr const char* function_names[] = {
             "NtAllocateVirtualMemory",
             "NtProtectVirtualMemory",
             "NtFlushInstructionCache",
@@ -12586,8 +12572,8 @@ public:
             "RtlRemoveVectoredExceptionHandler"
         };
 
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
         using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
@@ -12596,12 +12582,12 @@ public:
         using rtl_add_vectored_exception_handler_fn = PVOID(__stdcall*)(ULONG, PVECTORED_EXCEPTION_HANDLER);
         using rtl_remove_vectored_exception_handler_fn = ULONG(__stdcall*)(PVOID);
 
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(funcs[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(funcs[1]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(funcs[2]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(funcs[3]);
-        const auto rtl_add_vectored_exception_handler = reinterpret_cast<rtl_add_vectored_exception_handler_fn>(funcs[4]);
-        const auto rtl_remove_vectored_exception_handler = reinterpret_cast<rtl_remove_vectored_exception_handler_fn>(funcs[5]);
+        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
+        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
+        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[2]);
+        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[3]);
+        const auto rtl_add_vectored_exception_handler = reinterpret_cast<rtl_add_vectored_exception_handler_fn>(functions[4]);
+        const auto rtl_remove_vectored_exception_handler = reinterpret_cast<rtl_remove_vectored_exception_handler_fn>(functions[5]);
 
         if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory ||
             !nt_flush_instruction_cache || !nt_free_virtual_memory ||
@@ -12763,25 +12749,25 @@ public:
             return false;
         }
 
-        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
-        using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
-        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
-        using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
-
-        const char* names[] = {
+        constexpr const char* function_names[] = {
             "NtAllocateVirtualMemory",
             "NtProtectVirtualMemory",
             "NtFreeVirtualMemory",
             "NtFlushInstructionCache"
         };
 
-        void* funcs[ARRAYSIZE(names)] = {};
-        util::get_function_address(ntdll, names, funcs, ARRAYSIZE(names));
+        void* functions[ARRAYSIZE(function_names)] = {};
+        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(funcs[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(funcs[1]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(funcs[2]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(funcs[3]);
+        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
+        using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
+        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
+        using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
+
+        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
+        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
+        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[2]);
+        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[3]);
 
         if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_free_virtual_memory || !nt_flush_instruction_cache) {
             return false;
@@ -13089,20 +13075,20 @@ public:
             return false;
         }
 
-        const char* names[] = {
+        constexpr const char* function_names[] = {
             "Tbsi_Get_TCG_Log_Ex",
             "Tbsi_Context_Create",
             "Tbsip_Context_Close",
             "Tbsi_Get_TCG_Log"
         };
-        void* funcs[ARRAYSIZE(names)] = {};
+        void* functions[ARRAYSIZE(function_names)] = {};
 
-        util::get_function_address(hTbs, names, funcs, 4);
+        util::get_function_address(hTbs, function_names, functions, ARRAYSIZE(function_names));
 
-        tbsi_get_tcg_log_ex_fn pTbsi_Get_TCG_Log_Ex = reinterpret_cast<tbsi_get_tcg_log_ex_fn>(funcs[0]);
-        tbsi_context_create_fn pTbsi_Context_Create = reinterpret_cast<tbsi_context_create_fn>(funcs[1]);
-        tbsip_context_close_fn pTbsip_Context_Close = reinterpret_cast<tbsip_context_close_fn>(funcs[2]);
-        tbsi_get_tcg_log_fn    pTbsi_Get_TCG_Log = reinterpret_cast<tbsi_get_tcg_log_fn>(funcs[3]);
+        tbsi_get_tcg_log_ex_fn pTbsi_Get_TCG_Log_Ex = reinterpret_cast<tbsi_get_tcg_log_ex_fn>(functions[0]);
+        tbsi_context_create_fn pTbsi_Context_Create = reinterpret_cast<tbsi_context_create_fn>(functions[1]);
+        tbsip_context_close_fn pTbsip_Context_Close = reinterpret_cast<tbsip_context_close_fn>(functions[2]);
+        tbsi_get_tcg_log_fn    pTbsi_Get_TCG_Log = reinterpret_cast<tbsi_get_tcg_log_fn>(functions[3]);
 
         bool vm_detected = false;
 
@@ -13698,12 +13684,12 @@ public:
         }
 
         // assert if the flag is disabled, far better expression than typing std::bitset member functions
-        [[nodiscard]] static bool is_disabled(const flagset& flags, const u8 flag_bit) noexcept {
+        [[nodiscard]] static constexpr bool is_disabled(const flagset& flags, const u8 flag_bit) noexcept {
             return flag_bit >= flags.size() || !flags.test(flag_bit);
         }
 
         // assert if the flag is enabled
-        [[nodiscard]] static bool is_enabled(const flagset& flags, const u8 flag_bit) noexcept {
+        [[nodiscard]] static constexpr bool is_enabled(const flagset& flags, const u8 flag_bit) noexcept {
             return flag_bit < flags.size() && flags.test(flag_bit);
         }
 
