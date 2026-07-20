@@ -3365,19 +3365,36 @@ public:
         }
 
         [[nodiscard]] static size_t get_instruction_count(volatile const timer::timer_tick_t& shared_counter, const bool is_intel) {
+            // volatile dependency chain macros (forces 6.5 cycles per addition due to L1 Store-to-Load Forwarding)
         #define CAL_DEP_10(reg)  reg += 1; reg += 1; reg += 1; reg += 1; reg += 1; \
-                             reg += 1; reg += 1; reg += 1; reg += 1; reg += 1;
+                                     reg += 1; reg += 1; reg += 1; reg += 1; reg += 1;
 
         #define CAL_DEP_100(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) \
-                             CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg)
+                                     CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg)
 
-            size_t count = 0;
+            // unrolling macros for target instructions to amortize timing boundaries
+        #define RUN_SERIALIZE_10() \
+                _serialize(); _serialize(); _serialize(); _serialize(); _serialize(); \
+                _serialize(); _serialize(); _serialize(); _serialize(); _serialize();
 
-            constexpr int TRIALS = 15;
+        #define RUN_SERIALIZE_100() \
+                RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10() \
+                RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10()
+
+        #define RUN_LFENCE_10() \
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); \
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+
+        #define RUN_LFENCE_100() \
+                RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10() \
+                RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10()
+
+            constexpr int TRIALS = 20;
+
             timer::timer_tick_t min_dep_ticks = (std::numeric_limits<timer::timer_tick_t>::max)();
             timer::timer_tick_t min_instr_ticks = (std::numeric_limits<timer::timer_tick_t>::max)();
 
-            // 1. measure the minimum ticks for a 100-cycle dependency chain (our cycle reference)
+            // measure a 100-iteration volatile stack dependency chain
             for (int t = 0; t < TRIALS; ++t) {
                 timer::timer_tick_t sync = shared_counter;
                 while (shared_counter == sync); // align to tick boundary
@@ -3385,7 +3402,7 @@ public:
                 timer::timer_tick_t start = shared_counter;
                 std::atomic_signal_fence(std::memory_order_seq_cst);
 
-                volatile u64 reg = 0;
+                volatile u64 reg = start; // volatile prevents compiler from folding additions
                 CAL_DEP_100(reg);
 
                 std::atomic_signal_fence(std::memory_order_seq_cst);
@@ -3397,56 +3414,91 @@ public:
                 }
             }
 
-            // 2. measure the minimum ticks for a single execution of the target serializing instruction
-            for (int t = 0; t < TRIALS; ++t) {
-                timer::timer_tick_t sync = shared_counter;
-                while (shared_counter == sync);
+            // measure 100 executions of the target instruction to amortize timing boundaries
+            if (is_intel) {
+                for (int t = 0; t < TRIALS; ++t) {
+                    timer::timer_tick_t sync = shared_counter;
+                    while (shared_counter == sync);
 
-                timer::timer_tick_t start = shared_counter;
-                std::atomic_signal_fence(std::memory_order_seq_cst);
+                    timer::timer_tick_t start = shared_counter;
+                    std::atomic_signal_fence(std::memory_order_seq_cst);
 
-                if (is_intel) {
-                    _serialize();
+                    RUN_SERIALIZE_100();
+
+                    std::atomic_signal_fence(std::memory_order_seq_cst);
+                    timer::timer_tick_t end = shared_counter;
+                    timer::timer_tick_t diff = end - start;
+
+                    if (diff < min_instr_ticks && diff > 0) {
+                        min_instr_ticks = diff;
+                    }
                 }
-                else {
-                    _mm_lfence();
-                }
+            }
+            else {
+                for (int t = 0; t < TRIALS; ++t) {
+                    timer::timer_tick_t sync = shared_counter;
+                    while (shared_counter == sync);
 
-                std::atomic_signal_fence(std::memory_order_seq_cst);
-                timer::timer_tick_t end = shared_counter;
-                timer::timer_tick_t diff = end - start;
+                    timer::timer_tick_t start = shared_counter;
+                    std::atomic_signal_fence(std::memory_order_seq_cst);
 
-                if (diff < min_instr_ticks && diff > 0) {
-                    min_instr_ticks = diff;
+                    RUN_LFENCE_100();
+
+                    std::atomic_signal_fence(std::memory_order_seq_cst);
+                    timer::timer_tick_t end = shared_counter;
+                    timer::timer_tick_t diff = end - start;
+
+                    if (diff < min_instr_ticks && diff > 0) {
+                        min_instr_ticks = diff;
+                    }
                 }
             }
 
-            // if counter resolution was too coarse to capture differences
-            if (min_dep_ticks == (std::numeric_limits<timer::timer_tick_t>::max)() || min_instr_ticks == 0) {
-                debug("TIMER: Calibration did not produce accurate results, applying most stable configuration possible");
-                count = is_intel ? 3 : 8; // sane defaults collected across multiple experimental tests
-                return count;
+            #undef CAL_DEP_10
+            #undef CAL_DEP_100
+            #undef RUN_SERIALIZE_10
+            #undef RUN_SERIALIZE_100
+            #undef RUN_LFENCE_10
+            #undef RUN_LFENCE_100
+
+            // check for coarse resolution fallback or invalid metrics
+            if (min_dep_ticks == (std::numeric_limits<timer::timer_tick_t>::max)() ||
+                min_instr_ticks == (std::numeric_limits<timer::timer_tick_t>::max)() ||
+                min_dep_ticks == 0 || min_instr_ticks == 0) {
+                debug("TIMER: Calibration was not accurate enough, fallback to safe defaults");
+                return is_intel ? 3 : 8;
             }
 
-            // physical latency of the serializing instruction in CPU cycles
-            const double cycles_per_tick = 100.0 / static_cast<double>(min_dep_ticks);
-            const double instr_latency_cycles = static_cast<double>(min_instr_ticks) * cycles_per_tick;
+            // - 100 volatile additions take ~650 CPU cycles on modern x86/x64 architectures.
+            // - min_dep_ticks measures these 650 cycles.
+            // - min_instr_ticks measures 100 executions of the target instruction.
+            //
+            // cycles_per_tick     = 650.0 / min_dep_ticks
+            // total_instr_cycles  = min_instr_ticks * cycles_per_tick
+            // single_instr_cycles = total_instr_cycles / 100.0
+            //
+            // substituting:
+            // single_instr_cycles = (min_instr_ticks * (650.0 / min_dep_ticks)) / 100.0
+            //                     = 6.5 * (min_instr_ticks / min_dep_ticks)
 
-            // CPUID is roughly equal to SERIALIZE latency + microcode overhead
-            constexpr double microcode_lookup_overhead = 80.0; // average overhead of a microcode table lookup when checking for the 0x0 leaf in all microarchitectures
+            const double instr_latency_cycles = 6.5 * (static_cast<double>(min_instr_ticks) / static_cast<double>(min_dep_ticks));
+
+            // reference-to-CPUID conversion ratios
+            constexpr double microcode_lookup_overhead = 80.0; // average CPUID execution path overhead (microcode table lookups)
             const double estimated_cpuid_cycles = instr_latency_cycles + microcode_lookup_overhead;
             const double calculated_ratio = estimated_cpuid_cycles / instr_latency_cycles;
 
-            // clamp the instruction count to realistic physical ranges
             const size_t final_count = static_cast<size_t>(calculated_ratio + 0.5);
+
+            debug("TIMER: Calibrated instruction count at ", final_count, " per tick");
+
+            // hardware-specific instruction limits with updated minimum constraints
             if (is_intel) {
-                count = clamp_c11(final_count, 1, 6);
+                return clamp_c11(final_count, 3, 6); 
             }
             else {
-                count = clamp_c11(final_count, 2, 12); // LFENCE is naturally faster than SERIALIZE
+                return clamp_c11(final_count, 8, 12);
             }
-
-            return count;
         }
 
         // fully unrolled timing paths for Intel (SERIALIZE)
@@ -3562,7 +3614,8 @@ public:
             case 8:
                 r_pre = counter;
                 std::atomic_signal_fence(std::memory_order_acq_rel);
-                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); 
+                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
                 std::atomic_signal_fence(std::memory_order_acq_rel);
                 r_post = counter;
                 break;
