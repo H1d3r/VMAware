@@ -14996,7 +14996,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::QEMU_FW_CFG, {70, VM::qemu_fw_cfg}},
             {VM::SYSTEMD, {35, VM::systemd_virt}},
             {VM::CTYPE, {20, VM::chassis_type}},
-            {VM::DOCKERENV, {30, VM::dockerenv}},
+            {VM::DOCKERENV, {100, VM::dockerenv}},
             {VM::DMIDECODE, {55, VM::dmidecode}},
             {VM::DMESG, {55, VM::dmesg}},
             {VM::HWMON, {35, VM::hwmon}},
