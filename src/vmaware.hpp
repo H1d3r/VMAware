@@ -443,6 +443,14 @@
     #define VMAWARE_FORCE_INLINE inline
 #endif
 
+#if (MSVC)
+    #define VMAWARE_RESTRICT __restrict
+#elif (CLANG || GCC)
+    #define VMAWARE_RESTRICT __restrict__
+#else
+    #define VMAWARE_RESTRICT
+#endif
+
 #define VMAWARE_UNUSED(x) ((void)(x))
 
 struct VM {
@@ -742,7 +750,7 @@ public:
                 amd_easter_egg = 0x8fffffff;
         };
 
-        static void cpuid_count(unsigned leaf, unsigned subleaf, unsigned* a, unsigned* b, unsigned* c, unsigned* d) {
+        static void cpuid_count(unsigned leaf, unsigned subleaf, unsigned* VMAWARE_RESTRICT a, unsigned* VMAWARE_RESTRICT b, unsigned* VMAWARE_RESTRICT c, unsigned* VMAWARE_RESTRICT d) {
         #if (x86)
             #if (MSVC)
                 int regs[4];
@@ -2836,7 +2844,7 @@ public:
         }
     };
 
-    static void str_copy(char* dest, const char* src, const size_t max_len) {
+    static void str_copy(char* VMAWARE_RESTRICT dest, const char* VMAWARE_RESTRICT src, const size_t max_len) {
         size_t i = 0;
         while (src[i] != '\0' && i < max_len - 1) {
             dest[i] = src[i];
@@ -3444,9 +3452,9 @@ public:
         // fully unrolled timing paths for Intel (SERIALIZE)
         VMAWARE_FORCE_INLINE static void serialize(
             const size_t count,
-            volatile const timer::timer_tick_t& counter,
-            timer::timer_tick_t& r_pre,
-            timer::timer_tick_t& r_post
+            volatile const timer::timer_tick_t& VMAWARE_RESTRICT counter,
+            timer::timer_tick_t& VMAWARE_RESTRICT r_pre,
+            timer::timer_tick_t& VMAWARE_RESTRICT r_post
         ) noexcept {
             switch (count) {
             case 1:
@@ -3497,9 +3505,9 @@ public:
         // fully unrolled timing paths for AMD (LFENCE) or older Intel
         VMAWARE_FORCE_INLINE static void lfence(
             const size_t count,
-            volatile const timer::timer_tick_t& counter,
-            timer::timer_tick_t& r_pre,
-            timer::timer_tick_t& r_post
+            volatile const timer::timer_tick_t& VMAWARE_RESTRICT counter,
+            timer::timer_tick_t& VMAWARE_RESTRICT r_pre,
+            timer::timer_tick_t& VMAWARE_RESTRICT r_post
         ) noexcept {
             switch (count) {
             case 1:
@@ -4758,7 +4766,7 @@ public:
             }
 
             // software fallback CRC32-C (Castagnoli) of a block of memory
-            static u32 crc32c_sw(u32 crc, const void* data, size_t len) noexcept {
+            static u32 crc32c_sw(u32 crc, const void* VMAWARE_RESTRICT data, size_t len) noexcept {
                 const u8* ptr = reinterpret_cast<const u8*>(data);
                 for (size_t i = 0; i < len; ++i) {
                     crc ^= ptr[i];
