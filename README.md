@@ -359,6 +359,11 @@ For email inquiries: `vmaware.support@gmail.com`
 <br>
 
 ## Legal 📜
-I am not responsible nor liable for any damage you cause through any malicious usage of this project. 
+You are solely responsible for how you use this repository and for ensuring your use complies with applicable law, regulations, and the terms of any third-party systems, services, accounts, or data you interact with.
+
+No endorsement is implied by publication of this repository or by any reference to third-party products, services, names, or trademarks.
+
+Third-party software, models, datasets, binaries, and other materials included in or referenced by this repository remain subject to their own licenses and terms. You are responsible for reviewing and complying with those separate terms.
+
 
 License: MIT
