@@ -3364,143 +3364,6 @@ public:
             return (val < min_val) ? min_val : ((val > max_val) ? max_val : val);
         }
 
-        [[nodiscard]] static size_t get_instruction_count(volatile const timer::timer_tick_t& shared_counter, const bool is_intel) {
-            // volatile dependency chain macros (forces 6.5 cycles per addition due to L1 Store-to-Load Forwarding)
-        #define CAL_DEP_10(reg)  reg += 1; reg += 1; reg += 1; reg += 1; reg += 1; \
-                                     reg += 1; reg += 1; reg += 1; reg += 1; reg += 1;
-
-        #define CAL_DEP_100(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) \
-                                     CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg) CAL_DEP_10(reg)
-
-            // unrolling macros for target instructions to amortize timing boundaries
-        #define RUN_SERIALIZE_10() \
-                _serialize(); _serialize(); _serialize(); _serialize(); _serialize(); \
-                _serialize(); _serialize(); _serialize(); _serialize(); _serialize();
-
-        #define RUN_SERIALIZE_100() \
-                RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10() \
-                RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10() RUN_SERIALIZE_10()
-
-        #define RUN_LFENCE_10() \
-                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); \
-                _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
-
-        #define RUN_LFENCE_100() \
-                RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10() \
-                RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10() RUN_LFENCE_10()
-
-            constexpr int TRIALS = 20;
-
-            timer::timer_tick_t min_dep_ticks = (std::numeric_limits<timer::timer_tick_t>::max)();
-            timer::timer_tick_t min_instr_ticks = (std::numeric_limits<timer::timer_tick_t>::max)();
-
-            // measure a 100-iteration volatile stack dependency chain
-            for (int t = 0; t < TRIALS; ++t) {
-                timer::timer_tick_t sync = shared_counter;
-                while (shared_counter == sync); // align to tick boundary
-
-                timer::timer_tick_t start = shared_counter;
-                std::atomic_signal_fence(std::memory_order_seq_cst);
-
-                volatile u64 reg = start; // volatile prevents compiler from folding additions
-                CAL_DEP_100(reg);
-
-                std::atomic_signal_fence(std::memory_order_seq_cst);
-                timer::timer_tick_t end = shared_counter;
-                timer::timer_tick_t diff = end - start;
-
-                if (diff < min_dep_ticks && diff > 0) {
-                    min_dep_ticks = diff;
-                }
-            }
-
-            // measure 100 executions of the target instruction to amortize timing boundaries
-            if (is_intel) {
-                for (int t = 0; t < TRIALS; ++t) {
-                    timer::timer_tick_t sync = shared_counter;
-                    while (shared_counter == sync);
-
-                    timer::timer_tick_t start = shared_counter;
-                    std::atomic_signal_fence(std::memory_order_seq_cst);
-
-                    RUN_SERIALIZE_100();
-
-                    std::atomic_signal_fence(std::memory_order_seq_cst);
-                    timer::timer_tick_t end = shared_counter;
-                    timer::timer_tick_t diff = end - start;
-
-                    if (diff < min_instr_ticks && diff > 0) {
-                        min_instr_ticks = diff;
-                    }
-                }
-            }
-            else {
-                for (int t = 0; t < TRIALS; ++t) {
-                    timer::timer_tick_t sync = shared_counter;
-                    while (shared_counter == sync);
-
-                    timer::timer_tick_t start = shared_counter;
-                    std::atomic_signal_fence(std::memory_order_seq_cst);
-
-                    RUN_LFENCE_100();
-
-                    std::atomic_signal_fence(std::memory_order_seq_cst);
-                    timer::timer_tick_t end = shared_counter;
-                    timer::timer_tick_t diff = end - start;
-
-                    if (diff < min_instr_ticks && diff > 0) {
-                        min_instr_ticks = diff;
-                    }
-                }
-            }
-
-            #undef CAL_DEP_10
-            #undef CAL_DEP_100
-            #undef RUN_SERIALIZE_10
-            #undef RUN_SERIALIZE_100
-            #undef RUN_LFENCE_10
-            #undef RUN_LFENCE_100
-
-            // check for coarse resolution fallback or invalid metrics
-            if (min_dep_ticks == (std::numeric_limits<timer::timer_tick_t>::max)() ||
-                min_instr_ticks == (std::numeric_limits<timer::timer_tick_t>::max)() ||
-                min_dep_ticks == 0 || min_instr_ticks == 0) {
-                debug("TIMER: Calibration was not accurate enough, fallback to safe defaults");
-                return is_intel ? 3 : 8;
-            }
-
-            // - 100 volatile additions take ~650 CPU cycles on modern x86/x64 architectures.
-            // - min_dep_ticks measures these 650 cycles.
-            // - min_instr_ticks measures 100 executions of the target instruction.
-            //
-            // cycles_per_tick     = 650.0 / min_dep_ticks
-            // total_instr_cycles  = min_instr_ticks * cycles_per_tick
-            // single_instr_cycles = total_instr_cycles / 100.0
-            //
-            // substituting:
-            // single_instr_cycles = (min_instr_ticks * (650.0 / min_dep_ticks)) / 100.0
-            //                     = 6.5 * (min_instr_ticks / min_dep_ticks)
-
-            const double instr_latency_cycles = 6.5 * (static_cast<double>(min_instr_ticks) / static_cast<double>(min_dep_ticks));
-
-            // reference-to-CPUID conversion ratios
-            constexpr double microcode_lookup_overhead = 80.0; // average CPUID execution path overhead (microcode table lookups)
-            const double estimated_cpuid_cycles = instr_latency_cycles + microcode_lookup_overhead;
-            const double calculated_ratio = estimated_cpuid_cycles / instr_latency_cycles;
-
-            const size_t final_count = static_cast<size_t>(calculated_ratio + 0.5);
-
-            debug("TIMER: Calibrated instruction count at ", final_count, " per tick");
-
-            // hardware-specific instruction limits with updated minimum constraints
-            if (is_intel) {
-                return clamp_c11(final_count, 3, 6); 
-            }
-            else {
-                return clamp_c11(final_count, 8, 12);
-            }
-        }
-
         // fully unrolled timing paths for Intel (SERIALIZE)
         VMAWARE_FORCE_INLINE static void serialize(
             const size_t count,
@@ -3629,21 +3492,6 @@ public:
                 r_post = counter;
                 break;
             }
-        }
-
-        // we dont use cpu::cpuid on purpose
-        static VMAWARE_FORCE_INLINE void vmexit() {
-            #if (GCC || CLANG)
-                u32 a = 0;
-                u32 b, c, d;
-                __asm__ volatile (
-                    "cpuid"
-                    : "+a"(a), "=b"(b), "=c"(c), "=d"(d)
-                );
-            #else
-                int dummy[4];
-                __cpuid(dummy, 0);
-            #endif
         }
 
         [[nodiscard]] static timer_tick_t calculate_latency(const std::vector<timer_tick_t>& samples_in) {
@@ -6054,13 +5902,13 @@ public:
 
             std::mt19937 gen(seq);
             std::uniform_int_distribution<size_t> batch_dist(30000, 70000);
-            const size_t BATCH_SIZE = batch_dist(gen);
+            const size_t batch_size = batch_dist(gen);
 
             SleepEx(0, FALSE); // try to get fresh quantum before starting warm-up phase, give time to the kernel to setup priorities
 
-            std::vector<timer::timer_tick_t> vm_samples(BATCH_SIZE), ref_samples(BATCH_SIZE); // pre page-fault MMU, wwe wont warm-up cpuid samples for the P-states intentionally
-            VirtualLock(vm_samples.data(), BATCH_SIZE * sizeof(timer::timer_tick_t)); // lock the memory for the samples to prevent page faults if permissions are enough
-            VirtualLock(ref_samples.data(), BATCH_SIZE * sizeof(timer::timer_tick_t));
+            std::vector<timer::timer_tick_t> vm_samples(batch_size), ref_samples(batch_size); // pre page-fault MMU, wwe wont warm-up cpuid samples for the P-states intentionally
+            VirtualLock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t)); // lock the memory for the samples to prevent page faults if permissions are enough
+            VirtualLock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
 
             // clear pending execution state only for the first loop iteration, legacy fallback for _serialize
             _mm_mfence(); // force all previous memory operations to commit to the cache hierarchy and empty store buffer
@@ -6069,24 +5917,21 @@ public:
             state.start_test.store(true, std::memory_order_release); 
 
             // independent multi-trial state initialization
-            constexpr int TRIALS = 3;
+            constexpr int trials = 3;
+            const size_t local_max_attempts = batch_size * trials;
             timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
             timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
 
             // cache and cpu scheduler warm-up won't affect anything in the measurement loop, so ramp up frequency/P-states to a high non-AVX Turbo/P-state without vmexits
             timer::warmup_cpu(is_intel);
 
-            const size_t instruction_count = timer::get_instruction_count(state.counter, is_intel); // must be placed after the warmup
-
-            for (int trial = 0; trial < TRIALS; ++trial) {
+            for (int trial = 0; trial < trials; ++trial) {
                 size_t valid = 0;
                 size_t invalid = 0;
 
-                const size_t local_max_attempts = BATCH_SIZE * TRIALS;
-
                 // inside the timing windows, there must be zero memory output (no stack arrays can be written to), zero conditional branches and zero stack spilling (no register push/pops)
                 if (is_intel) {
-                    while (valid < BATCH_SIZE && invalid < local_max_attempts) {
+                    while (valid < batch_size && invalid < local_max_attempts) {
                         // cpuid and serialize/lfence interpolated so that any turbo boost, thermal throttling, speculation (for the loop overhead itself, not for the serializing instructions), etc affects samples equally
                         timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
@@ -6099,7 +5944,11 @@ public:
                         sync = state.counter;
                         while (state.counter == sync); // fastest busy-waiting strategy, PAUSE can conditionally exit, calling APIs like SwitchToThread() would be even worse
                         
-                        timer::serialize(instruction_count, state.counter, r_pre, r_post);
+                        r_pre = state.counter;
+                        std::atomic_signal_fence(std::memory_order_acq_rel);
+                        _serialize(); _serialize(); _serialize(); // first serialize is slower because of having to deal with the pipeline, subsequent only pay the architectural cost of the serialization itself
+                        std::atomic_signal_fence(std::memory_order_acq_rel);
+                        r_post = state.counter;
 
                         sync = state.counter;
                         while (state.counter == sync); // sync to our counter tick again by spam hitting L3
@@ -6109,10 +5958,19 @@ public:
                         v_pre = state.counter;
                         std::atomic_signal_fence(std::memory_order_seq_cst); // _ReadWriteBarrier() aka dont emit runtime fences
 
-                        // the only way a legitimate interrupt can make the check false flag is if most of the samples were contaminated just in the cpuid samples but not in the serialize/lfence samples
-                        // still possible tho, but it's as accurate we can get on user-mode without relying on any other hardware clock or cross-referencing with the counter thread mid-execution
-                        // this is why the score of this technique is not enough to determine a VM
-                        timer::vmexit();
+                        // the only way a legitimate interrupt can make the check false flag is if most of the samples were contaminated just in the cpuid samples but not in the serialize/lfence samples (i.e. during a high workload)
+                        // still possible tho, but it's as accurate we can get on user-mode without relying on any other hardware clock, this is why the score of this technique is not enough to determine a VM
+                    #if (GCC || CLANG)
+                        u32 a = 0;
+                        u32 b, c, d;
+                        __asm__ volatile (
+                            "cpuid"
+                            : "+a"(a), "=b"(b), "=c"(c), "=d"(d)
+                        );
+                    #else
+                        int dummy[4];
+                        __cpuid(dummy, 0);
+                    #endif
 
                         std::atomic_signal_fence(std::memory_order_seq_cst);
                         v_post = state.counter;
@@ -6132,7 +5990,7 @@ public:
                     }
                 }
                 else {
-                    while (valid < BATCH_SIZE && invalid < local_max_attempts) {
+                    while (valid < batch_size && invalid < local_max_attempts) {
                         // this block's logic is the same as above but using LFENCE instead of SERIALIZE, read code comments above
                         timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
@@ -6141,7 +5999,12 @@ public:
                         sync = state.counter;
                         while (state.counter == sync);
 
-                        timer::lfence(instruction_count, state.counter, r_pre, r_post);
+                        r_pre = state.counter;
+                        std::atomic_signal_fence(std::memory_order_acq_rel);
+                        _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+                        _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
+                        std::atomic_signal_fence(std::memory_order_acq_rel);
+                        r_post = state.counter;
                         
                         sync = state.counter;
                         while (state.counter == sync); 
@@ -6150,7 +6013,17 @@ public:
 
                         v_pre = state.counter;
                         std::atomic_signal_fence(std::memory_order_seq_cst); 
-                        timer::vmexit();
+                    #if (GCC || CLANG)
+                        u32 a = 0;
+                        u32 b, c, d;
+                        __asm__ volatile (
+                            "cpuid"
+                            : "+a"(a), "=b"(b), "=c"(c), "=d"(d)
+                        );
+                    #else
+                        int dummy[4];
+                        __cpuid(dummy, 0);
+                    #endif
                         std::atomic_signal_fence(std::memory_order_seq_cst);
                         v_post = state.counter;
 
@@ -6192,20 +6065,19 @@ public:
             debug("TIMER: VMM -> ", best_cpuid_l, " | nVMM -> ", best_ref_l, " | Ratio -> ", latency_ratio); // these ARE NOT cycles
             if (latency_ratio >= threshold) hypervisor_detected = true;
 
-            // Detect IPI-based counter pausing bypasses
-            // For the median itself to exceed baremetal limits (which rarely pass 1000), an interrupt must be occurring on almost EVERY single loop iteration
-            // This is the footprint of a hypervisor continuously spamming cross-core IPIs to try and pause our threads
-            if (best_cpuid_l > 2000 || best_ref_l > 2000 || best_cpuid_l == 1 || best_ref_l == 1) {
+            // detect IPI-based counter pausing bypasses
+            // for the median itself to exceed baremetal limits (which rarely pass 1000), an interrupt must be occurring on almost EVERY single loop iteration
+            // this is the footprint of a hypervisor continuously spamming cross-core IPIs to try and pause our threads
+            if (best_cpuid_l > 2500 || best_ref_l > 2500 || best_cpuid_l == 1 || best_ref_l == 1) {
                 hypervisor_detected = true;
             }
 
-            // cleanup
             SetThreadPriorityBoost(current_thread, FALSE);
             SetThreadPriority(current_thread, old_thread_priority);
             SetPriorityClass(current_process, old_process_priority);
             SetThreadAffinityMask(current_thread, old_affinity);
-            VirtualUnlock(vm_samples.data(), BATCH_SIZE * sizeof(timer::timer_tick_t));
-            VirtualUnlock(ref_samples.data(), BATCH_SIZE * sizeof(timer::timer_tick_t));
+            VirtualUnlock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+            VirtualUnlock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
         };
 
         std::thread t1(counter_thread);
@@ -7065,7 +6937,7 @@ public:
         // Linux DT method: inspired by https://github.com/ShellCode33/VM-Detection
         // Linux sysfs method: looks for /sys/module/qemu_fw_cfg/ & /sys/firmware/qemu_fw_cfg/
 
-        // 1) Device Tree-based detection
+        // 1) device Tree-based detection
         if (util::exists("/proc/device-tree/fw-cfg")) {
             return core::add(brand_enum::QEMU);
         }
@@ -7076,6 +6948,7 @@ public:
         // 2) sysfs-based detection
         const char* module_path = "/sys/module/qemu_fw_cfg/";
         const char* firmware_path = "/sys/firmware/qemu_fw_cfg/";
+
         if (util::is_directory(module_path) && util::exists(module_path) &&
             util::is_directory(firmware_path) && util::exists(firmware_path)) {
             return core::add(brand_enum::QEMU);
@@ -7299,11 +7172,11 @@ public:
      * 
      */
     [[nodiscard]] static bool system_registers() {
-        // Even though SMSW queries a status register (CR0), it is historically grouped with descriptor table checks in virtualization detection 
+        // even though SMSW queries a status register (CR0), it is historically grouped with descriptor table checks in virtualization detection 
         // (often called "Red Pill" techniques)
         bool found = false;
 
-        // Linux Implementation (SIDT only)
+        // Linux - SIDT only
     #if (LINUX && (GCC || CLANG) && x86)
         u8 values[10] = { 0 }; // NOLINT(misc-const-correctness)
 
@@ -7339,14 +7212,14 @@ public:
             if (values[5] == 0x00) found = true; // 6th byte in x86 mode
         #endif
 
-        // Windows Implementation (SGDT, SLDT, SIDT, SMSW)
+        // Windows - SGDT, SLDT, SIDT, SMSW
     #elif (WINDOWS && x86)
         SYSTEM_INFO si;
         GetNativeSystemInfo(&si);
         DWORD_PTR original_mask = 0;
         const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
 
-        // Iterating processors for SGDT, SLDT, and SIDT
+        // iterating processors for SGDT, SLDT, and SIDT
         for (DWORD i = 0; i < si.dwNumberOfProcessors; ++i) {
             const DWORD_PTR mask = (DWORD_PTR)1 << i;
             const DWORD_PTR previous_mask = SetThreadAffinityMask(current_thread, mask);
@@ -7359,7 +7232,7 @@ public:
                 original_mask = previous_mask;
             }
 
-            // Technique 1: SGDT (x86 & x64)
+            // technique 1: SGDT (x86 & x64)
             {
             #if (x86_64)
                 u8 gdtr[10] = { 0 };
@@ -7394,7 +7267,7 @@ public:
                 }
             }
 
-            // Technique 2: SLDT (x86_32 only)
+            // technique 2: SLDT (x86_32 only)
             #if (x86_32)
                 if (!found) {
                     u8 ldtr_buf[4] = { 0xEF, 0xBE, 0xAD, 0xDE };
@@ -7424,7 +7297,7 @@ public:
                 }
             #endif
 
-                // Technique 3: SIDT (x86 & x64)
+                // technique 3: SIDT (x86 & x64)
                 if (!found) {
                 #if (x86_64)
                     u8 idtr_buffer[10] = { 0 };
@@ -7453,7 +7326,7 @@ public:
                     ULONG_PTR idt_base = 0;
                     memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
 
-                    // Check for the 0xE8 signature (VPC/Hyper-V) in the high byte
+                    // check for the 0xE8 signature (VPC/Hyper-V) in the high byte
                     if ((idt_base >> 24) == 0xE8) {
                         debug("SIDT: VPC/Hyper-V signature detected on core %u", i);
                         found = true;
@@ -7467,7 +7340,7 @@ public:
             SetThreadAffinityMask(current_thread, original_mask);
         }
 
-        // Technique 4: SMSW (x86_32 only), no affinity pinning needed
+        // technique 4: SMSW (x86_32 only), no affinity pinning needed
         #if (x86_32)
             if (!found) {
                 u32 reax = 0;
@@ -7496,7 +7369,7 @@ public:
      * @implements VM::AZURE
      */
     [[nodiscard]] static bool azure() noexcept {
-        // Returns 1u if alphanumeric, 0u if not. Here we use unsigned integers
+        // returns 1u if alphanumeric, 0u if not. Here we use unsigned integers
         // instead of booleans because MSVC's IntelliSense is stupid and avoids warnings 
         // about bitwise operations on boolean types
         auto is_alnum_ascii = [](char c) noexcept -> unsigned int {
@@ -7601,7 +7474,6 @@ public:
             u16 p_lvl3_lat;
         };
 
-        // Unified targets and brand map (merged Windows & Linux targets)
         constexpr std::array<const char*, 24> targets = { {
             "Parallels Software", "Parallels(R)",
             "innotek",            "Oracle",   "VirtualBox", "vbox", "VBOX",
@@ -7632,7 +7504,6 @@ public:
         static_assert(array_validator::verify_no_nulls(targets, 0), "FIRMWARE: 'targets' array contains NULLs.");
         static_assert(targets.size() == brands_map.size(), "FIRMWARE: The target string array size must match the brands mapping array size.");
 
-        // Core scanning engine
         auto scan_buffer = [&](const u8* buffer, const size_t buffer_len) noexcept -> bool {
             auto find_pattern = [&](const char* pattern, size_t pattern_len) noexcept -> bool {
                 if (pattern_len == 0 || pattern_len > buffer_len) return false;
@@ -7664,7 +7535,7 @@ public:
                     return core::add(brand_enum::QEMU);
                 }
 
-                // Alternate QEMU Debug Port: matching "DBUG" method and "DBGB" field definitions together
+                // alternate QEMU Debug Port: matching "DBUG" method and "DBGB" field definitions together
                 if (find_pattern("DBUG", 4) && find_pattern("DBGB", 4)) {
                     debug("FIRMWARE: Detected QEMU DBUG method and DBGB field definitions");
                     return core::add(brand_enum::QEMU);
@@ -7693,7 +7564,7 @@ public:
                 }
             }
 
-            // 2) Standard VM-specific firmware signature scanning
+            // 2) standard VM-specific firmware signature scanning
             for (size_t i = 0; i < targets.size(); ++i) {
                 const char* pattern = targets[i];
                 const size_t pattern_len = strlen(pattern);
@@ -7726,7 +7597,7 @@ public:
                 }
             }
 
-            // 3) Known loader bypasses/patches
+            // 3) known loader bypasses/patches
             {
                 constexpr char marker[] = "777777";
 
@@ -7782,7 +7653,7 @@ public:
         std::vector<u8> work_buffer;
         work_buffer.reserve(65536);
 
-        // Enumerate ACPI tables
+        // enumerate ACPI tables
         constexpr DWORD acpi_signature = 'ACPI';
         const DWORD acpi_enum_size = EnumSystemFirmwareTables(acpi_signature, nullptr, 0);
         if (acpi_enum_size == 0)
@@ -7830,14 +7701,14 @@ public:
             return scan_buffer(work_buffer.data(), sz);
         };
 
-        // Scan every ACPI table
+        // scan every ACPI table
         for (const auto table_id : tables) {
             if (fetch_and_scan(acpi_signature, table_id)) {
                 return true;
             }
         }
 
-        // Scan SMBIOS (RSMB) / FIRM tables
+        // scan SMBIOS (RSMB) / FIRM tables
         constexpr DWORD smb_providers[] = { 'FIRM', 'RSMB' };
 
         for (DWORD prov : smb_providers) {
@@ -7945,7 +7816,6 @@ public:
                 continue;
             }
 
-            // Centralized scan on Linux-sourced table buffer
             if (scan_buffer(buffer.data(), file_size_u)) {
                 return true;
             }
@@ -8474,8 +8344,8 @@ public:
             return result;
         }
 
-        // Iterate through the first few physical drives (PhysicalDrive0 to PhysicalDrive3)
-        // Most systems boot from 0, and VMs rarely emulate more than 1 or 2 drives by default
+        // iterate through the first few physical drives (PhysicalDrive0 to PhysicalDrive3)
+        // most systems boot from 0, and VMs rarely emulate more than 1 or 2 drives by default
         for (u8 drive = 0; drive < MAX_PHYSICAL_DRIVES; ++drive) {
             wchar_t path[32];
             swprintf_s(path, L"\\??\\PhysicalDrive%u", drive);
@@ -8505,7 +8375,7 @@ public:
             ++successful_opens;
 
             // stack buffer attempt
-            // We first try to read the storage properties into a small stack buffer to avoid heap
+            // we first try to read the storage properties into a small stack buffer to avoid heap
             BYTE stackBuf[512] = { 0 };
             const STORAGE_DEVICE_DESCRIPTOR* descriptor = reinterpret_cast<STORAGE_DEVICE_DESCRIPTOR*>(stackBuf);
 
@@ -8524,7 +8394,7 @@ public:
             SIZE_T allocated_size = 0;
             const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
 
-            // If the stack buffer was too small (NtDeviceIoControlFile failed), we fall back 
+            // if the stack buffer was too small (NtDeviceIoControlFile failed), we fall back 
             // to allocating memory dynamically using NtAllocateVirtualMemory
             if (!NT_SUCCESS(st)) {
                 DWORD reported_size = 0;
@@ -8532,7 +8402,7 @@ public:
                     reported_size = descriptor->Size;
                 }
 
-                // This branch just ensures the requested size is reasonable before allocating
+                // this branch just ensures the requested size is reasonable before allocating
                 if (reported_size > 0 && reported_size < static_cast<DWORD>(MAX_DESCRIPTOR_SIZE) && reported_size >= sizeof(STORAGE_DEVICE_DESCRIPTOR)) {
                     allocated_size = static_cast<SIZE_T>(reported_size);
                     PVOID allocation_base = nullptr;
@@ -8544,7 +8414,7 @@ public:
                     }
                     allocated_buffer = reinterpret_cast<BYTE*>(allocation_base);
 
-                    // Retry the query with the larger allocated buffer
+                    // retry the query with the larger allocated buffer
                     st = nt_device_io_control_file(device, nullptr, nullptr, nullptr, &iosb,
                         ioctl,
                         &query, sizeof(query),
@@ -8564,7 +8434,7 @@ public:
                 }
             }
 
-            // This part is just to validate the structure size returned by the driver to prevent out-of-bounds reads
+            // this part is just to validate the structure size returned by the driver to prevent out-of-bounds reads
             {
                 const DWORD reported_size = descriptor->Size;
                 if (reported_size < sizeof(STORAGE_DEVICE_DESCRIPTOR) || static_cast<SIZE_T>(reported_size) > MAX_DESCRIPTOR_SIZE) {
@@ -8579,7 +8449,7 @@ public:
                 }
             }
 
-            // Serial number string within the descriptor structure
+            // serial number string within the descriptor structure
             const u32 serial_offset = descriptor->SerialNumberOffset;
             if (serial_offset > 0 && serial_offset < descriptor->Size) {
                 const char* serial = reinterpret_cast<const char*>(descriptor) + serial_offset;
@@ -8588,7 +8458,7 @@ public:
 
                 debug("DISK_SERIAL: ", serial);
 
-                // Check the retrieved serial number against known VM artifacts
+                // check the retrieved serial number against known VM artifacts
                 if (is_qemu_serial(serial, serialLen) || is_vbox_serial(serial, serialLen)) {
                     if (allocated_buffer) {
                         PVOID free_base = reinterpret_cast<PVOID>(allocated_buffer);
@@ -8601,7 +8471,7 @@ public:
                 }
             }
 
-            // Cleanup for the current iteration if no VM was detected on this drive
+            // cleanup for the current iteration if no VM was detected on this drive
             if (allocated_buffer) {
                 PVOID free_base = reinterpret_cast<PVOID>(allocated_buffer);
                 SIZE_T free_size = 0;
@@ -8611,7 +8481,7 @@ public:
             nt_close(device);
         }
 
-        // If we couldn't open any physical drives (not even read permissions) it's weird so we flag it.
+        // if we couldn't open any physical drives (not even read permissions) it's weird so we flag it.
         if (successful_opens == 0) {
             debug("DISK_SERIAL: No physical drives detected");
             return true;
