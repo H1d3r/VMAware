@@ -3588,79 +3588,83 @@ public:
 
             std::string result;
             const wchar_t* p = wstr;
+
             while (*p) {
-                result.push_back((static_cast<u32>(*p) < 128)
+                result.push_back(
+                    (static_cast<u32>(*p) < 128)
                     ? static_cast<char>(*p)
-                    : '?');
+                    : '?'
+                );
                 ++p;
             }
+
             return result;
         }
 
-        static void append_to_string(std::string& out, const wchar_t* arg) {
-            out += narrow_wide(arg);
+        static void append_to_stream(std::ostringstream& oss, const wchar_t* arg) {
+            oss << narrow_wide(arg);
         }
-        static void append_to_string(std::string& out, wchar_t* arg) {
-            out += narrow_wide(arg);
+
+        static void append_to_stream(std::ostringstream& oss, wchar_t* arg) {
+            oss << narrow_wide(arg);
         }
-        static void append_to_string(std::string& out, const std::wstring& ws) {
-            out.reserve(out.size() + ws.size());
-            for (wchar_t wc : ws) {
-                out.push_back((static_cast<u32>(wc) < 128)
-                    ? static_cast<char>(wc)
-                    : '?');
-            }
+
+        static void append_to_stream(std::ostringstream& oss, const std::wstring& ws) {
+            oss << narrow_wide(ws.c_str());
         }
-        static void append_to_string(std::string& out, const std::string& s) {
-            out += s;
+
+        static void append_to_stream(std::ostringstream& oss, const std::string& s) {
+            oss << s;
         }
-        static void append_to_string(std::string& out, const char* s) {
+
+        static void append_to_stream(std::ostringstream& oss, const char* s) {
             if (s) {
-                out += s;
+                oss << s;
             }
         }
-        static void append_to_string(std::string& out, char c) {
-            out.push_back(c);
-        }
-        static void append_to_string(std::string& out, bool b) {
-            out += (b ? "true" : "false");
+
+        static void append_to_stream(std::ostringstream& oss, char c) {
+            oss << c;
         }
 
-        // everything else that is not std::string or wchar_t
+        static void append_to_stream(std::ostringstream& oss, bool b) {
+            oss << (b ? "true" : "false");
+        }
+
         template <typename T>
-        static typename std::enable_if<!std::is_convertible<T, std::wstring>::value
-            && !std::is_same<typename std::decay<T>::type, wchar_t*>::value
-            && !std::is_same<typename std::decay<T>::type, const wchar_t*>::value
-            && !std::is_same<typename std::decay<T>::type, std::string>::value
-            && !std::is_same<typename std::decay<T>::type, const char*>::value
-            && !std::is_same<typename std::decay<T>::type, char*>::value,
-            void>::type
-            append_to_string(std::string& out, T&& arg)
+        static typename std::enable_if<
+            !std::is_convertible<T, std::wstring>::value &&
+            !std::is_same<typename std::decay<T>::type, wchar_t*>::value &&
+            !std::is_same<typename std::decay<T>::type, const wchar_t*>::value &&
+            !std::is_same<typename std::decay<T>::type, std::string>::value &&
+            !std::is_same<typename std::decay<T>::type, const char*>::value &&
+            !std::is_same<typename std::decay<T>::type, char*>::value,
+            void
+        >::type
+            append_to_stream(std::ostringstream& oss, T&& arg)
         {
-            std::ostringstream oss;
             oss << std::forward<T>(arg);
-            out += oss.str();
         }
 
-        // variadic pack printer for C++11
-        static void print_to_stream(std::string& /*unused*/) noexcept {}
+        static void print_to_stream(std::ostringstream&) noexcept {}
 
-        // forward the first, then expand the rest in an initializer list
-        template <typename T, typename... Args>
-        static void print_to_stream(std::string& out, T&& first, Args&&... args) noexcept {
-            append_to_string(out, std::forward<T>(first));
+        template <typename... Args>
+        static void print_to_stream(std::ostringstream& oss, Args&&... args) noexcept {
             using expander = int[];
             (void)expander {
-                0, ((void)append_to_string(out, std::forward<Args>(args)), 0)...
+                0,
+                    ((void)append_to_stream(oss, std::forward<Args>(args)), 0)...
             };
         }
 
         template <typename... Args>
         static void debug_msg(Args&&... message) {
             static std::unordered_set<std::string> printed_messages;
-            std::string msg_content;
-            msg_content.reserve(128);
-            print_to_stream(msg_content, std::forward<Args>(message)...);
+
+            std::ostringstream oss;
+            print_to_stream(oss, std::forward<Args>(message)...);
+
+            std::string msg_content = oss.str();
 
             if (printed_messages.find(msg_content) == printed_messages.end()) {
             #if (LINUX || APPLE)
@@ -3669,20 +3673,23 @@ public:
                 constexpr const char* blue = "\x1B[38;2;00;59;193m";
                 constexpr const char* ansiexit = "\x1B[0m";
 
-                std::cerr << black_bg
+                std::cerr
+                    << black_bg
                     << bold << "["
                     << blue << "DEBUG"
-                    << ansiexit << bold << black_bg << "]"
-                    << ansiexit << " ";
+                    << ansiexit
+                    << bold << black_bg << "]"
+                    << ansiexit
+                    << " ";
             #else
                 std::cerr << "[DEBUG] ";
             #endif
+
                 std::cerr << msg_content << '\n';
 
                 printed_messages.insert(std::move(msg_content));
             }
         }
-
 
         [[nodiscard]] static std::unique_ptr<std::string> sys_result(const char* cmd) {
         #if (VMA_CPP < 14)
