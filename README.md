@@ -355,6 +355,7 @@ For email inquiries: `vmaware.support@gmail.com`
 - [Max Ufer](https://github.com/Manny684)
 - [Everdox](https://github.com/everdox)
 - [snackapps](https://github.com/snackapps)
+- [Bandwidth](https://github.com/bandw1dth)
  
 <br>
 
