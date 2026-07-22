@@ -5742,7 +5742,7 @@ public:
 
             const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
             const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-            const DWORD_PTR old_affinity = trigger_affinity;
+            const DWORD_PTR old_affinity = SetThreadAffinityMask(current_thread, trigger_affinity);
             const int old_thread_priority = GetThreadPriority(current_thread);
             const DWORD old_process_priority = GetPriorityClass(current_process);
             SetPriorityClass(current_process, ABOVE_NORMAL_PRIORITY_CLASS); // ABOVE_NORMAL_PRIORITY_CLASS + THREAD_PRIORITY_HIGHEST = 12 base priority
