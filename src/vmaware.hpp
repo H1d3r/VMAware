@@ -5743,13 +5743,6 @@ public:
             const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
             const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
             const DWORD_PTR old_affinity = SetThreadAffinityMask(current_thread, trigger_affinity);
-            if (!old_affinity) {
-                // Release the counter thread if Windows rejects the requested trigger CPU.
-                // Running unpinned would invalidate the topology guarantees established by getmask().
-                state.start_test.store(true, std::memory_order_release);
-                state.test_done.store(true, std::memory_order_release);
-                return;
-            }
             const int old_thread_priority = GetThreadPriority(current_thread);
             const DWORD old_process_priority = GetPriorityClass(current_process);
             SetPriorityClass(current_process, ABOVE_NORMAL_PRIORITY_CLASS); // ABOVE_NORMAL_PRIORITY_CLASS + THREAD_PRIORITY_HIGHEST = 12 base priority
