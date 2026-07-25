@@ -5743,8 +5743,8 @@ public:
             const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
             const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
             const DWORD_PTR old_affinity = SetThreadAffinityMask(current_thread, trigger_affinity);
-            const int old_thread_priority = GetThreadPriority(current_thread);
             const DWORD old_process_priority = GetPriorityClass(current_process);
+            const int old_thread_priority = GetThreadPriority(current_thread);
             SetPriorityClass(current_process, ABOVE_NORMAL_PRIORITY_CLASS); // ABOVE_NORMAL_PRIORITY_CLASS + THREAD_PRIORITY_HIGHEST = 12 base priority
             SetThreadPriority(current_thread, THREAD_PRIORITY_HIGHEST);
             SetThreadPriorityBoost(current_thread, TRUE); // disable dynamic thread priority adjustments by Windows, not turbo boosts by the hardware itself
@@ -12846,13 +12846,6 @@ public:
                 }
 
                 const u8* payload = event_ptr + local_offset;
-
-                if (pcrIndex == 0 && eventType == 0x00000008) {
-                    if (eventSize == 2 && payload[0] == 0x00 && payload[1] == 0x00) {
-                        debug("MEASURED_BOOT: Detected null payload");
-                        return true;
-                    }
-                }
 
                 if (pcrIndex == 0 && eventType == 0x80000008) {
                     if (eventSize >= 16) {
