@@ -3923,11 +3923,15 @@ public:
             // check whether a hypervisor is nested within a Hyper-V partition
             auto is_hyperv_nested = []() noexcept -> bool {
                 u32 eax = 0, ebx = 0, ecx = 0, edx = 0;
-                cpu::cpuid(eax, ebx, ecx, edx, 0x40000004);
 
-                const bool nested_partition_bit = (eax & (1u << 12)) != 0;
+                cpu::cpuid(eax, ebx, ecx, edx, 0x40000001);
+                if (eax != 0x31237648) // Hv#1 interface
+                    return false;
 
-                return nested_partition_bit;
+                cpu::cpuid(eax, ebx, ecx, edx, 0x40000006); // hypervisor level of the current guest
+                const u32 guest_level = (eax >> 10) & 0xF;
+
+                return guest_level != 0;
             };
 
             // check if the Windows Hypervisor Platform interface is responsive and confirms a running hypervisor
