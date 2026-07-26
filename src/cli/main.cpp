@@ -229,7 +229,8 @@ int main(int argc, char* argv[]) {
             args += "\"";
         }
 
-        SHELLEXECUTEINFOA sei = { sizeof(sei) };
+        SHELLEXECUTEINFOA sei{};
+        sei.cbSize = sizeof(sei);
         sei.fMask = 0;
         sei.hwnd = NULL;
         sei.lpVerb = "open";

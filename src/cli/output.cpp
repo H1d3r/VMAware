@@ -465,14 +465,12 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     #endif
 
     std::ofstream output_fstream;
-    std::streambuf* original_cout_buf = nullptr;
 
     if (output_file) {
         output_fstream.open(output_file);
         if (!output_fstream) {
             std::cerr << "Failed to open/create file \"" << output_file << "\"\n";
         } else {
-            original_cout_buf = std::cout.rdbuf(output_fstream.rdbuf());
             arg_bitset.set(NO_ANSI);
         }
     }

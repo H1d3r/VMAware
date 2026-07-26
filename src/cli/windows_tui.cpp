@@ -206,7 +206,7 @@ void tui_manager::print_header() {
     if (hMod) {
         RtlGetVersionPtr pRtlGetVersion = reinterpret_cast<RtlGetVersionPtr>(GetProcAddress(hMod, "RtlGetVersion"));
         if (pRtlGetVersion) {
-            RTL_OSVERSIONINFOW rovi = { 0 };
+            RTL_OSVERSIONINFOW rovi{};
             rovi.dwOSVersionInfoSize = sizeof(rovi);
             if (pRtlGetVersion(&rovi) == 0) {
                 std::ostringstream os_oss;

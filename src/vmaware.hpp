@@ -3358,6 +3358,9 @@ public:
             return 1ull << logical;
         }
 
+        #if ((CLANG || GCC))
+            __attribute__((__target__("serialize")))
+        #endif
         static VMAWARE_FORCE_INLINE void warmup_cpu(const bool is_intel) noexcept {
             // signal Intel Speed Shift / AMD CPPC to force maximum non-AVX Turbo/P-state frequency transition
             u64 val = 0x5a5a5a5a5a5a5a5aULL;
@@ -5773,12 +5776,9 @@ public:
 
                         v_pre = state.counter;
                         std::atomic_signal_fence(std::memory_order_seq_cst); // _ReadWriteBarrier() aka dont emit runtime fences
-
-                        // the only way a legitimate interrupt can make the check false flag is if most of the samples were contaminated just in the cpuid samples but not in the serialize/lfence samples (i.e. during a high workload)
-                        // still possible tho, but it's as accurate we can get on user-mode without relying on any other hardware clock, this is why the score of this technique is not enough to determine a VM
                     #if (GCC || CLANG)
-                        u32 a = 0;
-                        u32 b, c, d;
+                        size_t a = 0;
+                        size_t b, c, d;
                         __asm__ volatile (
                             "cpuid"
                             : "+a"(a), "=b"(b), "=c"(c), "=d"(d)
@@ -5787,7 +5787,6 @@ public:
                         int dummy[4];
                         __cpuid(dummy, 0);
                     #endif
-
                         std::atomic_signal_fence(std::memory_order_seq_cst);
                         v_post = state.counter;
 
@@ -5830,8 +5829,8 @@ public:
                         v_pre = state.counter;
                         std::atomic_signal_fence(std::memory_order_seq_cst); 
                     #if (GCC || CLANG)
-                        u32 a = 0;
-                        u32 b, c, d;
+                        size_t a = 0;
+                        size_t b, c, d;
                         __asm__ volatile (
                             "cpuid"
                             : "+a"(a), "=b"(b), "=c"(c), "=d"(d)
@@ -5884,7 +5883,7 @@ public:
             // detect IPI-based counter pausing bypasses
             // for the median itself to exceed baremetal limits (which rarely pass 1000), an interrupt must be occurring on almost EVERY single loop iteration
             // this is the footprint of a hypervisor continuously spamming cross-core IPIs to try and pause our threads
-            if (best_cpuid_l > 2500 || best_ref_l > 2500 || best_cpuid_l == 1 || best_ref_l == 1) {
+            if (best_cpuid_l > 2500 || best_ref_l > 2500) {
                 hypervisor_detected = true;
             }
 
@@ -7967,7 +7966,7 @@ public:
             void* functions[ARRAYSIZE(function_names)] = {};
             util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-            using nt_query_sysinfo_t = NTSTATUS(__stdcall*)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+            using nt_query_sysinfo_t = NTSTATUS(__stdcall*)(int, PVOID, ULONG, PULONG); // int is SYSTEM_INFORMATION_CLASS
             nt_query_sysinfo_t nt_query = reinterpret_cast<nt_query_sysinfo_t>(functions[0]);
             if (!nt_query)
                 return false;
@@ -7975,8 +7974,7 @@ public:
             // parse header to locate the bitmap
             struct boot_logo_info { ULONG flags, bitmap_offset; };
 
-            // determine required buffer size
-            const SYSTEM_INFORMATION_CLASS sys_boot_info = static_cast<SYSTEM_INFORMATION_CLASS>(140);
+            const int sys_boot_info = 140; // SystemBootLogoInformation
             ULONG needed = 0;
             NTSTATUS st = nt_query(sys_boot_info, nullptr, 0, &needed);
             if (st != static_cast<NTSTATUS>(0xC0000023) &&
@@ -9608,13 +9606,7 @@ public:
 
         using PHV_DETAILS = HV_DETAILS*;
         using PSYSTEM_HYPERVISOR_DETAIL_INFORMATION = SYSTEM_HYPERVISOR_DETAIL_INFORMATION*;
-
-        using nt_query_system_information_fn = NTSTATUS(__stdcall*)(
-            SYSTEM_INFORMATION_CLASS SystemInformationClass,
-            PVOID SystemInformation,
-            ULONG SystemInformationLength,
-            PULONG ReturnLength
-        );
+        using nt_query_system_information_fn = NTSTATUS(__stdcall*)(int SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength);
 
         const HMODULE ntdll = util::get_ntdll();
         if (!ntdll) return false;        
@@ -9627,17 +9619,14 @@ public:
         if (nt_query_system_information) {
             SYSTEM_HYPERVISOR_DETAIL_INFORMATION hypervisor_information{};
 
-            // Request class 0x9F (SystemHypervisorDetailInformation)
-            // This asks the OS kernel to fill the structure with information about the 
-            // hypervisor layer it is running on top of
-            const NTSTATUS status = nt_query_system_information(static_cast<SYSTEM_INFORMATION_CLASS>(0x9F), &hypervisor_information, sizeof(hypervisor_information), nullptr);
+            // request class 0x9F (SystemHypervisorDetailInformation), this asks the kernel to fill the structure with information about the hypervisor layer it is running on top of
+            const NTSTATUS status = nt_query_system_information(0x9F, &hypervisor_information, sizeof(hypervisor_information), nullptr);
 
             if (status != 0) {
                 return false;
             }
 
-            // If Data[0] is non-zero, it means the kernel has successfully communicated 
-            // with a hypervisor and retrieved a vendor signature like "Micr" for Microsoft
+            // if Data[0] is non-zero, it means the kernel has successfully communicated with a hypervisor
             if (hypervisor_information.HvVendorAndMaxFunction.Data[0] != 0) {
                 return true;
             }
@@ -9921,7 +9910,6 @@ public:
             const wchar_t* buf_end = ptr + (total_wchars ? total_wchars : 0);
 
             static const wchar_t acpi_prefix[] = L"#ACPI(S";
-            static const wchar_t acpi_paren[] = L"ACPI(";
 
             // QEMU-style "#ACPI(Sxx...)" and generic "ACPI(Sxx)"
             for (const wchar_t* p = ptr; p < buf_end && *p; p += (wcslen(p) + 1)) {
@@ -10131,9 +10119,9 @@ public:
             bool* hypervisor_caught;
         };
 
-        // static struct for SEH filtering to avoid release mode Lambda corruption
-        struct SEH_Trap {
-            static LONG Vet(u32 code, EXCEPTION_POINTERS* info, trap_context* ctx) noexcept {
+        // static struct for SEH filtering to avoid release mode lambda corruption
+        struct exception_handler {
+            static LONG evaluate(u32 code, EXCEPTION_POINTERS* info, trap_context* ctx) noexcept {
                 // lambda returns LONG to support EXCEPTION_CONTINUE_EXECUTION
                 if (code != static_cast<DWORD>(0x80000004L)) {
                     return EXCEPTION_CONTINUE_SEARCH;
@@ -10171,12 +10159,13 @@ public:
         };
 
         trap_context ctx = { expected_trap_address, &hitCount, &hypervisor_caught };
+        VMAWARE_UNUSED(ctx);
 
         __try {
             reinterpret_cast<void(*)()>(exec_mem)();
         }
-        __except (SEH_Trap::Vet(_exception_code(), reinterpret_cast<EXCEPTION_POINTERS*>(_exception_info()), &ctx)) {
-            // this block is effectively unreachable because vetExceptions returns CONTINUE_EXECUTION or CONTINUE_SEARCH
+        __except (exception_handler::evaluate(_exception_code(), reinterpret_cast<EXCEPTION_POINTERS*>(_exception_info()), &ctx)) {
+            // this block is effectively unreachable because our VEH returns CONTINUE_EXECUTION or CONTINUE_SEARCH
         }
 
         // if the hypervisor swallowed the exception entirely, hitCount will be 0
@@ -10274,8 +10263,24 @@ public:
      */
     [[nodiscard]] static bool interrupt_shadow() {
         if (util::hyper_x() == HYPERV_HOST) {
-                   return false;
+            return false;
         }
+
+        struct exception_handler {
+            static int evaluate(unsigned int code, struct _EXCEPTION_POINTERS* ep, volatile ULONG_PTR* out_trap_ip) {
+                if (code == EXCEPTION_SINGLE_STEP && ep && ep->ContextRecord) {
+                #if (x86_64)
+                    *out_trap_ip = ep->ContextRecord->Rip;
+                #else
+                    *out_trap_ip = ep->ContextRecord->Eip;
+                #endif
+                    ep->ContextRecord->EFlags &= ~0x100; // clear TF to resume execution
+                    return EXCEPTION_CONTINUE_EXECUTION;
+                }
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
+        };
+
         volatile ULONG_PTR trap_ip = 0;
 
     #if (x86_32) && !(CLANG || GCC)
@@ -10300,14 +10305,9 @@ public:
                     popfd
             }
         }
-        __except (GetExceptionCode() == EXCEPTION_SINGLE_STEP ?
-            (
-                trap_ip = GetExceptionInformation()->ContextRecord->Eip,
-                GetExceptionInformation()->ContextRecord->EFlags &= ~0x100, // clear TF so execution resumes cleanly and stack restores
-                EXCEPTION_CONTINUE_EXECUTION
-            ) : EXCEPTION_CONTINUE_SEARCH) {}
+        __except (exception_handler::evaluate(GetExceptionCode(), GetExceptionInformation(), &trap_ip)) {}
 
-         // hypervisor is detected if the trap fired at any IP differing from the expected baremetal target
+        // hypervisor is detected if the trap fired at any IP differing from the expected baremetal target
         // OR if the single step exception never fired at all (trap_ip == 0)
         return (trap_ip == 0 || trap_ip != baremetal_target_ip);
 
@@ -10322,10 +10322,10 @@ public:
         void* functions[ARRAYSIZE(function_names)] = {};
         util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto nt_alloc   = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG)>(functions[0]);
+        const auto nt_alloc = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG)>(functions[0]);
         const auto nt_protect = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG)>(functions[1]);
-        const auto nt_flush   = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T)>(functions[2]);
-        const auto nt_free    = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG)>(functions[3]);
+        const auto nt_flush = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T)>(functions[2]);
+        const auto nt_free = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG)>(functions[3]);
 
         if (!nt_alloc || !nt_protect || !nt_flush || !nt_free) return false;
 
@@ -10336,14 +10336,14 @@ public:
             0x31, 0xC0,                                // 1:  xor eax, eax
             0x8C, 0xD0,                                // 3:  mov ax, ss
             0x9C,                                      // 5:  pushfq/pushfd
-            0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00, // 6:  or dword ptr [rsp/esp], 0x100
+            0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00,  // 6:  or dword ptr [rsp/esp], 0x100
             0x9D,                                      // 13: popfq/popfd
             0x8E, 0xD0,                                // 14: mov ss, ax  <- shadow starts here
             0x0F, 0xA2,                                // 16: cpuid       <- buggy hypervisor traps here
             0x5B,                                      // 18: pop rbx/ebx <- baremetal traps here
             0x90,                                      // 19: nop         
             0x9C,                                      // 20: pushfq/pushfd
-            0x81, 0x24, 0x24, 0xFF, 0xFE, 0xFF, 0xFF, // 21: and dword ptr [rsp/esp], 0xFFFFFEFF
+            0x81, 0x24, 0x24, 0xFF, 0xFE, 0xFF, 0xFF,  // 21: and dword ptr [rsp/esp], 0xFFFFFEFF
             0x9D,                                      // 28: popfq/popfd
             0xC3                                       // 29: ret
         };
@@ -10369,16 +10369,7 @@ public:
             __try {
                 reinterpret_cast<void(*)()>(base)();
             }
-            __except (GetExceptionCode() == EXCEPTION_SINGLE_STEP ?
-                (
-                #if (x86_64)
-                    trap_ip = GetExceptionInformation()->ContextRecord->Rip,
-                #else
-                    trap_ip = GetExceptionInformation()->ContextRecord->Eip,
-                #endif
-                    GetExceptionInformation()->ContextRecord->EFlags &= ~0x100, // to avoid infinite looping
-                    EXCEPTION_CONTINUE_EXECUTION
-                ) : EXCEPTION_CONTINUE_SEARCH) {}
+            __except (exception_handler::evaluate(GetExceptionCode(), GetExceptionInformation(), &trap_ip)) {}
         }
 
         region_size = 0;
@@ -10386,7 +10377,7 @@ public:
 
         // hypervisor is detected if execution trapped at any offset other than expected baremetal
         // OR if the single step exception never fired at all (trap_ip == 0)
-      return NT_SUCCESS(st) && (trap_ip == 0 || trap_ip != baremetal_target_ip);
+        return NT_SUCCESS(st) && (trap_ip == 0 || trap_ip != baremetal_target_ip);
     #else
         return false;
     #endif
@@ -12836,7 +12827,7 @@ public:
             for (UINT32 logType : { 0, 2 }) {
                 UINT32 logSize = 0;
                 TBS_RESULT res = pTbsi_Get_TCG_Log_Ex(logType, nullptr, &logSize);
-                if ((res == 0 || res == TBS_E_INSUFFICIENT_BUFFER) && logSize > 0) {
+                if ((res == 0 || res == static_cast<TBS_RESULT>(TBS_E_INSUFFICIENT_BUFFER)) && logSize > 0) {
                     std::vector<u8> buffer(logSize);
                     if (pTbsi_Get_TCG_Log_Ex(logType, buffer.data(), &logSize) == 0) {
                         buffer.resize(logSize);
@@ -12854,7 +12845,7 @@ public:
             if (pTbsi_Context_Create(&params, &hContext) == 0) {
                 UINT32 logSize = 0;
                 TBS_RESULT res = pTbsi_Get_TCG_Log(hContext, nullptr, &logSize);
-                if ((res == 0 || res == TBS_E_INSUFFICIENT_BUFFER) && logSize > 0) {
+                if ((res == 0 || res == static_cast<TBS_RESULT>(TBS_E_INSUFFICIENT_BUFFER)) && logSize > 0) {
                     std::vector<u8> buffer(logSize);
                     if (pTbsi_Get_TCG_Log(hContext, buffer.data(), &logSize) == 0) {
                         buffer.resize(logSize);
@@ -13251,7 +13242,7 @@ public:
                 u32 size;
             };
 
-            temp_digest temp_digests[16] = { 0 };
+            temp_digest temp_digests[16]{};
             u32 temp_digest_count = 0;
             bool parse_success = true;
 
@@ -14636,7 +14627,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::ACPI_SIGNATURE, {100, VM::acpi_signature}},
             {VM::CLOCK, {45, VM::clock}},
             {VM::POWER_CAPABILITIES, {25, VM::power_capabilities}},
-            {VM::GPU_CAPABILITIES, {25, VM::gpu_capabilities}},
+            {VM::GPU_CAPABILITIES, {20, VM::gpu_capabilities}},
             {VM::MSR, {100, VM::msr}},
             {VM::VIRTUAL_PROCESSORS, {100, VM::virtual_processors}},
             {VM::WINE, {100, VM::wine}},
