@@ -829,10 +829,6 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
         std::cout << grey << "SHA-256: " << white << compute_self_sha256() << ansi_exit << "\n";
     #endif
 
-    if (original_cout_buf) {
-        std::cout.rdbuf(original_cout_buf);
-    }
-
     console_pause();
 
 #endif
