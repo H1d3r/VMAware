@@ -10262,6 +10262,7 @@ public:
      * @implements VM::INTERRUPT_SHADOW
      */
     [[nodiscard]] static bool interrupt_shadow() {
+    #if (x86)
         if (util::hyper_x() == HYPERV_HOST) {
             return false;
         }
@@ -10282,7 +10283,7 @@ public:
         };
 
         volatile ULONG_PTR trap_ip = 0;
-
+    #endif
     #if (x86_32) && !(CLANG || GCC)
         ULONG_PTR baremetal_target_ip = 0;
 
