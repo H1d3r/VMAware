@@ -3956,74 +3956,6 @@ public:
                 return guest_level != 0;
             };
 
-            // check if the Windows Hypervisor Platform interface is responsive and confirms a running hypervisor
-            auto is_hyperv_interface_present = []() noexcept -> bool {
-                enum WHV_CAPABILITY_CODE {
-                    WHvCapabilityCodeHypervisorPresent = 0x00000000,
-                };
-
-                HMODULE h_whp = LoadLibraryW(L"WinHvPlatform.dll");
-                if (!h_whp) {
-                    return false;
-                }
-
-                constexpr const char* function_names[] = { "WHvGetCapability" };
-                void* functions[ARRAYSIZE(function_names)] = {};
-
-                get_function_address(h_whp, function_names, functions, ARRAYSIZE(function_names));
-
-                bool is_present = false;
-                if (functions[0]) {
-                    using fnWHvGetCapability = HRESULT(__stdcall*)(
-                        WHV_CAPABILITY_CODE CapabilityCode,
-                        void* CapabilityBuffer,
-                        UINT32 CapabilityBufferSize,
-                        UINT32* WrittenBufferSize
-                    );
-
-                    const auto pWHvGetCapability = reinterpret_cast<fnWHvGetCapability>(functions[0]);
-                    BOOL present_val = FALSE;
-                    UINT32 written = 0;
-                    HRESULT hr = pWHvGetCapability(
-                        WHvCapabilityCodeHypervisorPresent,
-                        &present_val,
-                        sizeof(present_val),
-                        &written
-                    );
-                    if (SUCCEEDED(hr)) {
-                        is_present = (present_val == 1);
-                    }
-                }
-
-                FreeLibrary(h_whp);
-                return is_present;
-            };
-
-            // check if the host-only virtualization infrastructure driver is present
-            auto is_hyperv_service_running = []() noexcept -> bool {
-                const wchar_t* service_name = L"vid"; // others like vmbus are not always running in host partitions
-                SC_HANDLE sc_manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
-                if (!sc_manager) {
-                    return false;
-                }
-
-                SC_HANDLE service = OpenServiceW(sc_manager, service_name, SERVICE_QUERY_STATUS);
-                if (!service) {
-                    CloseServiceHandle(sc_manager);
-                    return false;
-                }
-
-                SERVICE_STATUS status = {};
-                bool is_running = false;
-                if (QueryServiceStatus(service, &status)) {
-                    is_running = (status.dwCurrentState == SERVICE_RUNNING);
-                }
-
-                CloseServiceHandle(service);
-                CloseServiceHandle(sc_manager);
-                return is_running;
-            };
-
             hyperx_state state = HYPERV_UNKNOWN;
 
             if (is_hyperv_nested()) {
@@ -4063,8 +3995,6 @@ public:
                         // if we reach here, we do some sanity checks to ensure a hypervisor is not trying to spoof itself as Hyper-V, attempting to bypass some detections
                         brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
 
-                        bool is_hyper_v_host = false;
-
                     #if (x86_64)
                         u8 idtr_buffer[10] = { 0 };
 
@@ -4089,23 +4019,11 @@ public:
                         ULONG_PTR idt_base = 0;
                         memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
 
-                        // if running under Hyper-V in AMD64 (doesnt matter the VTL/partition level), this value is hardcoded and emulated at kernel level to prevent kernel address leakage
-                        // specifically at KiPreprocessFault -> KiOpDecode -> KiOpLocateDecodeEntry (KiOp_SLDTSTRSMSW)
-                        // additionally, brand has to be "Microsoft Hv"
-                        const bool base_hardware_checks = (idt_base == 0xfffff80000001000) && (brand_str == "Microsoft Hv");
+                        // if running under Hyper-V in AMD64 (doesnt matter the VTL/partition level), the returned IDT base is emulated at KiOp_SGDTSIDT to prevent kernel address leakage
+                        const bool is_hyper_v_host = (idt_base == 0xfffff80000001000) && (brand_str == "Microsoft Hv");
                     #else
-                        const bool base_hardware_checks = (brand_str == "Microsoft Hv");
+                        const bool is_hyper_v_host = (brand_str == "Microsoft Hv");
                     #endif
-
-                        if (base_hardware_checks) {
-                            const bool host_drivers_active = is_hyperv_service_running();
-                            const bool whp_api_active = is_hyperv_interface_present();
-
-                            debug("HYPER-X: Hyper-V service running: ", host_drivers_active);
-                            debug("HYPER-X: Hyper-V interface running: ", whp_api_active);
-
-                            is_hyper_v_host = host_drivers_active && whp_api_active;
-                        }
 
                         if (is_hyper_v_host) {
                             debug("HYPER-X: Detected Hyper-V host machine");
