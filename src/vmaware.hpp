@@ -11106,12 +11106,11 @@ public:
         alignas(16) unsigned char out[16] = { 0 };
 
         // need to do a lambda wrapper to isolate SEH from the parent function's stack unwinding
-        // target aes is required for clang/gcc while in MSVC not, and this target can only be applied to functions, meaning we need a struct
         struct aes_executor {
             #if (CLANG || GCC)
                 __attribute__((__target__("aes")))
             #endif
-            static bool check_aes_integrity(const unsigned char* pt, const unsigned char* k, unsigned char* o, bool support) {
+            static bool check_aes_integrity(const unsigned char* pt, const unsigned char* k, unsigned char* o, const bool support) {
                 __try {
                     __m128i block = _mm_loadu_si128(reinterpret_cast<const __m128i*>(pt));
                     __m128i key_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(k));
@@ -11141,41 +11140,160 @@ public:
 
         if (aes_executor::check_aes_integrity(plaintext, key, out, aes_support)) return true;
 
-        const bool avx_support = ((c >> 28) & 1u) != 0;
-        const bool xsave_support = ((c >> 26) & 1u) != 0;
+        // detect spoofed AVX state
+    #if defined(__GNUC__) || defined(__clang__)
+        #define TARGET_AVX    __attribute__((target("avx")))
+        #define TARGET_AVX2   __attribute__((target("avx2")))
+        #define TARGET_AVX512 __attribute__((target("avx512f")))
+    #else
+        #define TARGET_AVX
+        #define TARGET_AVX2
+        #define TARGET_AVX512
+    #endif
 
-        if (avx_support && !xsave_support) {
-            debug("CPU_HEURISTIC: YMM state not correct for a baremetal machine");
+        constexpr u32 CPUID1_OSXSAVE = 1u << 27;
+        constexpr u32 CPUID1_AVX = 1u << 28;
+
+        constexpr u32 CPUID7_AVX2 = 1u << 5;
+        constexpr u32 CPUID7_AVX512F = 1u << 16;
+
+        constexpr u64 XCR0_AVX_MASK = 0x6u;   // XMM + YMM
+        constexpr u64 XCR0_AVX512_MASK = 0xE6u;  // XMM + YMM + Opmask + ZMM_Hi256 + Hi16_ZMM
+
+        const bool avx_adv = (c & CPUID1_AVX) != 0;
+        const bool osxsave_adv = (c & CPUID1_OSXSAVE) != 0;
+
+        u32 a7 = 0, b7 = 0, c7 = 0, d7 = 0;
+        cpu::cpuid(a, b, c, d, 0u, 0u);
+        if (a >= 7u) {
+            cpu::cpuid(a7, b7, c7, d7, 7u, 0u);
+        }
+
+        const bool avx2_adv = (b7 & CPUID7_AVX2) != 0;
+        const bool avx512_adv = (b7 & CPUID7_AVX512F) != 0;
+
+        // probe AVX
+        auto is_avx_spoofed = [&]() TARGET_AVX noexcept -> bool{
+            if (!avx_adv) return false;
+            if (!osxsave_adv) return true;
+
+            const u64 xcr0 = static_cast<u64>(_xgetbv(0));
+            if ((xcr0 & XCR0_AVX_MASK) != XCR0_AVX_MASK) return true;
+
+            alignas(32) float in0[8] = { 1,2,3,4,5,6,7,8 };
+            alignas(32) float in1[8] = { 16,15,14,13,12,11,10,9 };
+            alignas(32) float out[8] = {};
+
+            __try {
+                const __m256 va = _mm256_load_ps(in0);
+                const __m256 vb = _mm256_load_ps(in1);
+                const __m256 vc = _mm256_add_ps(va, vb);
+                _mm256_store_ps(out, vc);
+                return out[0] != 17.0f;
+            }
+            __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
+                ? EXCEPTION_EXECUTE_HANDLER
+                : EXCEPTION_CONTINUE_SEARCH)
+            {
+                return true;
+            }
+        };
+
+        // probe AVX2
+        auto is_avx2_spoofed = [&]() TARGET_AVX2 noexcept -> bool {
+            if (!avx2_adv) return false;
+            if (!avx_adv || !osxsave_adv) return true;
+
+            const u64 xcr0 = static_cast<u64>(_xgetbv(0));
+            if ((xcr0 & XCR0_AVX_MASK) != XCR0_AVX_MASK) return true;
+
+            alignas(32) u32 in0[8] = { 1,2,3,4,5,6,7,8 };
+            alignas(32) u32 in1[8] = { 16,15,14,13,12,11,10,9 };
+            alignas(32) u32 out[8] = {};
+
+            __try {
+                const __m256i va = _mm256_load_si256(reinterpret_cast<const __m256i*>(in0));
+                const __m256i vb = _mm256_load_si256(reinterpret_cast<const __m256i*>(in1));
+                const __m256i vc = _mm256_add_epi32(va, vb);
+                _mm256_store_si256(reinterpret_cast<__m256i*>(out), vc);
+                return out[0] != 17u;
+            }
+            __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
+                ? EXCEPTION_EXECUTE_HANDLER
+                : EXCEPTION_CONTINUE_SEARCH)
+            {
+                return true;
+            }
+        };
+
+        // probe AVX512
+        auto is_avx512_spoofed = [&]() TARGET_AVX512 noexcept -> bool {
+            if (!avx512_adv) return false;
+            if (!avx_adv || !osxsave_adv) return true;
+
+            const u64 xcr0 = static_cast<u64>(_xgetbv(0));
+            if ((xcr0 & XCR0_AVX512_MASK) != XCR0_AVX512_MASK) return true;
+
+            alignas(64) u32 in0[16] = {
+                1,2,3,4,5,6,7,8, 9,10,11,12,13,14,15,16
+            };
+            alignas(64) u32 in1[16] = {
+                16,15,14,13,12,11,10,9, 8,7,6,5,4,3,2,1
+            };
+            alignas(64) u32 out[16] = {};
+
+            __try {
+                const __m512i va = _mm512_load_si512(reinterpret_cast<const void*>(in0));
+                const __m512i vb = _mm512_load_si512(reinterpret_cast<const void*>(in1));
+                const __m512i vc = _mm512_add_epi32(va, vb);
+                _mm512_store_si512(reinterpret_cast<void*>(out), vc);
+                return out[0] != 17u;
+            }
+            __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
+                ? EXCEPTION_EXECUTE_HANDLER
+                : EXCEPTION_CONTINUE_SEARCH)
+            {
+                return true;
+            }
+        };
+
+        if (is_avx_spoofed() || is_avx2_spoofed() || is_avx512_spoofed()) {
+            debug("Hypervisor detected hiding AVX capabilities");
             return true;
         }
 
         const bool rdrand_support = ((c >> 30) & 1u) != 0;
 
         auto check_rdrand_integrity = [&]() noexcept -> bool {
+        #if (MSVC) && !(CLANG)
+            unsigned int v = 0;
+
             __try {
-                unsigned int v = 0;
-            #if (MSVC && !CLANG)
-                if (_rdrand32_step(&v) && !rdrand_support) {
-                    debug("CPU_HEURISTIC: Hypervisor detected hiding RDRAND capabilities");
-                    return true;
-                }
-            #else 
-                unsigned char ok = 0;
-                asm volatile("rdrand %0\n\tsetc %1" : "=r"(v), "=qm"(ok) : : "cc");
+                const int ok = _rdrand32_step(&v);
+
                 if (ok && !rdrand_support) {
                     debug("CPU_HEURISTIC: Hypervisor detected hiding RDRAND capabilities");
-                    return true;
                 }
-            #endif      
             }
-            __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
-                ? EXCEPTION_EXECUTE_HANDLER
-                : EXCEPTION_CONTINUE_SEARCH) {
+            __except (EXCEPTION_EXECUTE_HANDLER) {
                 if (rdrand_support) {
-                    debug("CPU_HEURISTIC: Hypervisor reports RDRAND, but it is not handled correctly");
-                    return true;
+                   debug("CPU_HEURISTIC: Hypervisor did not handle RDRAND correctly");
                 }
             }
+        #else
+            unsigned int v = 0;
+            unsigned char ok = 0;
+
+            asm volatile("rdrand %0\n\tsetc %1"
+                : "=r"(v), "=qm"(ok)
+                :
+                : "cc");
+
+            if (ok && !rdrand_support) {
+                debug("CPU_HEURISTIC: Hypervisor detected hiding RDRAND capabilities");
+            }
+        #endif
+
             return false;
         };
 
@@ -11388,9 +11506,9 @@ public:
         static constexpr unsigned int VID_AMD_ATI = 0x1002;
         static constexpr unsigned int VID_AMD_MICRO = 0x1022;
 
-        enum class MBVendor { Unknown = 0, Intel = 1, AMD = 2 };
+        enum class motherboard_vendor { Unknown = 0, Intel = 1, AMD = 2 };
 
-        auto detect_motherboard = []() noexcept -> MBVendor {
+        auto detect_motherboard = []() noexcept -> motherboard_vendor {
             static constexpr const wchar_t* TOKENS[] = {
                 L"host bridge", L"northbridge", L"southbridge", L"pci bridge", L"chipset", L"pch", L"fch",
                 L"platform controller", L"lpc", L"sata controller", L"ahci", L"ide controller", L"usb controller",
@@ -11526,32 +11644,29 @@ public:
                 scan_devices(guid, DIGCF_PRESENT);
             }
 
-            // if no stuff then maybe query all devices in the system?
-            if (intel_hits == 0 && amd_hits == 0) {
-                scan_devices(nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
-            }
+            // if no stuff then maybe query all devices in the system with DIGCF_ALLCLASSES | DIGCF_PRESENT?
+            if (intel_hits > amd_hits) return motherboard_vendor::Intel;
+            if (amd_hits > intel_hits) return motherboard_vendor::AMD;
 
-            if (intel_hits > amd_hits) return MBVendor::Intel;
-            if (amd_hits > intel_hits) return MBVendor::AMD;
-            return MBVendor::Unknown;
+            return motherboard_vendor::Unknown;
         };
 
-        const MBVendor vendor = detect_motherboard();
+        const motherboard_vendor vendor = detect_motherboard();
 
         switch (vendor) {
-        case MBVendor::Intel:
+        case motherboard_vendor::Intel:
             if (claimed_amd && !claimed_intel) {
                 debug("CPU_HEURISTIC: CPU reports AMD but chipset looks Intel");
                 spoofed = true;
             }
             break;
-        case MBVendor::AMD:
+        case motherboard_vendor::AMD:
             if (claimed_intel && !claimed_amd) {
                 debug("CPU_HEURISTIC: CPU reports Intel but chipset looks AMD");
                 spoofed = true;
             }
             break;
-        case MBVendor::Unknown:
+        case motherboard_vendor::Unknown:
             debug("CPU_HEURISTIC: Could not determine chipset vendor");
             break;
         }
