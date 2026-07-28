@@ -312,7 +312,7 @@
 #endif
 
 #if (CLANG)
-    // This happens because Windows API structures or aliases are typedef'd inside a local scope (like inside a function) but never actually used
+    // this happens because Windows API structures or aliases are typedef'd inside a local scope (like inside a function) but never actually used
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wunused-local-typedef"
 #endif
@@ -429,12 +429,6 @@
     #define VMAWARE_CONSTEXPR
 #endif
 
-#if (VMA_CPP >= 14)
-    #define VMAWARE_CONSTEXPR_14 constexpr
-#else
-    #define VMAWARE_CONSTEXPR_14
-#endif
-
 #if (MSVC)
     #define VMAWARE_FORCE_INLINE __forceinline
 #elif (CLANG || GCC)
@@ -452,6 +446,126 @@
 #endif
 
 #define VMAWARE_UNUSED(x) ((void)(x))
+
+#if (CLANG || GCC)
+    #define VMAWARE_SECTION __attribute__((section(".text")))
+#else
+    #define VMAWARE_SECTION
+#endif
+
+#if (MSVC)
+    #pragma const_seg(".text")
+#endif
+
+#if (x86)
+    static const unsigned char vmload_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xDA, 0xC3 };
+    static const unsigned char vmcall_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xC1, 0xC3 };
+    static const unsigned char vmmcall_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xD9, 0xC3 };
+    static const unsigned char blockstep_stub[] VMAWARE_SECTION = {
+        0x53,                                      // 0:  push rbx/ebx (preserve non-volatile register)
+        0x31, 0xC0,                                // 1:  xor eax, eax
+        0x8C, 0xD0,                                // 3:  mov ax, ss
+        0x9C,                                      // 5:  pushfq/pushfd
+        0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00,  // 6:  or dword ptr [rsp/esp], 0x100
+        0x9D,                                      // 13: popfq/popfd
+        0x8E, 0xD0,                                // 14: mov ss, ax  <- shadow starts here
+        0x0F, 0xA2,                                // 16: cpuid       <- buggy hypervisor traps here
+        0x5B,                                      // 18: pop rbx/ebx <- baremetal traps here
+        0x90,                                      // 19: nop         
+        0x9C,                                      // 20: pushfq/pushfd
+        0x81, 0x24, 0x24, 0xFF, 0xFE, 0xFF, 0xFF,  // 21: and dword ptr [rsp/esp], 0xFFFFFEFF
+        0x9D,                                      // 28: popfq/popfd
+        0xC3                                       // 29: ret
+    };
+    static const unsigned char singlestep_stub[] VMAWARE_SECTION = {
+        0x9C,                                     // pushfq
+        0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00, // or dword ptr [rsp], 0x100 (sets TF)
+        0x9D,                                     // popfq
+        0x0F, 0xA2,                               // cpuid
+        0xC7, 0xB2,                               // db 0xC7, 0xB2 (invalid opcode)
+        0xC3                                      // ret
+    };
+    static const unsigned char ud_stub[] VMAWARE_SECTION = { 0x0F, 0x0B, 0xC3 }; // ud2; ret
+
+    #if (x86_64)
+        static const unsigned char trampoline_stub[] VMAWARE_SECTION = {
+            0x49, 0x89, 0xD8,                         // mov r8, rbx (save rbx to volatile register r8)
+            0x9C,                                     // pushfq
+            0x81, 0x04, 0x24, 0x00, 0x01, 0x01, 0x00, // or dword ptr [rsp], 0x10100 (set TF)
+            0x9D,                                     // popfq
+            0x0F, 0xA2,                               // cpuid 
+            0x4C, 0x89, 0xC3,                         // mov rbx, r8  (restore rbx from r8) - trap happens here
+            0xC3                                      // ret
+        };
+        static const unsigned char switch_stub[] VMAWARE_SECTION = {
+            0x53, 0x55, 0x57, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, // push rbx, rbp, rdi, rsi, r12-r15
+            0x49, 0x89, 0x20,                                                       // qword ptr [r8], rsp
+            0x66, 0x8C, 0xD0,                                                       // mov ax, ss
+            0x50,                                                                   // push rax
+            0x52,                                                                   // push rdx
+            0x9C,                                                                   // pushfq
+            0x48, 0x8B, 0x41, 0x08,                                                 // mov rax, qword ptr [rcx + 8]
+            0x50,                                                                   // push rax
+            0x48, 0x8B, 0x01,                                                       // mov rax, qword ptr [rcx]
+            0x50,                                                                   // push rax
+            0x48, 0xCF                                                              // iretq
+        };
+        static const unsigned char dbvm_intel_stub[] VMAWARE_SECTION = {
+            0x49, 0x89, 0xD0,                               // mov r8, rdx
+            0x48, 0x89, 0xC8,                               // mov rax, rcx
+            0x48, 0xBA, 0x10, 0x32, 0x54, 0x76, 0x00, 0x00, 0x00, 0x00, // mov rdx, 0x76543210
+            0x48, 0xB9, 0x90, 0x90, 0x90, 0x90, 0x00, 0x00, 0x00, 0x00, // mov rcx, 0x90909090
+            0x0F, 0x01, 0xC1,                               // vmcall
+            0x49, 0x89, 0x00,                               // mov [r8], rax (mov [imm64], rax ; &vmcallResult)
+            0xC3                                            // ret
+        };
+
+        static const unsigned char dbvm_amd_stub[] VMAWARE_SECTION = {
+            0x49, 0x89, 0xD0,                               // mov r8, rdx
+            0x48, 0x89, 0xC8,                               // mov rax, rcx
+            0x48, 0xBA, 0x10, 0x32, 0x54, 0x76, 0x00, 0x00, 0x00, 0x00, // mov rdx, 0x76543210
+            0x48, 0xB9, 0x90, 0x90, 0x90, 0x90, 0x00, 0x00, 0x00, 0x00, // mov rcx, 0x90909090
+            0x0F, 0x01, 0xD9,                               // vmmcall
+            0x49, 0x89, 0x00,                               // mov [r8], rax (mov [imm64], rax ; &vmcallResult)
+            0xC3                                            // ret
+        };
+
+        static const unsigned char dbvm_icebp_stub[] VMAWARE_SECTION = {
+            0xF1,                                           // icebp
+            0xC3                                            // ret
+        };
+    #endif
+#elif (ARM32)
+    // udf #0; bx lr, little-endian for 0xE7F000F0 and 0xE12FFF1E
+    static const unsigned char ud_stub[] VMAWARE_SECTION = { 0xF0, 0x00, 0xF0, 0xE7, 0x1E, 0xFF, 0x2F, 0xE1 };
+#elif (ARM64)
+    // hlt #0; ret, little-endian for 0xD4400000 and 0xD65F03C0
+    static const unsigned char ud_stub[] VMAWARE_SECTION = { 0x00, 0x00, 0x40, 0xD4, 0xC0, 0x03, 0x5F, 0xD6 };
+#endif
+
+#if (MSVC)
+    #pragma const_seg()
+#endif
+
+#if (CLANG && !MSVC)
+    #if __has_declspec_attribute(guard)
+        #define VMAWARE_NO_CFG __declspec(guard(nocf)) __attribute__((noinline))
+    #elif __has_attribute(nocf_check)
+        #define VMAWARE_NO_CFG __attribute__((nocf_check)) __attribute__((noinline))
+    #else
+        #define VMAWARE_NO_CFG __attribute__((noinline))
+    #endif
+#elif (GCC)
+    #if defined(__has_attribute) && __has_attribute(nocf_check)
+        #define VMAWARE_NO_CFG __attribute__((nocf_check)) __attribute__((noinline))
+    #else
+        #define VMAWARE_NO_CFG __attribute__((noinline))
+    #endif
+#elif (MSVC)
+    #define VMAWARE_NO_CFG __declspec(guard(nocf)) __declspec(noinline)
+#else
+    #define VMAWARE_NO_CFG
+#endif
 
 struct VM {
 private:
@@ -3444,6 +3558,301 @@ public:
     #endif
 #endif
 
+    // memory related functions
+    struct memory {
+        // uninstrumented indirect-call invokers
+        VMAWARE_NO_CFG static void execute(const void* pointer) noexcept {
+            using func_t = void(*)();
+            reinterpret_cast<func_t>(const_cast<void*>(pointer))();
+        }
+
+        VMAWARE_NO_CFG static void execute(const void* pointer, void* frame, uintptr_t stack32_ptr, u64* saved_rsp) noexcept {
+            using func_t = void(*)(void*, uintptr_t, u64*);
+            reinterpret_cast<func_t>(const_cast<void*>(pointer))(frame, stack32_ptr, saved_rsp);
+        }
+
+        VMAWARE_NO_CFG static void execute(const void* pointer, void* vmcall_info, void* vmcall_result) noexcept {
+            using func_t = void(*)(void*, void*);
+            reinterpret_cast<func_t>(const_cast<void*>(pointer))(vmcall_info, vmcall_result);
+        }
+
+        inline static DWORD execute_handler(const void* pointer) noexcept {
+            DWORD exception_status = 0;
+            __try {
+                execute(pointer);
+            }
+            __except (exception_status = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {}
+            return exception_status;
+        };
+
+        // retrieves the addresses of specified functions from a loaded module using the export directory, manual implementation of GetProcAddress
+        static void get_function_address(const HMODULE hModule, const char* const names[], void** const functions, const size_t count) {
+            using func_map = std::unordered_map<std::string, void*>;
+            static std::unordered_map<HMODULE, func_map> function_cache;
+
+            for (size_t i = 0; i < count; ++i) functions[i] = nullptr;
+            if (!hModule) return;
+
+            BYTE* base = reinterpret_cast<BYTE*>(hModule);
+
+            size_t module_size = 0;
+            {
+                MEMORY_BASIC_INFORMATION mbi = {};
+                if (VirtualQuery(base, &mbi, sizeof(mbi))) {
+                    module_size = static_cast<size_t>(mbi.RegionSize);
+                }
+                else {
+                    return;
+                }
+            }
+
+            auto valid_range = [&](size_t offset, size_t sz) noexcept -> bool {
+                return (sz > 0) && (offset < module_size) && (sz <= module_size - offset);
+            };
+
+            auto cstr_from_rva = [&](DWORD rva) noexcept -> const char* {
+                if (!valid_range(static_cast<size_t>(rva), 1)) return nullptr;
+
+                const char* start = reinterpret_cast<const char*>(base + rva);
+                const size_t remaining = module_size - static_cast<size_t>(rva);
+
+                if (std::memchr(start, '\0', remaining)) {
+                    return start;
+                }
+
+                return nullptr;
+            };
+
+            // validate DOS header 
+            if (!valid_range(0, sizeof(IMAGE_DOS_HEADER))) return;
+            const auto* dosHeader = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+            if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) return;
+
+            // e_lfanew -> NT headers
+            if (dosHeader->e_lfanew < 0) return;
+            const size_t e_lfanew = static_cast<size_t>(dosHeader->e_lfanew);
+            if (!valid_range(e_lfanew, sizeof(IMAGE_NT_HEADERS))) return;
+            const auto* ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + e_lfanew);
+            if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) return;
+
+            const size_t sizeOfImage = static_cast<size_t>(ntHeaders->OptionalHeader.SizeOfImage);
+            if (sizeOfImage != 0 && sizeOfImage > module_size) {
+                module_size = sizeOfImage;
+            }
+
+            // check export data directory exists
+            if (ntHeaders->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXPORT) {
+                return; // no export directory
+            }
+
+            const auto& dd = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+            if (dd.VirtualAddress == 0 || dd.Size == 0) {
+                return; // no exports
+            }
+
+            // validate export directory fits
+            if (!valid_range(static_cast<size_t>(dd.VirtualAddress), sizeof(IMAGE_EXPORT_DIRECTORY))) {
+                return;
+            }
+
+            const auto* exportDir = reinterpret_cast<const IMAGE_EXPORT_DIRECTORY*>(base + dd.VirtualAddress);
+
+            const DWORD nameCount = exportDir->NumberOfNames;
+            const DWORD funcCount = exportDir->NumberOfFunctions;
+
+            constexpr DWORD MAX_NAMES = 1u << 20; // 1M names is absurd but protective
+            if (nameCount == 0 || nameCount > MAX_NAMES) return;
+            if (funcCount == 0 || funcCount > MAX_NAMES) return;
+
+            const DWORD addr_names = exportDir->AddressOfNames;
+            const DWORD addr_funcs = exportDir->AddressOfFunctions;
+            const DWORD addr_ord = exportDir->AddressOfNameOrdinals;
+
+            if (!valid_range(static_cast<size_t>(addr_names), static_cast<size_t>(nameCount) * sizeof(DWORD))) return;
+            if (!valid_range(static_cast<size_t>(addr_funcs), static_cast<size_t>(funcCount) * sizeof(DWORD))) return;
+            if (!valid_range(static_cast<size_t>(addr_ord), static_cast<size_t>(nameCount) * sizeof(WORD))) return;
+
+            const DWORD* nameRvas = reinterpret_cast<const DWORD*>(base + addr_names);
+            const DWORD* funcRvas = reinterpret_cast<const DWORD*>(base + addr_funcs);
+            const WORD* ordinals = reinterpret_cast<const WORD*>(base + addr_ord);
+
+            func_map& module_cache = function_cache[hModule];
+
+            for (size_t i = 0; i < count; ++i) {
+                const char* current_name = names[i];
+                if (!current_name) continue;
+                const std::string s_name(current_name);
+
+                // check cache first
+                const auto cache_it = module_cache.find(s_name);
+                if (cache_it != module_cache.end()) {
+                    functions[i] = cache_it->second;
+                    continue;
+                }
+
+                // binary search over names (names array is typically sorted)
+                DWORD lo = 0, hi = nameCount;
+                while (lo < hi) {
+                    const DWORD mid = lo + (hi - lo) / 2;
+                    const DWORD midNameRva = nameRvas[mid];
+                    const char* midName = cstr_from_rva(midNameRva);
+                    if (!midName) { // corrupted string table or something
+                        lo = hi;
+                        break;
+                    }
+
+                    const int cmp = strcmp(current_name, midName);
+                    if (cmp > 0) {
+                        lo = mid + 1;
+                    }
+                    else {
+                        hi = mid;
+                    }
+                }
+
+                if (lo < nameCount) {
+                    const char* candidateName = cstr_from_rva(nameRvas[lo]);
+                    if (candidateName && strcmp(current_name, candidateName) == 0) {
+                        const WORD nameOrdinal = ordinals[lo];
+                        if (static_cast<DWORD>(nameOrdinal) >= funcCount) continue;
+                        const DWORD funcRva = funcRvas[nameOrdinal];
+                        if (!valid_range(static_cast<size_t>(funcRva), 1)) continue;
+                        void* addr = reinterpret_cast<void*>(base + funcRva);
+                        functions[i] = addr;
+                        module_cache[s_name] = addr;
+                        continue;
+                    }
+                }
+            }
+        }
+
+
+        [[nodiscard]] static HMODULE get_ntdll() {
+            static HMODULE cached_ntdll = nullptr;
+            if (cached_ntdll != nullptr) {
+                return cached_ntdll;
+            }
+
+        #ifndef _WINTERNL_
+            typedef struct _UNICODE_STRING {
+                USHORT Length;
+                USHORT MaximumLength;
+                PWSTR  Buffer;
+            } UNICODE_STRING, * PUNICODE_STRING;
+
+            typedef struct _PEB_LDR_DATA {
+                BYTE Reserved1[8];
+                PVOID Reserved2[3];
+                LIST_ENTRY InMemoryOrderModuleList;
+            } PEB_LDR_DATA, * PPEB_LDR_DATA;
+
+            typedef struct _LDR_DATA_TABLE_ENTRY {
+                PVOID Reserved1[2];
+                LIST_ENTRY InMemoryOrderLinks;
+                PVOID Reserved2[2];
+                PVOID DllBase;
+                PVOID Reserved3[2];
+                UNICODE_STRING FullDllName;
+                BYTE Reserved4[8];
+                PVOID Reserved5[3];
+            #if (MSVC)
+                #pragma warning(suppress: 4201)
+            #endif
+                union {
+                    ULONG CheckSum;
+                    PVOID Reserved6;
+                } DUMMYUNIONNAME;
+                ULONG TimeDateStamp;
+            } LDR_DATA_TABLE_ENTRY, * PLDR_DATA_TABLE_ENTRY;
+
+            typedef struct _PEB {
+                BYTE Reserved1[2];
+                BYTE BeingDebugged;
+                BYTE Reserved2[1];
+                PVOID Reserved3[2];
+                PPEB_LDR_DATA Ldr;
+            } PEB, * PPEB;
+        #endif
+
+            PPEB peb = nullptr;
+
+    #if (x86_64)
+        #if (MSVC && !CLANG)
+            peb = reinterpret_cast<PPEB>(__readgsqword(0x60));
+        #else
+            asm("movq %%gs:0x60, %0" : "=r"(peb));
+        #endif
+            #elif (x86_32)
+        #if (MSVC&& !CLANG)
+            peb = reinterpret_cast<PPEB>(__readfsdword(0x30));
+        #else
+            asm("movl %%fs:0x30, %0" : "=r"(peb));
+        #endif
+    #endif
+
+            if (!peb) { // not x86 or tampered with
+                const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+                if (ntdll) cached_ntdll = ntdll;
+                return ntdll;
+            }
+
+            PPEB_LDR_DATA ldr = peb->Ldr;
+            if (!ldr) {
+                const HMODULE h = GetModuleHandleW(L"ntdll.dll");
+                if (h) cached_ntdll = h;
+                return h;
+            }
+
+            #ifndef CONTAINING_RECORD
+                #define CONTAINING_RECORD(address, type, field) ((type *)((char*)(address) - (size_t)(&((type *)0)->field)))
+            #endif
+
+            constexpr WCHAR target_name[] = L"ntdll.dll";
+            constexpr size_t target_length = (std::size(target_name) - 1);
+
+            LIST_ENTRY* head = &ldr->InMemoryOrderModuleList;
+            // static analyzers don't know that InMemoryOrderModuleList is a circular list managed by the loader
+            // so they conservatively assume head->Flink or some cur->Flink might be nullptr
+            for (LIST_ENTRY* cur = head->Flink; cur != nullptr && cur != head; cur = cur->Flink) {
+                auto* ent = CONTAINING_RECORD(cur, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+                if (!ent) continue;
+
+                auto* fullname = &ent->FullDllName;
+                if (!fullname->Buffer || fullname->Length == 0) continue;
+
+                const auto total_chars = static_cast<USHORT>(fullname->Length / sizeof(WCHAR));
+
+                size_t start = total_chars;
+                while (start > 0) {
+                    const WCHAR c = fullname->Buffer[start - 1];
+                    if (c == L'\\' || c == L'/') break;
+                    --start;
+                }
+
+                const size_t file_length = total_chars - start;
+                if (file_length != target_length) continue;
+
+                bool match = true;
+                for (size_t i = 0; i < file_length; ++i) {
+                    WCHAR a = fullname->Buffer[start + i];
+                    WCHAR b = target_name[i];
+                    if (a >= L'A' && a <= L'Z') a = static_cast<WCHAR>(a + 32);
+                    if (b >= L'A' && b <= L'Z') b = static_cast<WCHAR>(b + 32);
+                    if (a != b) { match = false; break; }
+                }
+
+                if (match) {
+                    cached_ntdll = reinterpret_cast<HMODULE>(ent->DllBase);
+                    return cached_ntdll;
+                }
+            }
+
+            const HMODULE h = GetModuleHandleW(L"ntdll.dll");
+            if (h) cached_ntdll = h;
+            return h;
+        }
+    };
+
     // miscellaneous functionalities
     struct util {
         [[nodiscard]] static constexpr bool is_unsupported(const VM::enum_flags flag) noexcept {
@@ -3844,14 +4253,14 @@ public:
             // only if we got MACHINE_UNKNOWN on process but native is ARM64
             if (nativeMachine == IMAGE_FILE_MACHINE_ARM64) {
                 using get_process_information_fn = BOOL(__stdcall*)(HANDLE, PROCESS_INFORMATION_CLASS, PVOID, DWORD);
-                const HMODULE ntdll = util::get_ntdll();
+                const HMODULE ntdll = memory::get_ntdll();
                 if (ntdll == nullptr) {
                     return false;
                 }
 
                 constexpr const char* function_names[] = { "GetProcessInformation" };
                 void* functions[ARRAYSIZE(function_names)] = {};
-                util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+                memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
                 get_process_information_fn get_proc_info = reinterpret_cast<get_process_information_fn>(functions[0]);
                 if (get_proc_info) {
@@ -4049,274 +4458,6 @@ public:
         }
 
     #if (WINDOWS)
-        // retrieves the addresses of specified functions from a loaded module using the export directory, manual implementation of GetProcAddress
-        static void get_function_address(const HMODULE hModule, const char* const names[], void** const functions, const size_t count) {
-            using func_map = std::unordered_map<std::string, void*>;
-            static std::unordered_map<HMODULE, func_map> function_cache;
-
-            for (size_t i = 0; i < count; ++i) functions[i] = nullptr;
-            if (!hModule) return;
-
-            BYTE* base = reinterpret_cast<BYTE*>(hModule);
-
-            size_t module_size = 0;
-            {
-                MEMORY_BASIC_INFORMATION mbi = {};
-                if (VirtualQuery(base, &mbi, sizeof(mbi))) {
-                    module_size = static_cast<size_t>(mbi.RegionSize);
-                }
-                else {
-                    return;
-                }
-            }
-
-            auto valid_range = [&](size_t offset, size_t sz) noexcept -> bool {
-                return (sz > 0) && (offset < module_size) && (sz <= module_size - offset);
-            };
-
-            auto cstr_from_rva = [&](DWORD rva) noexcept -> const char* {
-                if (!valid_range(static_cast<size_t>(rva), 1)) return nullptr;
-
-                const char* start = reinterpret_cast<const char*>(base + rva);
-                const size_t remaining = module_size - static_cast<size_t>(rva);
-
-                if (std::memchr(start, '\0', remaining)) {
-                    return start;
-                }
-
-                return nullptr;
-            };
-
-            // Validate DOS header 
-            if (!valid_range(0, sizeof(IMAGE_DOS_HEADER))) return;
-            const auto* dosHeader = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-            if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) return;
-
-            // e_lfanew -> NT headers
-            if (dosHeader->e_lfanew < 0) return;
-            const size_t e_lfanew = static_cast<size_t>(dosHeader->e_lfanew);
-            if (!valid_range(e_lfanew, sizeof(IMAGE_NT_HEADERS))) return;
-            const auto* ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + e_lfanew);
-            if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) return;
-
-            const size_t sizeOfImage = static_cast<size_t>(ntHeaders->OptionalHeader.SizeOfImage);
-            if (sizeOfImage != 0 && sizeOfImage > module_size) {
-                module_size = sizeOfImage;
-            }
-
-            // Check export data directory exists
-            if (ntHeaders->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXPORT) {
-                return; // no export directory
-            }
-
-            const auto& dd = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
-            if (dd.VirtualAddress == 0 || dd.Size == 0) {
-                return; // no exports
-            }
-
-            // Validate export directory fits
-            if (!valid_range(static_cast<size_t>(dd.VirtualAddress), sizeof(IMAGE_EXPORT_DIRECTORY))) {
-                return;
-            }
-
-            const auto* exportDir = reinterpret_cast<const IMAGE_EXPORT_DIRECTORY*>(base + dd.VirtualAddress);
-
-            const DWORD nameCount = exportDir->NumberOfNames;
-            const DWORD funcCount = exportDir->NumberOfFunctions;
-
-            constexpr DWORD MAX_NAMES = 1u << 20; // 1M names is absurd but protective
-            if (nameCount == 0 || nameCount > MAX_NAMES) return;
-            if (funcCount == 0 || funcCount > MAX_NAMES) return;
-
-            const DWORD addr_names = exportDir->AddressOfNames;
-            const DWORD addr_funcs = exportDir->AddressOfFunctions;
-            const DWORD addr_ord = exportDir->AddressOfNameOrdinals;
-
-            if (!valid_range(static_cast<size_t>(addr_names), static_cast<size_t>(nameCount) * sizeof(DWORD))) return;
-            if (!valid_range(static_cast<size_t>(addr_funcs), static_cast<size_t>(funcCount) * sizeof(DWORD))) return;
-            if (!valid_range(static_cast<size_t>(addr_ord), static_cast<size_t>(nameCount) * sizeof(WORD))) return;
-
-            const DWORD* nameRvas = reinterpret_cast<const DWORD*>(base + addr_names);
-            const DWORD* funcRvas = reinterpret_cast<const DWORD*>(base + addr_funcs);
-            const WORD* ordinals = reinterpret_cast<const WORD*>(base + addr_ord);
-
-            func_map& module_cache = function_cache[hModule];
-
-            for (size_t i = 0; i < count; ++i) {
-                const char* current_name = names[i];
-                if (!current_name) continue;
-                const std::string s_name(current_name);
-
-                // check cache first
-                const auto cache_it = module_cache.find(s_name);
-                if (cache_it != module_cache.end()) {
-                    functions[i] = cache_it->second;
-                    continue;
-                }
-
-                // binary search over names (names array is typically sorted)
-                DWORD lo = 0, hi = nameCount;
-                while (lo < hi) {
-                    const DWORD mid = lo + (hi - lo) / 2;
-                    const DWORD midNameRva = nameRvas[mid];
-                    const char* midName = cstr_from_rva(midNameRva);
-                    if (!midName) { // corrupted string table or something
-                        lo = hi;
-                        break;
-                    }
-
-                    const int cmp = strcmp(current_name, midName);
-                    if (cmp > 0) {
-                        lo = mid + 1;
-                    }
-                    else {
-                        hi = mid;
-                    }
-                }
-
-                if (lo < nameCount) {
-                    const char* candidateName = cstr_from_rva(nameRvas[lo]);
-                    if (candidateName && strcmp(current_name, candidateName) == 0) {
-                        const WORD nameOrdinal = ordinals[lo];
-                        if (static_cast<DWORD>(nameOrdinal) >= funcCount) continue;
-                        const DWORD funcRva = funcRvas[nameOrdinal];
-                        if (!valid_range(static_cast<size_t>(funcRva), 1)) continue;
-                        void* addr = reinterpret_cast<void*>(base + funcRva);
-                        functions[i] = addr;
-                        module_cache[s_name] = addr;
-                        continue;
-                    }
-                }
-            }
-        }
-
-
-        [[nodiscard]] static HMODULE get_ntdll() {
-            static HMODULE cached_ntdll = nullptr;
-            if (cached_ntdll != nullptr) {
-                return cached_ntdll;
-            }
-
-        #ifndef _WINTERNL_
-            typedef struct _UNICODE_STRING {
-                USHORT Length;
-                USHORT MaximumLength;
-                PWSTR  Buffer;
-            } UNICODE_STRING, * PUNICODE_STRING;
-
-            typedef struct _PEB_LDR_DATA {
-                BYTE Reserved1[8];
-                PVOID Reserved2[3];
-                LIST_ENTRY InMemoryOrderModuleList;
-            } PEB_LDR_DATA, * PPEB_LDR_DATA;
-
-            typedef struct _LDR_DATA_TABLE_ENTRY {
-                PVOID Reserved1[2];
-                LIST_ENTRY InMemoryOrderLinks;
-                PVOID Reserved2[2];
-                PVOID DllBase;
-                PVOID Reserved3[2];
-                UNICODE_STRING FullDllName;
-                BYTE Reserved4[8];
-                PVOID Reserved5[3];
-            #if (MSVC)
-            #pragma warning(suppress: 4201)
-            #endif
-                union {
-                    ULONG CheckSum;
-                    PVOID Reserved6;
-                } DUMMYUNIONNAME;
-                ULONG TimeDateStamp;
-            } LDR_DATA_TABLE_ENTRY, * PLDR_DATA_TABLE_ENTRY;
-
-            typedef struct _PEB {
-                BYTE Reserved1[2];
-                BYTE BeingDebugged;
-                BYTE Reserved2[1];
-                PVOID Reserved3[2];
-                PPEB_LDR_DATA Ldr;
-            } PEB, * PPEB;
-        #endif
-
-            PPEB peb = nullptr;
-
-        #if (x86_64)
-            #if (MSVC && !CLANG)
-                peb = reinterpret_cast<PPEB>(__readgsqword(0x60));
-            #else
-                asm("movq %%gs:0x60, %0" : "=r"(peb));
-            #endif
-        #elif (x86_32)
-            #if (MSVC&& !CLANG)
-                peb = reinterpret_cast<PPEB>(__readfsdword(0x30));
-            #else
-                asm("movl %%fs:0x30, %0" : "=r"(peb));
-            #endif
-        #endif
-
-            if (!peb) { // not x86 or tampered with
-                const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-                if (ntdll) cached_ntdll = ntdll;
-                return ntdll;
-            }
-
-            PPEB_LDR_DATA ldr = peb->Ldr;
-            if (!ldr) {
-                const HMODULE h = GetModuleHandleW(L"ntdll.dll");
-                if (h) cached_ntdll = h;
-                return h;
-            }
-
-            #ifndef CONTAINING_RECORD
-                #define CONTAINING_RECORD(address, type, field) ((type *)((char*)(address) - (size_t)(&((type *)0)->field)))
-            #endif
-
-            constexpr WCHAR target_name[] = L"ntdll.dll";
-            constexpr size_t target_length = (std::size(target_name) - 1);
-
-            LIST_ENTRY* head = &ldr->InMemoryOrderModuleList;
-            // static analyzers don't know that InMemoryOrderModuleList is a circular list managed by the loader
-            // so they conservatively assume head->Flink or some cur->Flink might be nullptr
-            for (LIST_ENTRY* cur = head->Flink; cur != nullptr && cur != head; cur = cur->Flink) {
-                auto* ent = CONTAINING_RECORD(cur, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
-                if (!ent) continue;
-
-                auto* fullname = &ent->FullDllName;
-                if (!fullname->Buffer || fullname->Length == 0) continue;
-
-                const auto total_chars = static_cast<USHORT>(fullname->Length / sizeof(WCHAR));
-
-                size_t start = total_chars;
-                while (start > 0) {
-                    const WCHAR c = fullname->Buffer[start - 1];
-                    if (c == L'\\' || c == L'/') break;
-                    --start;
-                }
-
-                const size_t file_length = total_chars - start;
-                if (file_length != target_length) continue;
-
-                bool match = true;
-                for (size_t i = 0; i < file_length; ++i) {
-                    WCHAR a = fullname->Buffer[start + i];
-                    WCHAR b = target_name[i];
-                    if (a >= L'A' && a <= L'Z') a = static_cast<WCHAR>(a + 32);
-                    if (b >= L'A' && b <= L'Z') b = static_cast<WCHAR>(b + 32);
-                    if (a != b) { match = false; break; }
-                }
-
-                if (match) {
-                    cached_ntdll = reinterpret_cast<HMODULE>(ent->DllBase);
-                    return cached_ntdll;
-                }
-            }
-
-            const HMODULE h = GetModuleHandleW(L"ntdll.dll");
-            if (h) cached_ntdll = h;
-            return h;
-        } 
-
-
         static bool get_manufacturer_model(const char** out_manufacturer, const char** out_model) {
             if (out_manufacturer) *out_manufacturer = "";
             if (out_model) *out_model = "";
@@ -4445,33 +4586,6 @@ public:
             if (out_model) *out_model = memo::bios_info::fetch_model();
 
             return got_any;
-        }
-
-        // indirect call without CFG checks
-        #if (MSVC)
-            #define VMAWARE_NO_CFG __declspec(guard(nocf)) __declspec(noinline)
-        #elif (CLANG)
-            #if __has_declspec_attribute(guard)
-                #define VMAWARE_NO_CFG __declspec(guard(nocf)) __attribute__((noinline))
-            #elif __has_attribute(nocf_check)
-                #define VMAWARE_NO_CFG __attribute__((nocf_check)) __attribute__((noinline))
-            #else
-                #define VMAWARE_NO_CFG __attribute__((noinline))
-            #endif
-        #elif (GCC)
-            #if defined(__has_attribute) && __has_attribute(nocf_check)
-                #define VMAWARE_NO_CFG __attribute__((nocf_check)) __attribute__((noinline))
-            #else
-                #define VMAWARE_NO_CFG __attribute__((noinline))
-            #endif
-            #else
-                #define VMAWARE_NO_CFG
-        #endif
-
-        // helper function to invoke pointers without instrumentation
-        VMAWARE_NO_CFG static void execute_unchecked(void* pointer) {
-            using func_t = void(*)();
-            reinterpret_cast<func_t>(pointer)(); // breakpoint hit
         }
     #endif
 
@@ -5778,7 +5892,7 @@ public:
                         std::atomic_signal_fence(std::memory_order_seq_cst); // _ReadWriteBarrier() aka dont emit runtime fences
                     #if (GCC || CLANG)
                         size_t a = 0;
-                        size_t b, c, d;
+                        size_t b = 0, c = 0, d = 0;
                         __asm__ volatile (
                             "cpuid"
                             : "+a"(a), "=b"(b), "=c"(c), "=d"(d)
@@ -5830,7 +5944,7 @@ public:
                         std::atomic_signal_fence(std::memory_order_seq_cst); 
                     #if (GCC || CLANG)
                         size_t a = 0;
-                        size_t b, c, d;
+                        size_t b = 0, c = 0, d = 0;
                         __asm__ volatile (
                             "cpuid"
                             : "+a"(a), "=b"(b), "=c"(c), "=d"(d)
@@ -7958,13 +8072,13 @@ public:
     {
     #if (x86_64)       
         #if (WINDOWS)
-            const HMODULE ntdll = util::get_ntdll();
+            const HMODULE ntdll = memory::get_ntdll();
             if (!ntdll)
                 return false;
 
             const char* function_names[] = { "NtQuerySystemInformation" };
             void* functions[ARRAYSIZE(function_names)] = {};
-            util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+            memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
             using nt_query_sysinfo_t = NTSTATUS(__stdcall*)(int, PVOID, ULONG, PULONG); // int is SYSTEM_INFORMATION_CLASS
             nt_query_sysinfo_t nt_query = reinterpret_cast<nt_query_sysinfo_t>(functions[0]);
@@ -8124,7 +8238,7 @@ public:
         constexpr size_t MAX_DESCRIPTOR_SIZE = 64 * 1024;
         u8 successful_opens = 0;
 
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return result;
 
         constexpr const char* function_names[] = {
@@ -8137,7 +8251,7 @@ public:
             "NtClose"
         };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using ntopenfile_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, ULONG, ULONG);
         using nt_device_io_control_file_fn = NTSTATUS(__stdcall*)(HANDLE, HANDLE, PVOID, PVOID, PIO_STATUS_BLOCK, ULONG, PVOID, ULONG, PVOID, ULONG);
@@ -8742,11 +8856,11 @@ public:
      * @implements VM::POWER_CAPABILITIES
      */
     [[nodiscard]] static bool power_capabilities() {
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
 
         constexpr const char* function_names[] = { "NtPowerInformation" }; // Win8
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         if (!functions[0]) return false;
 
@@ -8802,12 +8916,12 @@ public:
      * @implements VM::GAMARUE
      */
     [[nodiscard]] static bool gamarue() {
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = { "NtOpenKey", "NtQueryValueKey", "RtlInitUnicodeString", "NtClose" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[0]);
         const auto nt_query_value_key = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PUNICODE_STRING, ULONG, PVOID, ULONG, PULONG)>(functions[1]);
@@ -8970,6 +9084,7 @@ public:
             str ax
             mov tr, ax
         }
+
         if ((tr & 0xFF) == 0x00 && ((tr >> 8) & 0xFF) == 0x40) {
             return core::add(brand_enum::VMWARE);
         }
@@ -8989,12 +9104,12 @@ public:
      * @implements VM::MUTEX
      */
     [[nodiscard]] static bool mutex() {
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = { "NtOpenMutant", "RtlInitUnicodeString", "NtClose" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using rtl_init_unicode_string_fn = void(__stdcall*)(PUNICODE_STRING DestinationString, PCWSTR SourceString);
         using ntclose_fn = NTSTATUS(__stdcall*)(HANDLE Handle);
@@ -9075,12 +9190,12 @@ public:
      * @implements VM::CUCKOO_DIR
      */
     [[nodiscard]] static bool cuckoo_dir() {
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = { "NtOpenFile", "RtlInitUnicodeString", "NtClose" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using nt_openfile_t = NTSTATUS(__stdcall*)(PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
             POBJECT_ATTRIBUTES ObjectAttributes, PIO_STATUS_BLOCK IoStatusBlock,
@@ -9138,12 +9253,12 @@ public:
         using rtl_init_unicode_string_t = void(__stdcall*)(PUNICODE_STRING DestinationString, PCWSTR SourceString);
         using ntclose_t = NTSTATUS(__stdcall*)(HANDLE Handle);
 
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = { "NtOpenFile", "RtlInitUnicodeString", "NtClose" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         const auto nt_open_file = reinterpret_cast<ntopenfile_t>(functions[0]);
         const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_t>(functions[1]);
@@ -9229,12 +9344,12 @@ public:
         using PSYSTEM_MODULE_INFORMATION_EX = _SYSTEM_MODULE_INFORMATION_EX*;
 
         constexpr ULONG system_module_information = 11;
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = { "NtQuerySystemInformation", "NtAllocateVirtualMemory", "NtFreeVirtualMemory" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using nt_query_system_information_fn = NTSTATUS(__stdcall*)(ULONG SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength);
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(
@@ -9338,12 +9453,12 @@ public:
             MaxKeyInfoClass
         } KEY_INFORMATION_CLASS;
 
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = { "RtlInitUnicodeString", "NtOpenKey", "NtQueryKey", "NtClose" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(functions[0]);
         const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[1]);
@@ -9454,12 +9569,12 @@ public:
      * @implements VM::HANDLES
      */
     [[nodiscard]] static bool device_handles() {
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = { "RtlInitUnicodeString", "NtOpenFile", "NtClose" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(functions[0]);
         const auto nt_open_file = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, ULONG, ULONG)>(functions[1]);
@@ -9608,12 +9723,12 @@ public:
         using PSYSTEM_HYPERVISOR_DETAIL_INFORMATION = SYSTEM_HYPERVISOR_DETAIL_INFORMATION*;
         using nt_query_system_information_fn = NTSTATUS(__stdcall*)(int SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength);
 
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;        
 
         constexpr const char* function_names[] = { "NtQuerySystemInformation" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         const nt_query_system_information_fn nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(functions[0]);
         if (nt_query_system_information) {
@@ -9665,12 +9780,12 @@ public:
             UNICODE_STRING Name;
         };
 
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
     
         constexpr const char* function_names[] = { "NtOpenKey", "NtQueryObject", "NtClose" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
     
         using POBJECT_NAME_INFORMATION = OBJECT_NAME_INFORMATION*;
         using nt_open_key_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
@@ -9766,12 +9881,12 @@ public:
             MaxKeyInfoClass
         };
 
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = { "RtlInitUnicodeString", "NtOpenKey", "NtQueryKey", "NtClose" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(functions[0]);
         const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[1]);
@@ -9986,13 +10101,13 @@ public:
     [[nodiscard]] static bool trap() {
         bool hypervisor_caught = false;
     #if (x86_64)
-        // when a single - step(TF) and hardware breakpoint(DR0) collide, Intel CPUs set both DR6.BS and DR6.B0 to report both events, which help make this detection trick
-        // AMD CPUs prioritize the breakpoint, setting only its corresponding bit in DR6 and clearing the single-step bit, which is why this technique is not compatible with AMD
+        // When a single-step (TF) and hardware breakpoint (DR0) collide, Intel CPUs set both DR6.BS and DR6.B0.
+        // AMD CPUs prioritize the breakpoint, setting only its corresponding bit in DR6.
         if (!cpu::is_intel()) {
             return false;
         }
 
-        // mobile SKUs can "false flag" this check
+        // Mobile SKUs can "false flag" this check
         const char* brand = cpu::get_brand();
         for (const char* c = brand; *c; ++c) {
             if (*c == 'U') {
@@ -10004,180 +10119,108 @@ public:
             }
         }
 
-        // we must preserve RBX because CPUID clobbers it, and RBX is a non-volatile 
-        // register in x64. If we don't restore it, the calling function (VM::check) crashes
-        // we use MOV R8, RBX instead of PUSH RBX. Pushing to the stack without 
-        // unwind metadata breaks SEH in x64 (OS cannot find the handler), causing a crash
-        constexpr u8 trampoline[] = {
-            0x49, 0x89, 0xD8,                     // mov r8, rbx (save rbx to volatile register r8)
-            0x9C,                                 // pushfq
-            0x81, 0x04, 0x24,                     // OR DWORD PTR [RSP], 0x10100 (Set TF)
-            0x00, 0x01, 0x01, 0x00,
-            0x9D,                                 // popfq
-            0x0F, 0xA2,                           // cpuid 
-            0x4C, 0x89, 0xC3,                     // mov rbx, r8  (restore rbx from r8) - trap happens here
-            0xC3                                  // ret
-        };
-        SIZE_T trampoline_size = sizeof(trampoline);
-
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = {
-            "NtAllocateVirtualMemory",
-            "NtProtectVirtualMemory",
-            "NtFreeVirtualMemory",
-            "NtFlushInstructionCache",
-            "NtClose",
             "NtGetContextThread",
             "NtSetContextThread"
         };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
-        using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
-        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
-        using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
-        using nt_close_fn = NTSTATUS(__stdcall*)(HANDLE);
         using nt_get_context_thread_fn = NTSTATUS(__stdcall*)(HANDLE, PCONTEXT);
         using nt_set_context_thread_fn = NTSTATUS(__stdcall*)(HANDLE, PCONTEXT);
 
-        // volatile ensures these are loaded from stack after SEH unwind when compiled with aggresive optimizations
-        nt_allocate_virtual_memory_fn volatile nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
-        nt_protect_virtual_memory_fn volatile nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
-        nt_free_virtual_memory_fn volatile nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[2]);
-        nt_flush_instruction_cache_fn volatile nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[3]);
-        nt_close_fn volatile nt_close = reinterpret_cast<nt_close_fn>(functions[4]);
-        nt_get_context_thread_fn volatile nt_get_context_thread = reinterpret_cast<nt_get_context_thread_fn>(functions[5]);
-        nt_set_context_thread_fn volatile nt_set_context_thread = reinterpret_cast<nt_set_context_thread_fn>(functions[6]);
+        nt_get_context_thread_fn volatile nt_get_context_thread = reinterpret_cast<nt_get_context_thread_fn>(functions[0]);
+        nt_set_context_thread_fn volatile nt_set_context_thread = reinterpret_cast<nt_set_context_thread_fn>(functions[1]);
 
-        if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_flush_instruction_cache ||
-            !nt_free_virtual_memory || !nt_get_context_thread || !nt_set_context_thread || !nt_close) {
+        if (!nt_get_context_thread || !nt_set_context_thread) {
             return false;
         }
 
-        PVOID exec_mem = nullptr;
-        SIZE_T region_size = trampoline_size;
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-        NTSTATUS st = nt_allocate_virtual_memory(current_process, &exec_mem, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (!NT_SUCCESS(st) || !exec_mem) {
-            return false;
-        }
-        memcpy(exec_mem, trampoline, trampoline_size);
-
-        {
-            PVOID tmp_base = exec_mem;
-            SIZE_T tmp_sz = trampoline_size;
-            ULONG oldProt = 0;
-            st = nt_protect_virtual_memory(current_process, &tmp_base, &tmp_sz, PAGE_EXECUTE_READ, &oldProt);
-            if (!NT_SUCCESS(st)) {
-                PVOID free_base = exec_mem;
-                SIZE_T free_size = 0;
-                nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
-                return false;
-            }
-        }
-
-        nt_flush_instruction_cache(current_process, exec_mem, trampoline_size);
-
-        u8 hitCount = 0;
-
+        u8 hit_count = 0;
         CONTEXT original_context{};
         original_context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
         const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
 
         if (!NT_SUCCESS(nt_get_context_thread(current_thread, &original_context))) {
-            PVOID free_base = exec_mem;
-            SIZE_T free_size = 0;
-            nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
             return false;
         }
 
-        // set DR0 to trampoline + 14 (Instruction: mov rbx, r8)
-        // offset calculation: mov_r8_rbx(3) + pushfq(1) + or(7) + popfq(1) + cpuid(2) = 14
-        // this is where single step traps after CPUID, and where we want the collision
-        const uintptr_t expected_trap_address = reinterpret_cast<uintptr_t>(exec_mem) + 14;
+        // Set DR0 to trampoline_stub + 14 (Instruction: mov rbx, r8)
+        // Offset: mov_r8_rbx(3) + pushfq(1) + or(7) + popfq(1) + cpuid(2) = 14
+        const uintptr_t expected_trap_address = reinterpret_cast<uintptr_t>(trampoline_stub) + 14;
 
-        // set Dr0 to trampoline+offset
         CONTEXT debug_context = original_context;
-        debug_context.Dr0 = expected_trap_address; // single step breakpoint address
-        debug_context.Dr7 = 1; // enable Local Breakpoint 0
+        debug_context.Dr0 = expected_trap_address; // Single-step breakpoint address
+        debug_context.Dr7 = 1;                     // Enable Local Breakpoint 0
 
         if (!NT_SUCCESS(nt_set_context_thread(current_thread, &debug_context))) {
             nt_set_context_thread(current_thread, &original_context);
-            PVOID free_base = exec_mem;
-            SIZE_T free_size = 0;
-            nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
             return false;
         }
 
-        // context structure to pass data to the static SEH handler
+        // Context structure to pass data to the static SEH handler
         struct trap_context {
             uintptr_t expectedTrapAddr;
             u8* hitCount;
             bool* hypervisor_caught;
         };
 
-        // static struct for SEH filtering to avoid release mode lambda corruption
+        // Static struct for SEH filtering to avoid release-mode lambda optimizations
         struct exception_handler {
             static LONG evaluate(u32 code, EXCEPTION_POINTERS* info, trap_context* ctx) noexcept {
-                // lambda returns LONG to support EXCEPTION_CONTINUE_EXECUTION
                 if (code != static_cast<DWORD>(0x80000004L)) {
                     return EXCEPTION_CONTINUE_SEARCH;
                 }
 
-                // verify exception happened at our calculated offset
+                // Verify exception occurred at our calculated instruction offset
                 if (reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress) != ctx->expectedTrapAddr) {
-                    info->ContextRecord->EFlags &= ~0x100; // clear TF
-                    info->ContextRecord->Dr7 &= ~1;        // clear DR0 Enable
+                    info->ContextRecord->EFlags &= ~0x100; // Clear TF
+                    info->ContextRecord->Dr7 &= ~1;        // Clear DR0 Enable
                     *ctx->hypervisor_caught = true;
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
 
                 (*ctx->hitCount)++;
 
-                // check if Trap Flag and DR0 contributed
+                // Check if both Trap Flag and DR0 contributed to the exception status
                 constexpr u64 required_bits = (1ULL << 14) | 1ULL; // BS | B0
                 const u64 status = info->ContextRecord->Dr6;
 
                 if ((status & required_bits) != required_bits) {
-                    if (util::hyper_x() != HYPERV_HOST)
+                    if (util::hyper_x() != HYPERV_HOST) {
                         *ctx->hypervisor_caught = true;
+                    }
                 }
 
-                // clear Trap Flag to stop single stepping
+                // Clear Trap Flag to stop single-stepping
                 info->ContextRecord->EFlags &= ~0x100;
 
-                // clear DR7 Local Enable 0 to disable the hardware breakpoint
-                // if we don't do this, the next instruction will trigger the breakpoint again immediately
+                // Clear DR7 Local Enable 0 to disable the hardware breakpoint
                 info->ContextRecord->Dr7 &= ~1;
 
-                // executes mov rbx, r8 (restore), and returns
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
         };
 
-        trap_context ctx = { expected_trap_address, &hitCount, &hypervisor_caught };
+        trap_context ctx = { expected_trap_address, &hit_count, &hypervisor_caught };
         VMAWARE_UNUSED(ctx);
 
         __try {
-            reinterpret_cast<void(*)()>(exec_mem)();
+            memory::execute(trampoline_stub);
         }
-        __except (exception_handler::evaluate(_exception_code(), reinterpret_cast<EXCEPTION_POINTERS*>(_exception_info()), &ctx)) {
-            // this block is effectively unreachable because our VEH returns CONTINUE_EXECUTION or CONTINUE_SEARCH
+        __except (exception_handler::evaluate(GetExceptionCode(), reinterpret_cast<EXCEPTION_POINTERS*>(_exception_info()), &ctx)) {
+            // Unreachable, the exception_handler always returns CONTINUE_EXECUTION or CONTINUE_SEARCH
         }
 
-        // if the hypervisor swallowed the exception entirely, hitCount will be 0
-        if (hitCount != 1) {
+        // If the hypervisor swallowed the trap event entirely, the hitcount will be 0
+        if (hit_count != 1) {
             hypervisor_caught = true;
         }
 
         nt_set_context_thread(current_thread, &original_context);
-
-        PVOID free_base = exec_mem;
-        SIZE_T free_size = 0;
-        nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
     #endif
         return hypervisor_caught;
     }
@@ -10189,70 +10232,20 @@ public:
      * @implements VM::UD
      */
     [[nodiscard]] static bool ud() {
-    #if (x86)
-        // ud2; ret
-        constexpr u8 ud_opcodes[] = { 0x0F, 0x0B, 0xC3 };
-    #elif (ARM32)
-        // udf #0; bx lr
-        // (Little-endian for 0xE7F000F0 and 0xE12FFF1E)
-        constexpr u8 ud_opcodes[] = { 0xF0, 0x00, 0xF0, 0xE7, 0x1E, 0xFF, 0x2F, 0xE1 };
-    #elif (ARM64)
-        // hlt #0; ret
-        // (Little-endian for 0xD4400000 and 0xD65F03C0)
-        constexpr u8 ud_opcodes[] = { 0x00, 0x00, 0x40, 0xD4, 0xC0, 0x03, 0x5F, 0xD6 };
-    #else
-        // architecture not supported by this check
-        return false;
-    #endif
-        
+    #if (x86) || (ARM32) || (ARM64)
         bool saw_ud = false;
-        const HMODULE ntdll = util::get_ntdll();
-        if (!ntdll) return false;
-
-        constexpr const char* function_names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFlushInstructionCache", "NtFreeVirtualMemory" };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
-        const auto nt_allocate_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG)>(functions[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG)>(functions[1]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T)>(functions[2]);
-        const auto nt_free_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG)>(functions[3]);
-
-        if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_flush_instruction_cache || !nt_free_virtual_memory) {
-            return false;
-        }
-
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-        PVOID base = nullptr;
-        SIZE_T region_size = sizeof(ud_opcodes);
-        NTSTATUS st = nt_allocate_virtual_memory(current_process, &base, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (!NT_SUCCESS(st) || !base) {
-            return false;
-        }
-
-        memcpy(base, ud_opcodes, sizeof(ud_opcodes));
-
-        ULONG old_protection = 0;
-        st = nt_protect_virtual_memory(current_process, &base, &region_size, PAGE_EXECUTE_READ, &old_protection);
-        if (!NT_SUCCESS(st)) {
-            region_size = 0;
-            nt_free_virtual_memory(current_process, &base, &region_size, MEM_RELEASE);
-            return false;
-        }
-
-        nt_flush_instruction_cache(current_process, base, region_size);
 
         __try {
-            reinterpret_cast<void(*)()>(base)();
+            memory::execute(ud_stub);
         }
         __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
             saw_ud = true;
         }
 
-        region_size = 0;
-        nt_free_virtual_memory(current_process, &base, &region_size, MEM_RELEASE);
-
         return !saw_ud;
+    #else
+        return false;
+    #endif
     }
 
 
@@ -10313,72 +10306,17 @@ public:
         return (trap_ip == 0 || trap_ip != baremetal_target_ip);
 
     #elif (x86_64) || ((x86_32) && (CLANG || GCC))
-        const HMODULE ntdll = util::get_ntdll();
-        if (!ntdll) return false;
-
-        constexpr const char* function_names[] = {
-            "NtAllocateVirtualMemory", "NtProtectVirtualMemory",
-            "NtFlushInstructionCache", "NtFreeVirtualMemory"
-        };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
-        const auto nt_alloc = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG)>(functions[0]);
-        const auto nt_protect = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG)>(functions[1]);
-        const auto nt_flush = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T)>(functions[2]);
-        const auto nt_free = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG)>(functions[3]);
-
-        if (!nt_alloc || !nt_protect || !nt_flush || !nt_free) return false;
-
-        // these opcodes are byte-for-byte identical for both x86_32 and x86_64 architectures 
-        // 0x53 maps to push ebx in 32-bit and push rbx in 64-bit
-        static constexpr u8 blockstep_opcodes[] = {
-            0x53,                                      // 0:  push rbx/ebx (preserve non-volatile register)
-            0x31, 0xC0,                                // 1:  xor eax, eax
-            0x8C, 0xD0,                                // 3:  mov ax, ss
-            0x9C,                                      // 5:  pushfq/pushfd
-            0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00,  // 6:  or dword ptr [rsp/esp], 0x100
-            0x9D,                                      // 13: popfq/popfd
-            0x8E, 0xD0,                                // 14: mov ss, ax  <- shadow starts here
-            0x0F, 0xA2,                                // 16: cpuid       <- buggy hypervisor traps here
-            0x5B,                                      // 18: pop rbx/ebx <- baremetal traps here
-            0x90,                                      // 19: nop         
-            0x9C,                                      // 20: pushfq/pushfd
-            0x81, 0x24, 0x24, 0xFF, 0xFE, 0xFF, 0xFF,  // 21: and dword ptr [rsp/esp], 0xFFFFFEFF
-            0x9D,                                      // 28: popfq/popfd
-            0xC3                                       // 29: ret
-        };
-
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-        PVOID base = nullptr;
-        SIZE_T region_size = sizeof(blockstep_opcodes);
-
-        if (!NT_SUCCESS(nt_alloc(current_process, &base, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)) || !base) {
-            return false;
-        }
-
-        memcpy(base, blockstep_opcodes, sizeof(blockstep_opcodes));
-
-        ULONG old_protection = 0;
-        NTSTATUS st = nt_protect(current_process, &base, &region_size, PAGE_EXECUTE_READ, &old_protection);
-
         // expect the trap explicitly at offset +18 (pop rbx) because of shadow suppression on real hardware
-        const ULONG_PTR baremetal_target_ip = reinterpret_cast<ULONG_PTR>(base) + 18;
+        const ULONG_PTR baremetal_target_ip = reinterpret_cast<ULONG_PTR>(blockstep_stub) + 18;
 
-        if (NT_SUCCESS(st)) {
-            nt_flush(current_process, base, region_size);
-            __try {
-                reinterpret_cast<void(*)()>(base)();
-            }
-            __except (exception_handler::evaluate(GetExceptionCode(), GetExceptionInformation(), &trap_ip)) {}
+        __try {
+            memory::execute(blockstep_stub);
         }
-
-        region_size = 0;
-        nt_free(current_process, &base, &region_size, MEM_RELEASE);
+        __except (exception_handler::evaluate(GetExceptionCode(), GetExceptionInformation(), &trap_ip)) {}
 
         // hypervisor is detected if execution trapped at any offset other than expected baremetal
         // OR if the single step exception never fired at all (trap_ip == 0)
-        return NT_SUCCESS(st) && (trap_ip == 0 || trap_ip != baremetal_target_ip);
+        return (trap_ip == 0 || trap_ip != baremetal_target_ip);
     #else
         return false;
     #endif
@@ -10393,8 +10331,6 @@ public:
     #if (!x86_64)
         return false;
     #else
-        constexpr u64 PW1 = 0x0000000076543210ULL;
-        constexpr u64 PW3 = 0x0000000090909090ULL;
         constexpr u32 PW2 = 0xFEDCBA98U;
 
         struct vmcall_info {
@@ -10406,82 +10342,22 @@ public:
         vmcall_info vmcall_info = {};
         u64 vmcall_result = 0;
 
-        constexpr u8 intel_template[44] = {
-            0x48,0xBA,0,0,0,0,0,0,0,0,                     // mov rdx, imm64   ; PW1
-            0x48,0xB9,0,0,0,0,0,0,0,0,                     // mov rcx, imm64   ; PW3
-            0x48,0xB8,0,0,0,0,0,0,0,0,                     // mov rax, imm64   ; &vmcallInfo
-            0x0F,0x01,0xC1,                                // vmcall
-            0x48,0xA3,0,0,0,0,0,0,0,0,                     // mov [imm64], rax ; &vmcallResult
-            0xC3                                           // ret
-        };
-
-        constexpr u8 amd_template[44] = {
-            0x48,0xBA,0,0,0,0,0,0,0,0,                     // mov rdx, imm64   ; PW1
-            0x48,0xB9,0,0,0,0,0,0,0,0,                     // mov rcx, imm64   ; PW3
-            0x48,0xB8,0,0,0,0,0,0,0,0,                     // mov rax, imm64   ; &vmcallInfo
-            0x0F,0x01,0xD9,                                // vmmcall (AMD)
-            0x48,0xA3,0,0,0,0,0,0,0,0,                     // mov [imm64], rax ; &vmcallResult
-            0xC3                                           // ret
-        };
-
-        const SIZE_T stub_size = sizeof(intel_template);
         const bool is_amd = cpu::is_amd();
 
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
         const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
-        constexpr const char* function_names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFlushInstructionCache", "NtFreeVirtualMemory", "NtGetContextThread", "NtSetContextThread" };
+        constexpr const char* function_names[] = { "NtGetContextThread", "NtSetContextThread" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto nt_allocate_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG)>(functions[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG)>(functions[1]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T)>(functions[2]);
-        const auto nt_free_virtual_memory = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG)>(functions[3]);
-        const auto nt_get_context_thread = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PCONTEXT)>(functions[4]);
-        const auto nt_set_context_thread = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PCONTEXT)>(functions[5]);
+        const auto nt_get_context_thread = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PCONTEXT)>(functions[0]);
+        const auto nt_set_context_thread = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PCONTEXT)>(functions[1]);
 
-        if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_flush_instruction_cache || !nt_free_virtual_memory || !nt_get_context_thread || !nt_set_context_thread) {
+        if (!nt_get_context_thread || !nt_set_context_thread) {
             return false;
         }
-
-        PVOID stub = nullptr;
-        SIZE_T region_size = stub_size;
-        NTSTATUS st = nt_allocate_virtual_memory(current_process, &stub, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (!NT_SUCCESS(st) || !stub) return false;
-
-        if (is_amd) {
-            memcpy(stub, amd_template, stub_size);
-        }
-        else {
-            memcpy(stub, intel_template, stub_size);
-        }
-
-        // ICEBP stub
-        u8* icebp_stub = reinterpret_cast<u8*>(stub) + 64;
-        icebp_stub[0] = 0xF1;                                     
-        icebp_stub[1] = 0xC3;                                      
-
-        // rdx imm64
-        // rcx imm64
-        // rax imm64
-        // mov [imm64], rax immediate
-        *reinterpret_cast<u64*>(reinterpret_cast<u8*>(stub) + 2) = PW1;
-        *reinterpret_cast<u64*>(reinterpret_cast<u8*>(stub) + 12) = PW3;
-        *reinterpret_cast<u64*>(reinterpret_cast<u8*>(stub) + 22) = reinterpret_cast<u64>(static_cast<void*>(&vmcall_info));
-        *reinterpret_cast<u64*>(reinterpret_cast<u8*>(stub) + 35) = reinterpret_cast<u64>(static_cast<void*>(&vmcall_result));
-
-        ULONG old_protection = 0;
-        st = nt_protect_virtual_memory(current_process, &stub, &region_size, PAGE_EXECUTE_READ, &old_protection);
-        if (!NT_SUCCESS(st)) {
-            region_size = 0;
-            nt_free_virtual_memory(current_process, &stub, &region_size, MEM_RELEASE);
-            return false;
-        }
-
-        nt_flush_instruction_cache(current_process, stub, region_size);
 
         auto try_keys = [&]() noexcept -> bool {
             // store forwarding
@@ -10490,8 +10366,10 @@ public:
             vmcall_info.command = 0;
             vmcall_result = 0;
 
+            const void* target_stub = is_amd ? dbvm_amd_stub : dbvm_intel_stub;
+
             __try {
-                reinterpret_cast<void(*)()>(stub)();
+                memory::execute(target_stub, &vmcall_info, &vmcall_result);
             }
             __except (EXCEPTION_EXECUTE_HANDLER) { // EXCEPTION_ILLEGAL_INSTRUCTION normally, EXCEPTION_ACCESS_VIOLATION_READ on edge-cases
                 vmcall_result = 0;
@@ -10515,18 +10393,18 @@ public:
             const auto old_dr6 = ctx.Dr6;
             const auto old_dr7 = ctx.Dr7;
 
-            ctx.Dr0 = reinterpret_cast<u64>(icebp_stub);
-            ctx.Dr1 = reinterpret_cast<u64>(icebp_stub);
-            ctx.Dr2 = reinterpret_cast<u64>(icebp_stub);
-            ctx.Dr3 = reinterpret_cast<u64>(icebp_stub);
+            ctx.Dr0 = reinterpret_cast<u64>(dbvm_icebp_stub);
+            ctx.Dr1 = reinterpret_cast<u64>(dbvm_icebp_stub);
+            ctx.Dr2 = reinterpret_cast<u64>(dbvm_icebp_stub);
+            ctx.Dr3 = reinterpret_cast<u64>(dbvm_icebp_stub);
             ctx.Dr7 = 0x55; // local exact execute breakpoints for Dr0-Dr3
 
             if (!NT_SUCCESS(nt_set_context_thread(current_thread, &ctx))) return false;
 
             __try {
-                reinterpret_cast<void(*)()>(icebp_stub)();
+                memory::execute(dbvm_icebp_stub);
 
-                // If the code makes it here without aborting to the __except block, 
+                // if the code makes it here without aborting to the __except block, 
                 // the exception was silently swallowed by the hypervisor.
                 detected = true;
                 debug("DBVM: INT 1 exception was not correctly handled");
@@ -10563,9 +10441,6 @@ public:
         const bool found_vmcall = try_keys();
         const bool found_icebp = try_icebp();
 
-        region_size = 0;
-        nt_free_virtual_memory(current_process, &stub, &region_size, MEM_RELEASE);
-
         if (found_vmcall) return core::add(brand_enum::DBVM);
         if (found_icebp)  return true;
 
@@ -10593,12 +10468,12 @@ public:
         UNICODE_STRING dir_name{};
         NTSTATUS status;
 
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = { "NtOpenDirectoryObject", "NtQueryDirectoryObject", "NtClose" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         const auto nt_open_directory_object = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[0]);
         const auto nt_query_directory_object = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, ULONG, BOOLEAN, BOOLEAN, PULONG, PULONG)>(functions[1]);
@@ -10914,12 +10789,12 @@ public:
 
             privilege_state_saved = true;
 
-            const HMODULE ntdll = util::get_ntdll();
+            const HMODULE ntdll = memory::get_ntdll();
             if (!ntdll) break;
 
             constexpr const char* function_names[] = { "NtEnumerateSystemEnvironmentValuesEx", "NtAllocateVirtualMemory", "NtFreeVirtualMemory", "NtQuerySystemEnvironmentValueEx" };
             void* functions[ARRAYSIZE(function_names)] = {};
-            util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+            memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
             nt_enumerate_values = reinterpret_cast<nt_enumerate_system_environment_values_ex_fn>(functions[0]);
             nt_allocate_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[1]);
@@ -11372,12 +11247,12 @@ public:
         // one cache line = 64 bytes
         const SIZE_T target_size = 64;
 
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFlushInstructionCache", "NtFreeVirtualMemory" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
         using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
@@ -11880,85 +11755,24 @@ public:
     #if (!x86)
         return false;
     #else
-        const HMODULE ntdll = util::get_ntdll();
-        if (!ntdll) return false;
-
-        constexpr const char* function_names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFreeVirtualMemory", "NtFlushInstructionCache", "NtClose" };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
-        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
-        using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
-        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
-        using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
-        using nt_close_fn = NTSTATUS(__stdcall*)(HANDLE);
-
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[2]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[3]);
-        const auto nt_close = reinterpret_cast<nt_close_fn>(functions[4]);
-
-        if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_free_virtual_memory || !nt_flush_instruction_cache || !nt_close)
-            return false;
-
-        // VMCALL (0F 01 C1) + RET (C3) and VMMCALL (0F 01 D9) + RET (C3)
-        constexpr BYTE opcodes[2][4] = {
-            { 0x0F, 0x01, 0xC1, 0xC3 },
-            { 0x0F, 0x01, 0xD9, 0xC3 }
-        };
-
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1);
-        bool is_kvm_detected = false; // KVM-specific behavior, detector is 100% sure is running under KVM
-        bool generic_hypervisor = false; // behavior present in KVM but other hypervisors might replicate it as well
+        const void* stubs[2] = { vmcall_stub, vmmcall_stub };
+        bool is_kvm_detected = false;
+        bool generic_hypervisor = false;
 
         for (int i = 0; i < 2; ++i) {
-            PVOID base_address = nullptr;
-            SIZE_T region_size = 0x1000;
+            const DWORD exception_status = memory::execute_handler(stubs[i]);
+            const bool fault_hit = (exception_status != 0);
 
-            // memory as RWX initially to write the opcode
-            NTSTATUS status = nt_allocate_virtual_memory(
-                current_process, &base_address, 0, &region_size,
-                MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-
-            if (!NT_SUCCESS(status))
-                continue;
-
-            // copy stuff to page
-            memcpy(base_address, opcodes[i], sizeof(opcodes[i]));
-
-            nt_flush_instruction_cache(current_process, base_address, sizeof(opcodes[i]));
-
-            ULONG old_protect = 0;
-            PVOID protect_address = base_address;
-            SIZE_T protect_size = region_size;
-
-            // change memory protection to RX because it is what breaks KVM's instruction patching attempt
-            status = nt_protect_virtual_memory(
-                current_process, &protect_address, &protect_size,
-                PAGE_EXECUTE_READ, &old_protect);
-
-            if (NT_SUCCESS(status)) {
-                nt_flush_instruction_cache(current_process, base_address, sizeof(opcodes[i]));
-                DWORD exception_status = 0;
-
-                __try {
-                    const auto execute_hypercall = reinterpret_cast<void(*)()>(base_address);
-                    execute_hypercall();
-                    generic_hypervisor = true; // if no exception occurs then a hypervisor handled it, this is default KVM behavior
-                    debug("KVM_INTERCEPTION: Detected a hypervisor intercepting hypercalls");
-                }
-                __except (exception_status = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
-                    // if it's #PF instead of #UD then old KVM quirk is present
-                    if (exception_status == EXCEPTION_ACCESS_VIOLATION) {
-                        debug("KVM_INTERCEPTION: Detected KVM attempting to patch instructions on the fly");
-                        is_kvm_detected = true;
-                    }
-                }
+            if (!fault_hit) {
+                // If no exception occurs, then a hypervisor intercepted and handled it
+                generic_hypervisor = true;
+                debug("KVM_INTERCEPTION: Detected a hypervisor intercepting hypercalls");
             }
-
-            SIZE_T free_size = 0;
-            nt_free_virtual_memory(current_process, &base_address, &free_size, MEM_RELEASE);
+            else if (exception_status == EXCEPTION_ACCESS_VIOLATION || exception_status == EXCEPTION_IN_PAGE_ERROR) {
+                // Expected #UD became a page-fault-related exception instead. KVM's instruction patching quirk is present
+                debug("KVM_INTERCEPTION: Detected KVM attempting to patch instructions on the fly");
+                is_kvm_detected = true;
+            }
 
             if (is_kvm_detected) {
                 return core::add(brand_enum::KVM);
@@ -11967,7 +11781,7 @@ public:
                 return true;
             }
         }
- 
+
         return false;
     #endif
     }
@@ -11985,7 +11799,7 @@ public:
         return false;
     #else
         if (util::is_running_under_translator()) return false;
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = {
@@ -12003,7 +11817,7 @@ public:
             "NtSetInformationThread"
         };
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
         using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
@@ -12042,18 +11856,6 @@ public:
 
         HANDLE current_process = reinterpret_cast<HANDLE>(-1);
         HANDLE current_thread = reinterpret_cast<HANDLE>(-2);
-
-        // explicitly decay lambdas to raw function pointers to eliminate C2712 unwinding requirement errors
-        using execute_throws_t = bool(*)(void*);
-        execute_throws_t execute_throws = [](void* pointer) -> bool {
-            __try {
-                util::execute_unchecked(pointer);
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER) {
-                return true;
-            }
-            return false;
-        };
 
         using find_double_cc_ntdll_fn = void* (*)(HMODULE);
         find_double_cc_ntdll_fn find_double_cc_ntdll = [](HMODULE module) -> void* {
@@ -12111,7 +11913,7 @@ public:
         }
 
         // executing CC natively should throw
-        if (!execute_throws(pointer)) {
+        if (!memory::execute_handler(pointer)) {
             return false; // SEH is broken or code isn't actually CC
         }
 
@@ -12136,7 +11938,7 @@ public:
         bool hook_detected = false;
 
         // test if write was swallowed by the hypervisor on the current core
-        if (execute_throws(pointer)) {
+        if (memory::execute_handler(pointer)) {
             hook_detected = true;
         }
         else {
@@ -12177,7 +11979,7 @@ public:
                 }
 
                 __try {
-                    util::execute_unchecked(pointer);
+                    memory::execute(pointer);
                 }
                 __except (EXCEPTION_EXECUTE_HANDLER) {
                     did_anyone_throw = 1;
@@ -12215,16 +12017,17 @@ public:
         thread_local static volatile bool ermsb_trap_detected = false;
         ermsb_trap_detected = false;
 
-        // capture-less local lambda decays to PVECTORED_EXCEPTION_HANDLER function pointer
-        auto veh_handler = [](PEXCEPTION_POINTERS ctx) noexcept -> LONG {
-            if (ctx->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
-                ermsb_trap_detected = true;
-                return EXCEPTION_CONTINUE_EXECUTION;
+        struct handler {
+            static LONG __stdcall execute(PEXCEPTION_POINTERS ctx) {
+                if (ctx->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+                    ermsb_trap_detected = true;
+                    return EXCEPTION_CONTINUE_EXECUTION;
+                }
+                return EXCEPTION_CONTINUE_SEARCH;
             }
-            return EXCEPTION_CONTINUE_SEARCH;
         };
 
-        const PVOID veh_handle = rtl_add_vectored_exception_handler(1, static_cast<PVECTORED_EXCEPTION_HANDLER>(veh_handler));
+        const PVOID veh_handle = rtl_add_vectored_exception_handler(1, handler::execute);
         if (!veh_handle) {
             SIZE_T free_size = 0;
             nt_free_virtual_memory(current_process, &src_page, &free_size, MEM_RELEASE);
@@ -12272,13 +12075,7 @@ public:
 
         ctx.Dr0 = 0;
         ctx.Dr7 = 0;
-        status = nt_set_context_thread(current_thread, &ctx);
-        if (status < 0) {
-            SIZE_T free_size = 0;
-            nt_free_virtual_memory(current_process, &src_page, &free_size, MEM_RELEASE);
-            nt_free_virtual_memory(current_process, &dst_page, &free_size, MEM_RELEASE);
-            return false;
-        }
+        nt_set_context_thread(current_thread, &ctx);
 
         SIZE_T free_size = 0;
         nt_free_virtual_memory(current_process, &src_page, &free_size, MEM_RELEASE);
@@ -12302,74 +12099,11 @@ public:
             return false;
         }
 
-        const HMODULE ntdll = util::get_ntdll();
-        if (!ntdll) return false;
-
-        constexpr const char* function_names[] = {
-            "NtAllocateVirtualMemory",
-            "NtProtectVirtualMemory",
-            "NtFlushInstructionCache",
-            "NtFreeVirtualMemory"
-        };
-
-        void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
-        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
-        using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
-        using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
-        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
-
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[2]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[3]);
-
-        if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory ||
-            !nt_flush_instruction_cache || !nt_free_virtual_memory) {
-            return false;
-        }
-
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-
-        constexpr unsigned char shellcode[] = {
-            0x9C,                                     // pushfq
-            0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00, // or dword ptr [rsp], 0x100 (sets TF)
-            0x9D,                                     // popfq
-            0x0F, 0xA2,                               // cpuid
-            0xC7, 0xB2,                               // db 0xC7, 0xB2 (invalid opcode)
-            0xC3                                      // ret
-        };
-
-        PVOID base_address = nullptr;
-        SIZE_T region_size = sizeof(shellcode);
-        constexpr u32 STATUS_SUCCESS = 0x00000000u;
-
-        if (nt_allocate_virtual_memory(current_process, &base_address, 0, &region_size,
-            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) != STATUS_SUCCESS) {
-            return false;
-        }
-
-        memcpy(base_address, shellcode, sizeof(shellcode));
-
-        ULONG old_protect = 0;
-        SIZE_T protect_size = sizeof(shellcode);
-        if (nt_protect_virtual_memory(current_process, &base_address, &protect_size,
-            PAGE_EXECUTE_READ, &old_protect) != STATUS_SUCCESS) {
-            SIZE_T free_size = 0; 
-            nt_free_virtual_memory(current_process, &base_address, &free_size, MEM_RELEASE);
-            return false;
-        }
-
-        nt_flush_instruction_cache(current_process, base_address, sizeof(shellcode));
-
         bool is_vm = true;
         DWORD exc_code = 0;
 
         __try {
-            using func_ptr = void(*)();
-            const auto func = reinterpret_cast<func_ptr>(base_address);
-            func();
+            memory::execute(singlestep_stub);
             // if the hypervisor completely swallows all exceptions, is_vm still remains true
         }
         __except (exc_code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
@@ -12377,11 +12111,8 @@ public:
             // the bad bytes (C7 B2) causing EXCEPTION_ILLEGAL_INSTRUCTION
             if (exc_code == EXCEPTION_SINGLE_STEP) {
                 is_vm = false; // trap flag single-step exception triggered on CPUID
-            }   
+            }
         }
-
-        SIZE_T free_size = 0; 
-        nt_free_virtual_memory(current_process, &base_address, &free_size, MEM_RELEASE);
 
         return is_vm;
     #endif
@@ -12398,54 +12129,45 @@ public:
     #if (!x86_64) 
         // this requires mapping executable memory at the end of the 4GB address space (0xFFFF0000) so an instruction can wrap the 32 bit boundary
         // because NtAllocateVirtualMemory will always return 0xC0000018 (STATUS_CONFLICTING_ADDRESSES) we physically cannot place an instruction at 0xFFFFFFFE
-        return false; 
+        return false;
     #else   
-        #pragma pack(push, 1)
+    #pragma pack(push, 1)
         struct iretq_frame {
             u64 ip;
             u64 cs;
         };
-        #pragma pack(pop)
+    #pragma pack(pop)
 
         static_assert(sizeof(iretq_frame) == 16, "iretq_frame size must be exactly 16 bytes for proper hardware exception processing.");
         static_assert(std::is_standard_layout<iretq_frame>::value, "iretq_frame must follow standard layout rules.");
 
         static bool hypervisor_detected = true;
-        static uintptr_t g_recovery_pad = 0;
         static u64 g_saved_rsp = 0;
 
-        const HMODULE ntdll = util::get_ntdll();
+        const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
         constexpr const char* function_names[] = {
             "NtAllocateVirtualMemory",
-            "NtProtectVirtualMemory",
-            "NtFlushInstructionCache",
             "NtFreeVirtualMemory",
             "RtlAddVectoredExceptionHandler",
             "RtlRemoveVectoredExceptionHandler"
         };
 
         void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
-        using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
-        using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
         using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
         using rtl_add_vectored_exception_handler_fn = PVOID(__stdcall*)(ULONG, PVECTORED_EXCEPTION_HANDLER);
         using rtl_remove_vectored_exception_handler_fn = ULONG(__stdcall*)(PVOID);
 
         const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[2]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[3]);
-        const auto rtl_add_vectored_exception_handler = reinterpret_cast<rtl_add_vectored_exception_handler_fn>(functions[4]);
-        const auto rtl_remove_vectored_exception_handler = reinterpret_cast<rtl_remove_vectored_exception_handler_fn>(functions[5]);
+        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[1]);
+        const auto rtl_add_vectored_exception_handler = reinterpret_cast<rtl_add_vectored_exception_handler_fn>(functions[2]);
+        const auto rtl_remove_vectored_exception_handler = reinterpret_cast<rtl_remove_vectored_exception_handler_fn>(functions[3]);
 
-        if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory ||
-            !nt_flush_instruction_cache || !nt_free_virtual_memory ||
-            !rtl_add_vectored_exception_handler || !rtl_remove_vectored_exception_handler) {
+        if (!nt_allocate_virtual_memory || !nt_free_virtual_memory || !rtl_add_vectored_exception_handler || !rtl_remove_vectored_exception_handler) {
             return false;
         }
 
@@ -12464,10 +12186,26 @@ public:
                 }
             }
 
-            if (g_recovery_pad != 0) {
+            if (g_saved_rsp != 0) {
+                /*
+                static const unsigned char recover_stub[] = {
+                    0x41, 0x5F, 0x41, 0x5E, 0x41, 0x5D, 0x41, 0x5C, 0x5E, 0x5F, 0x5D, 0x5B, // pop r15-r12, rsi, rdi, rbp, rbx
+                    0xC3                                                                    // ret
+                };
+                */
+                const u64* saved_stack = reinterpret_cast<const u64*>(g_saved_rsp);
+                exc_info->ContextRecord->R15 = saved_stack[0];
+                exc_info->ContextRecord->R14 = saved_stack[1];
+                exc_info->ContextRecord->R13 = saved_stack[2];
+                exc_info->ContextRecord->R12 = saved_stack[3];
+                exc_info->ContextRecord->Rsi = saved_stack[4];
+                exc_info->ContextRecord->Rdi = saved_stack[5];
+                exc_info->ContextRecord->Rbp = saved_stack[6];
+                exc_info->ContextRecord->Rbx = saved_stack[7];
+
                 exc_info->ContextRecord->SegCs = 0x33;
-                exc_info->ContextRecord->Rip = g_recovery_pad;   // cleanup shellcode
-                exc_info->ContextRecord->Rsp = g_saved_rsp;
+                exc_info->ContextRecord->Rip = saved_stack[8];   // cleanup shellcode
+                exc_info->ContextRecord->Rsp = g_saved_rsp + 72;
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
 
@@ -12477,48 +12215,7 @@ public:
         const PVOID handler_ptr = rtl_add_vectored_exception_handler(1, static_cast<PVECTORED_EXCEPTION_HANDLER>(eip_overflow_veh));
         if (!handler_ptr) return false;
 
-        // shellcode byte arrays for ms x64 fastcall (rcx=frame, rdx=stack32, r8=&g_saved_rsp)
-        constexpr unsigned char switch_stub[] = {
-            0x53, 0x55, 0x57, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, // push rbx, rbp, rdi, rsi, r12-r15
-            0x49, 0x89, 0x20,                                                       // mov qword ptr [r8], rsp
-            0x66, 0x8C, 0xD0,                                                       // mov ax, ss
-            0x50,                                                                   // push rax
-            0x52,                                                                   // push rdx
-            0x9C,                                                                   // pushfq
-            0x48, 0x8B, 0x41, 0x08,                                                 // mov rax, qword ptr [rcx + 8]
-            0x50,                                                                   // push rax
-            0x48, 0x8B, 0x01,                                                       // mov rax, qword ptr [rcx]
-            0x50,                                                                   // push rax
-            0x48, 0xCF                                                              // iretq
-        };
-
-        constexpr unsigned char recover_stub[] = {
-            0x41, 0x5F, 0x41, 0x5E, 0x41, 0x5D, 0x41, 0x5C, 0x5E, 0x5F, 0x5D, 0x5B, // pop r15-r12, rsi, rdi, rbp, rbx
-            0xC3                                                                    // ret
-        };
-
-        // memory for execution stubs
-        PVOID shellcode_base = nullptr;
-        SIZE_T shellcode_size = sizeof(switch_stub) + sizeof(recover_stub);
-        if (nt_allocate_virtual_memory(current_process, &shellcode_base, 0, &shellcode_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) < 0) {
-            rtl_remove_vectored_exception_handler(handler_ptr);
-            return false;
-        }
-
-        // map stub bytes into allocated chunk
-        u8* code_ptr = static_cast<u8*>(shellcode_base);
-        for (size_t i = 0; i < sizeof(switch_stub); ++i) code_ptr[i] = switch_stub[i];
-
-        u8* rec_ptr = code_ptr + sizeof(switch_stub);
-        for (size_t i = 0; i < sizeof(recover_stub); ++i) rec_ptr[i] = recover_stub[i];
-
-        // executable memory protection
-        ULONG old_protect = 0;
-        nt_protect_virtual_memory(current_process, &shellcode_base, &shellcode_size, PAGE_EXECUTE_READ, &old_protect);
-        nt_flush_instruction_cache(current_process, shellcode_base, shellcode_size);
-
         // recovery jump target for veh
-        g_recovery_pad = reinterpret_cast<uintptr_t>(rec_ptr);
 
         // dynamically allocate a 32-bit compatible stack (must reside below 4GB)
         PVOID stack32_base = nullptr;
@@ -12532,8 +12229,6 @@ public:
         }
 
         if (!stack32_base) {
-            SIZE_T free_size = 0;
-            nt_free_virtual_memory(current_process, &shellcode_base, &free_size, MEM_RELEASE);
             rtl_remove_vectored_exception_handler(handler_ptr);
             return false;
         }
@@ -12548,8 +12243,9 @@ public:
 
         if (alloc_status >= 0) {
             if (boundary_base == reinterpret_cast<PVOID>(0xFFFF0000ULL)) {
-                // inject cpuid at the strict end of the compat-mode space
-                u8* execution_target = reinterpret_cast<u8*>(0xFFFFFFFEULL);
+                // inject cpuid at the strict end of the compat-mode space, volatile to prevent C6011 or Clang's static analyzer from flagging dereferences of the hardcoded memory address
+                volatile uintptr_t raw_execution_target = 0xFFFFFFFEULL;
+                u8* execution_target = reinterpret_cast<u8*>(raw_execution_target);
                 execution_target[0] = 0x0F;
                 execution_target[1] = 0xA2;
 
@@ -12558,8 +12254,7 @@ public:
                 frame.cs = 0x23;
 
                 // dispatch hardware context switch shellcode
-                auto switch_func = reinterpret_cast<void(*)(iretq_frame*, uintptr_t, u64*)>(code_ptr);
-                switch_func(&frame, stack32_ptr, &g_saved_rsp);
+                memory::execute(switch_stub, &frame, stack32_ptr, &g_saved_rsp);
             }
             SIZE_T free_size = 0;
             nt_free_virtual_memory(current_process, &boundary_base, &free_size, MEM_RELEASE);
@@ -12567,9 +12262,6 @@ public:
 
         SIZE_T free_size = 0;
         nt_free_virtual_memory(current_process, &stack32_base, &free_size, MEM_RELEASE);
-
-        free_size = 0;
-        nt_free_virtual_memory(current_process, &shellcode_base, &free_size, MEM_RELEASE);
 
         rtl_remove_vectored_exception_handler(handler_ptr);
 
@@ -12584,9 +12276,9 @@ public:
      * @implements VM::SVM_EXCEPTIONS
      */
     [[nodiscard]] static bool svm_exceptions() {
-    #if (x86)
+    #if (x86)   
         if (!cpu::is_amd()) {
-            debug("SVM_EXCEPTIONS: AMD CPU not detected, skipping");
+            debug("SVM_EXCEPTIONS: AMD CPU not detected");
             return false;
         }
 
@@ -12598,96 +12290,8 @@ public:
         cpu::cpuid(eax, ebx, ecx, edx, 0x80000001);
         const bool svmcpuid_visible = ((ecx >> 2) & 1) != 0;
 
-        const HMODULE ntdll = util::get_ntdll();
-        if (!ntdll) {
-            return false;
-        }
-
-        constexpr const char* function_names[] = {
-            "NtAllocateVirtualMemory",
-            "NtProtectVirtualMemory",
-            "NtFreeVirtualMemory",
-            "NtFlushInstructionCache"
-        };
-
-        void* functions[ARRAYSIZE(function_names)] = {};
-        util::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
-        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
-        using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
-        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
-        using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
-
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[2]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[3]);
-
-        if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_free_virtual_memory || !nt_flush_instruction_cache) {
-            return false;
-        }
-
-        constexpr std::array<u8, 4> vmload_opcode = { 0x0F, 0x01, 0xDA, 0xC3 };
-        constexpr SIZE_T opcode_size = 4;
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1);
-
-        PVOID base_address = nullptr;
-        SIZE_T region_size = 0x1000;
-
-        auto free_region = [&]() {
-            if (base_address) {
-                SIZE_T free_size = 0;
-                nt_free_virtual_memory(current_process, &base_address, &free_size, MEM_RELEASE);
-                base_address = nullptr;
-            }
-        };
-
-        NTSTATUS status = nt_allocate_virtual_memory(
-            current_process,
-            &base_address,
-            0,
-            &region_size,
-            MEM_COMMIT | MEM_RESERVE,
-            PAGE_EXECUTE_READWRITE
-        );
-
-        if (!NT_SUCCESS(status)) {
-            return false;
-        }
-
-        memcpy(base_address, vmload_opcode.data(), opcode_size);
-        nt_flush_instruction_cache(current_process, base_address, opcode_size);
-
-        ULONG old_protect = 0;
-        PVOID protect_address = base_address;
-        SIZE_T protect_size = region_size;
-
-        status = nt_protect_virtual_memory(
-            current_process,
-            &protect_address,
-            &protect_size,
-            PAGE_EXECUTE_READ,
-            &old_protect
-        );
-
-        if (!NT_SUCCESS(status)) {
-            free_region();
-            return false;
-        }
-
-        nt_flush_instruction_cache(current_process, base_address, opcode_size);
-
-        DWORD exception_status = 0;
-        bool fault_hit = false;
-
-        __try {
-            reinterpret_cast<void(*)()>(base_address)();
-        }
-        __except (exception_status = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
-            fault_hit = true;
-        }
-
-        free_region();
+        const DWORD exception_status = memory::execute_handler(vmload_stub);
+        const bool fault_hit = (exception_status != 0);
 
         if (exception_status == EXCEPTION_ILLEGAL_INSTRUCTION) {
             return false;
@@ -12699,8 +12303,9 @@ public:
         }
 
         return true;
-    #endif
+    #else
         return false;
+    #endif  
     }
 
 
@@ -12917,7 +12522,7 @@ public:
         };
         void* functions[ARRAYSIZE(function_names)] = {};
 
-        util::get_function_address(hTbs, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(hTbs, function_names, functions, ARRAYSIZE(function_names));
 
         tbsi_get_tcg_log_ex_fn pTbsi_Get_TCG_Log_Ex = reinterpret_cast<tbsi_get_tcg_log_ex_fn>(functions[0]);
         tbsi_context_create_fn pTbsi_Context_Create = reinterpret_cast<tbsi_context_create_fn>(functions[1]);
@@ -13079,7 +12684,7 @@ public:
             if (h_tbs_context && tbs_dll) {
                 const char* close_name[] = { "Tbsip_Context_Close" };
                 void* close_func[1] = { nullptr };
-                util::get_function_address(tbs_dll, close_name, close_func, 1);
+                memory::get_function_address(tbs_dll, close_name, close_func, 1);
                 const auto p_tbsip_context_close = reinterpret_cast<tbsip_context_close_t>(close_func[0]);
                 if (p_tbsip_context_close) {
                     p_tbsip_context_close(h_tbs_context);
@@ -13117,7 +12722,7 @@ public:
             "BCryptCloseAlgorithmProvider"
         };
         void* bcrypt_funcs[7] = { nullptr };
-        util::get_function_address(bcrypt_dll, bcrypt_names, bcrypt_funcs, 7);
+        memory::get_function_address(bcrypt_dll, bcrypt_names, bcrypt_funcs, 7);
 
         using bcrypt_open_algorithm_provider_t = NTSTATUS(__stdcall*)(BCRYPT_ALG_HANDLE*, LPCWSTR, LPCWSTR, ULONG);
         using bcrypt_get_property_t = NTSTATUS(__stdcall*)(BCRYPT_HANDLE, LPCWSTR, PUCHAR, ULONG, ULONG*, ULONG);
@@ -13148,7 +12753,7 @@ public:
             "Tbsip_Context_Close"
         };
         void* tbs_funcs[4] = { nullptr };
-        util::get_function_address(tbs_dll, tbs_names, tbs_funcs, 4);
+        memory::get_function_address(tbs_dll, tbs_names, tbs_funcs, 4);
 
         using tbsi_context_create_t = TBS_RESULT(__stdcall*)(const void*, TBS_HCONTEXT*);
         using tbsi_get_tcg_log_ex_t = TBS_RESULT(__stdcall*)(u32, u8*, u32*);

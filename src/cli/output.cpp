@@ -607,7 +607,6 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::INTERRUPT_SHADOW, "interrupt shadows");
     checker(VM::TRAP, "hypervisor interception");
     checker(VM::KVM_INTERCEPTION, "KVM interception");
-    checker(VM::HYPERVISOR_HOOK, "EPT/NPT hooking");
     checker(VM::SINGLE_STEP, "single step behavior");
     checker(VM::EIP_OVERFLOW, "instructions in compat mode");
     checker(VM::SVM_EXCEPTIONS, "SVM exceptions");
@@ -615,6 +614,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::HYPERV_NESTED, "nested virtualization");
     checker(VM::MEASURED_BOOT, "measured boot logs");
     checker(VM::TPM_PASSTHROUGH, "TPM passthrough");
+    checker(VM::HYPERVISOR_HOOK, "EPT/NPT hooking");
     checker(VM::TIMER, "timing anomalies");
 
     const auto t2 = std::chrono::high_resolution_clock::now();
