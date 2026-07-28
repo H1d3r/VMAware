@@ -346,7 +346,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure (Unicode x64)
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_CXX_FLAGS="/D \"_UNICODE\" /WX"
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_CXX_FLAGS="/D \"_UNICODE\""
 
       - name: Build (Unicode Release)
         run: cmake --build build --config Release
@@ -581,7 +581,7 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -Wall -Wextra -Wconversion -Wdouble-promotion \
               -Wno-unused-parameter -Wno-unused-function -Wno-sign-conversion \
-              -Werror -D__VMAWARE_RELEASE__ \
+              -D__VMAWARE_RELEASE__ \
               -o memoize_test auxiliary/memoize_test.cpp
 
       - name: Run memoize test

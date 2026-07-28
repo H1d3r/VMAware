@@ -5809,7 +5809,7 @@ public:
 
         bool hypervisor_detected = false;
 
-        constexpr u32 ct_seed = timer::get_ct_seed();
+        VMAWARE_CONSTEXPR const u32 ct_seed = timer::get_ct_seed();
         const DWORD_PTR trigger_affinity = timer::getmask(ct_seed, true);
         const DWORD_PTR counter_affinity = timer::getmask(ct_seed, false);
 

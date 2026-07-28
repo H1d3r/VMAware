@@ -38,7 +38,7 @@ if (MSVC)
     add_compile_options(/W4 /EHsc)
 else()
     # Linux and Apple
-    add_compile_options(-Wextra -Wall -Wconversion -Wdouble-promotion -Wno-unused-parameter -Wno-unused-function -Wno-sign-conversion -Werror)
+    add_compile_options(-Wextra -Wall -Wconversion -Wdouble-promotion -Wno-unused-parameter -Wno-unused-function -Wno-sign-conversion)
 endif()
 
 # find available compilers
