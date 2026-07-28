@@ -10024,13 +10024,11 @@ public:
             }
 
             const wchar_t* ptr = reinterpret_cast<const wchar_t*>(buffer.data());
-            // number of wchar_t slots in buffer
-            const size_t total_wchars = required_size / sizeof(wchar_t);
+            const size_t total_wchars = required_size / sizeof(wchar_t); // number of wchar_t slots in buffer
             const wchar_t* buf_end = ptr + (total_wchars ? total_wchars : 0);
 
             static const wchar_t acpi_prefix[] = L"#ACPI(S";
 
-            // QEMU-style "#ACPI(Sxx...)" and generic "ACPI(Sxx)"
             for (const wchar_t* p = ptr; p < buf_end && *p; p += (wcslen(p) + 1)) {
                 if (wcsstr(p, L"ACPI(DRAC)")) {
                     debug("ACPI_SIGNATURE: QEMU virtual DRAM Controller (DRAC) ACPI node detected");
@@ -10048,29 +10046,6 @@ public:
 
                 if (has_excluded_token(p)) {
                     continue;
-                }
-
-                // search for "#ACPI(S"
-                const wchar_t* search = p;
-                while (true) {
-                    const wchar_t* found = wcsstr(search, acpi_prefix);
-                    if (!found) break;
-
-                    // after "#ACPI(S" we expect two hex chars
-                    const wchar_t* hexpos = found + wcslen(acpi_prefix); // first hex char
-                    if (hexpos && hexpos[0] && hexpos[1]) {
-                        const wchar_t b = hexpos[0];
-                        const wchar_t s = hexpos[1];
-                        if (is_hex(b) && is_hex(s)) {
-                            const wchar_t after = hexpos[2]; // may be '_' or ')'
-                            if (after == L'_' || after == L')') {
-                                debug("ACPI_SIGNATURE: #ACPI(S QEMU pattern detected");
-                                SetupDiDestroyDeviceInfoList(handle_dev_info);
-                                return core::add(brand_enum::QEMU);
-                            }
-                        }
-                    }
-                    search = found + 1;
                 }
             }
 
