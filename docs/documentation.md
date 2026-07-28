@@ -9,7 +9,6 @@
 - [`VM::type()`](#vmtype)
 - [`VM::conclusion()`](#vmconclusion)
 - [`VM::detected_count()`](#vmdetected_count)
-- [`VM::is_hardened()`](#vmis_hardened)
 - [`(Advanced) VM::flag_to_string()`](#advanced-vmflag_to_string)
 - [`(Advanced) VM::detected_enums()`](#advanced-vmdetected_enums)
 - [vmaware struct](#vmaware-struct)
@@ -315,27 +314,6 @@ int main() {
 
 <br>
 
-## `VM::is_hardened()`
-
-Returns a `bool`. Indicates whether your program is running in a virtual environment designed to evade VM detection.
-
-```cpp
-#include "vmaware.hpp"
-#include <iostream>
-
-int main() {
-    if (VM::is_hardened()) {
-        std::cout << "Hardened environment detected" << "\n";
-    } else {
-        std::cout << "No indications of hardening found" << "\n";
-    }
-
-    return 0;
-}
-```
-
-<br>
-
 ## (Advanced) `VM::flag_to_string()`
 
 <details>
@@ -416,7 +394,6 @@ struct vmaware {
     std::string type;
     std::string conclusion;
     bool is_vm;
-    bool is_hardened;
     std::uint8_t percentage;
     std::uint8_t detected_count;
     std::uint8_t technique_count;
