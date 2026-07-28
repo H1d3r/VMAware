@@ -423,6 +423,16 @@
     #define debug(...)
 #endif
 
+#if VMA_CPP >= 14
+    #define VMAWARE_DEPRECATED(msg) [[deprecated(msg)]]
+#elif (MSVC)
+    #define VMAWARE_DEPRECATED(msg) __declspec(deprecated(msg))
+#elif (GCC || CLANG)
+    #define VMAWARE_DEPRECATED(msg) __attribute__((deprecated))
+#else
+    #define VMAWARE_DEPRECATED(msg)
+#endif
+
 #if (VMA_CPP >= 17)
     #define VMAWARE_CONSTEXPR constexpr
 #else
@@ -4928,7 +4938,7 @@ public:
             return active_brands;
         }
 
-        static const char* brand_enum_to_string(const brand_enum brand) {
+        static VMAWARE_CONSTEXPR const char* brand_enum_to_string(const brand_enum brand) {
             switch (brand) {
                 case brand_enum::INVALID: return "Invalid";
                 case brand_enum::VBOX: return VM::brands::VBOX;
@@ -10049,7 +10059,6 @@ public:
                 }
             }
 
-            // important to run Hyper-V checks later because of is_hardened() logic
             static constexpr const wchar_t* vm_signatures[] = {
                 L"#ACPI(VMOD)", L"#ACPI(VMBS)", L"#VMBUS(", L"#VPCI("
             };
@@ -13571,9 +13580,6 @@ public:
             return true;
         }
 
-        // this is added as a last ditch attempt to detect a VM, 
-        // because if there are indications of hardening then logically 
-        // it should in fact be a VM.
         return is_hardened(flags);
     }
 
@@ -14085,92 +14091,11 @@ public:
     }
 
 
-    /**
-     * @brief Returns whether it suspects the environment has anti-VM hardening
-     * @param flags The active flagset configuration
-     * @return bool
-     */
-    static bool is_hardened(const flagset& flags = core::generate_default()) {
-        if (memo::hardened::cached) {
-            return memo::hardened::result;
-        }
-
-        auto hardened_logic = [&flags]() noexcept -> bool {
-            // helper to execute techniques only if they are enabled in the active configuration
-            auto check_technique = [&flags](const enum_flags flag) noexcept -> bool {
-                if (core::is_disabled(flags, flag)) {
-                    return false;
-                }
-                return check(flag);
-            };
-
-            // helper to get the specific brand associated with a technique using the cache
-            auto detected_brand = [check_technique](const enum_flags flag) noexcept -> enum brand_enum {
-                if (!check_technique(flag)) {
-                    return brand_enum::NULL_BRAND;
-                }
-                if (memo::cache_table.at(flag).has_value) {
-                    return memo::cache_table.at(flag).brand_name;
-                }
-                return brand_enum::NULL_BRAND;
-            };
-
-            const bool hv_present = (check_technique(VM::HYPERVISOR_BIT) || check_technique(VM::HYPERVISOR_STR));
-            const bool legit_hyperv_present = (util::hyper_x() == HYPERV_HOST);
-
-            // rule 1: if VM::FIRMWARE is detected, so should VM::HYPERVISOR_BIT or VM::HYPERVISOR_STR
-            const enum brand_enum firmware_brand = detected_brand(VM::FIRMWARE);
-            if (firmware_brand != brand_enum::NULL_BRAND && !hv_present && !legit_hyperv_present) {
-                debug("is_hardened(): firmware and hypervisor bit/str are not detected together");
-                return true;
-            }
-
-        #if (LINUX)
-            // rule 2: if VM::FIRMWARE is detected, so should VM::CVENDOR (QEMU or VBOX)
-            if (firmware_brand == brand_enum::QEMU || firmware_brand == brand_enum::VBOX) {
-                const enum brand_enum cvendor_brand = detected_brand(VM::CVENDOR);
-                if (firmware_brand != cvendor_brand) {
-                    debug("is_hardened(): firmware and chassis vendor brands do not match");
-                    return true;
-                }
-            }
-        #endif
-
-        #if (WINDOWS)
-            // rule 3: if VM::ACPI_SIGNATURE (QEMU) is detected, so should VM::FIRMWARE (QEMU)
-            const enum brand_enum acpi_brand = detected_brand(VM::ACPI_SIGNATURE);
-            if (acpi_brand == brand_enum::QEMU && firmware_brand != brand_enum::QEMU) {
-                debug("is_hardened(): firmware and ACPI signature are not detected together");
-                return true;
-            }
-
-            // rule 4: if VM::NVRAM is detected, so should VM::HYPERVISOR_BIT or VM::HYPERVISOR_STR
-            if (check_technique(VM::NVRAM) && !hv_present && !legit_hyperv_present) {
-                debug("is_hardened(): NVRAM and hypervisor bit/str are not detected together");
-                return true;
-            }
-
-            // rule 5: if CPU-based techniques detect a hypervisor, the hypervisor bit must be enabled
-            if ((check_technique(VM::TRAP) || check_technique(VM::KVM_INTERCEPTION) || check_technique(VM::SVM_EXCEPTIONS)
-                || check_technique(VM::INTERRUPT_SHADOW) || check_technique(VM::EIP_OVERFLOW) || check_technique(VM::SINGLE_STEP)
-                || check_technique(VM::MSR) || check_technique(VM::UD) || check_technique(VM::HYPERV_NESTED)
-                ) && !hv_present) {
-                debug("is_hardened(): instruction-based techniques and hypervisor bit/str are not detected together");
-                return true;
-            }
-        #endif
-
-            return false;
-        };
-
-        const bool result = hardened_logic();
-
-        memo::hardened::result = result;
-        memo::hardened::cached = true;
-
-        return result;
+    VMAWARE_DEPRECATED("is_hardened() is scheduled for removal in post-2.8.0. Use detect() instead.")
+    static bool is_hardened(const flagset& flags = core::generate_default()) noexcept {
+        VMAWARE_UNUSED(flags);
+        return false;
     }
-
 
     struct vmaware {
         std::string brand;
