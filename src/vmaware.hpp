@@ -14307,6 +14307,7 @@ VM::u8 VM::detected_count_num = 0;
 
 std::vector<VM::enum_flags> VM::disabled_techniques = []() {
     std::vector<VM::enum_flags> c;
+    c.push_back(VM::SVM_EXCEPTIONS);
     return c;
 }();
 
