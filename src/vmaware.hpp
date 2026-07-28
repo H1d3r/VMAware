@@ -423,7 +423,7 @@
     #define debug(...)
 #endif
 
-#if VMA_CPP >= 14
+#if (VMA_CPP >= 14)
     #define VMAWARE_DEPRECATED(msg) [[deprecated(msg)]]
 #elif (MSVC)
     #define VMAWARE_DEPRECATED(msg) __declspec(deprecated(msg))
@@ -876,7 +876,14 @@ public:
                 amd_easter_egg = 0x8fffffff;
         };
 
-        static void cpuid_count(unsigned leaf, unsigned subleaf, unsigned* VMAWARE_RESTRICT a, unsigned* VMAWARE_RESTRICT b, unsigned* VMAWARE_RESTRICT c, unsigned* VMAWARE_RESTRICT d) {
+        static void cpuid_count (
+            unsigned leaf, 
+            unsigned subleaf, 
+            unsigned* VMAWARE_RESTRICT a, 
+            unsigned* VMAWARE_RESTRICT b, 
+            unsigned* VMAWARE_RESTRICT c, 
+            unsigned* VMAWARE_RESTRICT d
+        ) noexcept {
         #if (x86)
             #if (MSVC)
                 int regs[4];
@@ -899,7 +906,7 @@ public:
         }
 
         // cross-platform wrapper for linux and MSVC cpuid
-        static void cpuid(u32& a, u32& b, u32& c, u32& d, const u32 a_leaf, const u32 c_leaf = 0xFF) {
+        static void cpuid(u32& a, u32& b, u32& c, u32& d, const u32 a_leaf, const u32 c_leaf = 0xFF) noexcept {
         #if (x86)
             // may be unmodified for older 32-bit processors, clearing just in case
             a = 0;
@@ -921,7 +928,7 @@ public:
         };
 
         // same as above but for array type parameters (MSVC specific)
-        static void cpuid(i32 x[4], const u32 a_leaf, const u32 c_leaf = 0xFF) {
+        static void cpuid(i32 x[4], const u32 a_leaf, const u32 c_leaf = 0xFF) noexcept {
         #if (x86)
             // may be unmodified for older 32-bit processors, clearing just in case
             x[0] = 0;
@@ -942,7 +949,7 @@ public:
         #endif
         };
 
-        [[nodiscard]] static bool is_leaf_supported(const u32 p_leaf) {
+        [[nodiscard]] static bool is_leaf_supported(const u32 p_leaf) noexcept {
         #if (APPLE) 
             return false;
         #endif
@@ -982,7 +989,7 @@ public:
             return supported;
         }
 
-        [[nodiscard]] static bool is_amd() {
+        [[nodiscard]] static bool is_amd() noexcept {
             constexpr u32 authentic_amd_ecx = 0x444d4163; // "cAMD"
             constexpr u32 amdisbetter_ecx = 0x21726574; // "ter!"
 
@@ -993,7 +1000,7 @@ public:
             return ecx == authentic_amd_ecx || ecx == amdisbetter_ecx;
         }
 
-        [[nodiscard]] static bool is_intel() {
+        [[nodiscard]] static bool is_intel() noexcept {
             constexpr u32 intel_ecx1 = 0x6c65746e; // "ntel"
             constexpr u32 intel_ecx2 = 0x6c65746f; // "otel", this is because some Intel CPUs have a rare manufacturer string of "GenuineIotel"
 
@@ -1004,7 +1011,7 @@ public:
             return ((ecx == intel_ecx1) || (ecx == intel_ecx2));
         }
 
-        [[nodiscard]] static const char* get_brand() {
+        [[nodiscard]] static const char* get_brand() noexcept {
             if (memo::cpu_brand::is_cached()) {
                 return memo::cpu_brand::fetch();
             }
@@ -1068,7 +1075,7 @@ public:
             u8 extmodel;
         };
 
-        static stepping_struct fetch_steppings() {
+        static stepping_struct fetch_steppings() noexcept {
             struct stepping_struct steps {};
 
             u32 unused = 0;
@@ -1085,7 +1092,7 @@ public:
         }
 
         // check if the CPU is an intel celeron
-        static bool is_celeron(const stepping_struct steps) {
+        static bool is_celeron(const stepping_struct steps) noexcept {
             if (!cpu::is_intel()) {
                 return false;
             }
@@ -1109,7 +1116,7 @@ public:
             const char* string;
         };
 
-        [[nodiscard]] static model_struct get_model() {
+        [[nodiscard]] static model_struct get_model() noexcept {
             const char* brand = get_brand();
 
             model_struct result { false, false, false, false, {} };
@@ -1234,18 +1241,18 @@ public:
 
         struct constexpr_hash {
             // 8 rounds of CRC32-C bit reflection recursively
-            static constexpr u32 crc32_bits(u32 crc, int bits) {
+            static constexpr u32 crc32_bits(u32 crc, int bits) noexcept {
                 return (bits == 0) ? crc :
                     crc32_bits((crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0), bits - 1);
             }
 
             // over string
-            static constexpr u32 crc32_str(const char* s, u32 crc) {
+            static constexpr u32 crc32_str(const char* s, u32 crc) noexcept {
                 return (*s == '\0') ? crc :
                     crc32_str(s + 1, crc32_bits(crc ^ static_cast<u8>(*s), 8));
             }
 
-            static constexpr u32 get(const char* s) {
+            static constexpr u32 get(const char* s) noexcept {
                 return crc32_str(s, 0);
             }
         };
@@ -1255,7 +1262,7 @@ public:
             u32 hash;
             u32 threads;
 
-            constexpr cpu_entry(const char* m, u32 t)
+            constexpr cpu_entry(const char* m, u32 t) noexcept
                 : hash(constexpr_hash::get(m)), threads(t) {
             }
         };
@@ -1268,7 +1275,7 @@ public:
             AMD
         };
 
-        static void get_intel_core_db(const cpu_entry*& out_ptr, size_t& out_size) {
+        static void get_intel_core_db(const cpu_entry*& out_ptr, size_t& out_size) noexcept {
             static constexpr cpu_entry db[] = {
                 // i3 series
                 { "i3-1000G1", 4 },
@@ -2282,7 +2289,7 @@ public:
             out_size = sizeof(db) / sizeof(cpu_entry);
         }
 
-        static void get_intel_xeon_db(const cpu_entry*& out_ptr, size_t& out_size) {
+        static void get_intel_xeon_db(const cpu_entry*& out_ptr, size_t& out_size) noexcept {
             static constexpr cpu_entry db[] = {
                 { "D-1518", 8 },
                 { "D-1520", 8 },
@@ -2423,7 +2430,7 @@ public:
             out_size = sizeof(db) / sizeof(cpu_entry);
         }
 
-        static void get_intel_ultra_db(const cpu_entry*& out_ptr, size_t& out_size) {
+        static void get_intel_ultra_db(const cpu_entry*& out_ptr, size_t& out_size) noexcept {
             static constexpr cpu_entry db[] = {
                 // Series 2 (Arrow Lake - Desktop/Mobile) - No HT on P-Cores
                 { "285K", 24 },
@@ -2459,7 +2466,7 @@ public:
             out_size = sizeof(db) / sizeof(cpu_entry);
         }
 
-        static void get_amd_ryzen_db(const cpu_entry*& out_ptr, size_t& out_size) {
+        static void get_amd_ryzen_db(const cpu_entry*& out_ptr, size_t& out_size) noexcept {
             static const cpu_entry db[] = {
                 // 3015/3020
                 { "3015ce", 4 },
@@ -2970,7 +2977,7 @@ public:
         }
     };
 
-    static void str_copy(char* VMAWARE_RESTRICT dest, const char* VMAWARE_RESTRICT src, const size_t max_len) {
+    static VMAWARE_CONSTEXPR void str_copy(char* VMAWARE_RESTRICT dest, const char* VMAWARE_RESTRICT src, const size_t max_len) noexcept {
         size_t i = 0;
         while (src[i] != '\0' && i < max_len - 1) {
             dest[i] = src[i];
@@ -2996,17 +3003,17 @@ public:
 
         static std::array<cache_entry, enum_size + 1> cache_table;
 
-        static void cache_store(u16 flag, bool result, u8 points, const brand_enum brand = brand_enum::NULL_BRAND) noexcept {
+        static VMAWARE_CONSTEXPR void cache_store(u16 flag, bool result, u8 points, const brand_enum brand = brand_enum::NULL_BRAND) noexcept {
             if (flag <= enum_size) {
                 cache_table[flag] = { result, points, true, brand };
             }
         }
 
-        static bool is_cached(u16 flag) noexcept {
+        static constexpr bool is_cached(u16 flag) noexcept {
             return (flag <= enum_size) && cache_table[flag].has_value;
         }
 
-        static data_t cache_fetch(u16 flag) noexcept {
+        static VMAWARE_CONSTEXPR data_t cache_fetch(u16 flag) noexcept {
             if (flag <= enum_size && cache_table[flag].has_value) {
                 const auto& entry = cache_table[flag];
                 return { entry.result, entry.points, true, entry.brand_name };
@@ -3019,17 +3026,17 @@ public:
             static flagset cached_flags;
             static bool cached;
 
-            static void store(const brand_enum s, const flagset& flags) {
+            static void store(const brand_enum s, const flagset& flags) noexcept {
                 brand_cache = s;
                 cached_flags = flags;
                 cached = true;
             }
 
-            static bool is_cached(const flagset& flags) { 
+            static bool is_cached(const flagset& flags) noexcept {
                 return cached && (cached_flags == flags); 
             }
             
-            static brand_enum fetch() { 
+            static brand_enum fetch() noexcept {
                 return brand_cache; 
             }
         };
@@ -3039,17 +3046,17 @@ public:
             static flagset cached_flags;
             static bool cached;
 
-            static void store(const std::string& s, const flagset& flags) {
+            static void store(const std::string& s, const flagset& flags) noexcept {
                 brand_cache = s;
                 cached_flags = flags;
                 cached = true;
             }
 
-            static bool is_cached(const flagset& flags) {
+            static bool is_cached(const flagset& flags) noexcept {
                 return cached && (cached_flags == flags);
             }
 
-            static std::string fetch() {
+            static std::string fetch() noexcept {
                 return brand_cache;
             }
         };
@@ -3059,17 +3066,17 @@ public:
             static flagset cached_flags;
             static bool cached;
 
-            static void store(const brand_list_t& list, const flagset& flags) {
+            static void store(const brand_list_t& list, const flagset& flags) noexcept {
                 cache = list;
                 cached_flags = flags;
                 cached = true;
             }
 
-            static bool is_cached(const flagset& flags) {
+            static bool is_cached(const flagset& flags) noexcept {
                 return cached && (cached_flags == flags);
             }
 
-            static brand_list_t fetch() {
+            static brand_list_t fetch() noexcept {
                 return cache;
             }
         };
@@ -3080,33 +3087,40 @@ public:
             static flagset cached_flags;
             static bool cached;
 
-            static void store(const char* s, const flagset& flags) {
+            static void store(const char* s, const flagset& flags) noexcept {
                 str_copy(cache, s, sizeof(cache));
                 cached_flags = flags;
                 cached = true;
             }
 
-            static bool is_cached(const flagset& flags) {
+            static bool is_cached(const flagset& flags) noexcept {
                 return cached && (cached_flags == flags);
             }
 
-            static const char* fetch() { return cache; }
+            static const char* fetch() noexcept {
+                return cache; 
+            }
         };
 
         struct cpu_brand {
             static char brand_cache[128];
             static bool cached;
-            static void store(const char* s) {
+
+            static void store(const char* s) noexcept {
                 str_copy(brand_cache, s, sizeof(brand_cache));
                 cached = true;
             }
-            static bool is_cached() { return cached; }
-            static const char* fetch() { return brand_cache; }
+            static bool is_cached() noexcept {
+                return cached; 
+            }
+            static const char* fetch() noexcept {
+                return brand_cache; 
+            }
         };
 
         struct threadcount {
             static u32 threadcount_cache;
-            static u32 fetch() {
+            static u32 fetch() noexcept {
                 if (threadcount_cache != 0) {
                     return threadcount_cache;
                 }
@@ -3118,12 +3132,17 @@ public:
         struct hyperx {
             static hyperx_state state;
             static bool cached;
-            static hyperx_state fetch() { return state; }
-            static void store(const hyperx_state p_state) {
+
+            static hyperx_state fetch() noexcept {
+                return state; 
+            }
+            static void store(const hyperx_state p_state) noexcept {
                 state = p_state;
                 cached = true;
             }
-            static bool is_cached() { return cached; }
+            static bool is_cached() noexcept {
+                return cached;
+            }
         };
 
         struct leaf_entry { 
@@ -3138,31 +3157,32 @@ public:
             static std::size_t count;      
             static std::size_t next_index; 
 
-            static bool fetch(u32 leaf, bool& out) {
+            static bool fetch(u32 leaf, bool& out) noexcept {
                 for (std::size_t i = 0; i < count; ++i) {
-                    if (table.at(i).has_value && table.at(i).leaf == leaf) { 
-                        out = table.at(i).value; 
-                        return true; 
+                    if (table[i].has_value && table[i].leaf == leaf) {
+                        out = table[i].value;
+                        return true;
                     }
                 }
                 return false;
             }
 
-            static void store(u32 leaf, bool val) {
+            static void store(u32 leaf, bool val) noexcept {
                 for (std::size_t i = 0; i < count; ++i) {
-                    if (table.at(i).leaf == leaf) { 
-                        table.at(i).value = val; 
-                        table.at(i).has_value = true;
-                        return; 
+                    auto& entry = table[i];
+                    if (entry.leaf == leaf) {
+                        entry.value = val;
+                        entry.has_value = true;
+                        return;
                     }
                 }
 
                 if (count < CAPACITY) {
-                    table.at(count++) = { leaf, val, true };
+                    table[count++] = { leaf, val, true };
                     return;
                 }
-                // otherwise evict in round-robin fashion
-                table.at(next_index) = { leaf, val, true };
+
+                table[next_index] = { leaf, val, true };
                 next_index = (next_index + 1) % CAPACITY;
             }
         };
@@ -3172,28 +3192,44 @@ public:
             static char model[128];
             static bool cached;
 
-            static void store_manufacturer(const char* s) noexcept {
-                if (!s) { manufacturer[0] = '\0'; return; }
+            static constexpr void store_manufacturer(const char* VMAWARE_RESTRICT s) noexcept {
+                if (!s) { 
+                    manufacturer[0] = '\0'; 
+                    return; 
+                }
                 const size_t n = strlen(s);
                 const size_t cap = sizeof(manufacturer) - 1;
                 const size_t tocopy = (n > cap) ? cap : n;
-                memcpy(manufacturer, s, tocopy);
+                for (size_t i = 0; i < tocopy; ++i) {
+                    manufacturer[i] = s[i];
+                }
                 *(manufacturer + tocopy) = '\0';
                 cached = true;
             }
-            static void store_model(const char* s) noexcept {
-                if (!s) { model[0] = '\0'; return; }
+            static constexpr void store_model(const char* VMAWARE_RESTRICT s) noexcept {
+                if (!s) { 
+                    model[0] = '\0';
+                    return; 
+                }
                 const size_t n = strlen(s);
                 const size_t cap = sizeof(model) - 1;
                 const size_t tocopy = (n > cap) ? cap : n;
-                memcpy(model, s, tocopy);
+                for (size_t i = 0; i < tocopy; ++i) {
+                    model[i] = s[i];
+                }
                 *(model + tocopy) = '\0';
                 cached = true;
             }
 
-            static bool is_cached() noexcept { return cached; }
-            static const char* fetch_manufacturer() noexcept { return manufacturer; }
-            static const char* fetch_model() noexcept { return model; }
+            static bool is_cached() noexcept {
+                return cached; 
+            }
+            static constexpr const char* fetch_manufacturer() noexcept {
+                return manufacturer; 
+            }
+            static constexpr const char* fetch_model() noexcept {
+                return model; 
+            }
         };
 
         struct hardened {
@@ -3229,7 +3265,7 @@ public:
         #define VMAWARE_STR2(x) #x
         #define VMAWARE_STR(x) VMAWARE_STR2(x)
 
-        [[nodiscard]] static u32 get_ct_seed() {
+        [[nodiscard]] static VMAWARE_CONSTEXPR u32 get_ct_seed() noexcept {
             constexpr char s[] = __DATE__ " " __TIME__ " " __FILE__ " " VMAWARE_STR(__LINE__);
             u32 h = 2166136261u;
             for (char c : s) {
@@ -3511,7 +3547,7 @@ public:
             }
         }
 
-        [[nodiscard]] static constexpr size_t clamp_c11(const size_t val, const size_t min_val, const size_t max_val) {
+        [[nodiscard]] static constexpr size_t clamp_c11(const size_t val, const size_t min_val, const size_t max_val) noexcept {
             return (val < min_val) ? min_val : ((val > max_val) ? max_val : val);
         }
 
@@ -3542,7 +3578,7 @@ public:
             return static_cast<timer_tick_t>((sum / count) + 0.5);
         }
 
-        static VMAWARE_FORCE_INLINE void burn_random_cycles(u32 ct_seed, timer_tick_t v_post, timer_tick_t r_post) {
+        static VMAWARE_FORCE_INLINE void burn_random_cycles(const u32 ct_seed, const timer_tick_t v_post, const timer_tick_t r_post) noexcept {
             // the internal pseudo-random number generator (PRNG) variables like u64 seed and volatile u64 x can be kept as u64 
             // because they are simple register-only PRNG arithmetic and benefit from the extra 64-bit entropy space even on 32-bit platforms
             u64 seed = ct_seed;
@@ -3599,7 +3635,7 @@ public:
         };
 
         // retrieves the addresses of specified functions from a loaded module using the export directory, manual implementation of GetProcAddress
-        static void get_function_address(const HMODULE hModule, const char* const names[], void** const functions, const size_t count) {
+        static void get_function_address(const HMODULE hModule, const char* const VMAWARE_RESTRICT names[], void** const VMAWARE_RESTRICT functions, const size_t count) {
             using func_map = std::unordered_map<std::string, void*>;
             static std::unordered_map<HMODULE, func_map> function_cache;
 
@@ -3740,7 +3776,7 @@ public:
         }
 
 
-        [[nodiscard]] static HMODULE get_ntdll() {
+        [[nodiscard]] static HMODULE get_ntdll() noexcept {
             static HMODULE cached_ntdll = nullptr;
             if (cached_ntdll != nullptr) {
                 return cached_ntdll;
@@ -4094,14 +4130,14 @@ public:
             oss << std::forward<T>(arg);
         }
 
-        static void print_to_stream(std::ostringstream&) noexcept {}
+        static constexpr void print_to_stream(std::ostringstream&) noexcept {}
 
         template <typename... Args>
         static void print_to_stream(std::ostringstream& oss, Args&&... args) noexcept {
             using expander = int[];
             (void)expander {
                 0,
-                    ((void)append_to_stream(oss, std::forward<Args>(args)), 0)...
+                ((void)append_to_stream(oss, std::forward<Args>(args)), 0)...
             };
         }
 
@@ -4472,7 +4508,7 @@ public:
         }
 
     #if (WINDOWS)
-        static bool get_manufacturer_model(const char** out_manufacturer, const char** out_model) {
+        static bool get_manufacturer_model(const char** out_manufacturer, const char** out_model) noexcept {
             if (out_manufacturer) *out_manufacturer = "";
             if (out_model) *out_model = "";
 
@@ -4631,7 +4667,7 @@ public:
             }
 
             // software fallback CRC32-C for a single byte
-            static u32 crc32c_byte_sw(u32 crc, char data) noexcept {
+            static VMAWARE_CONSTEXPR u32 crc32c_byte_sw(u32 crc, char data) noexcept {
                 crc ^= static_cast<u8>(data);
                 for (int i = 0; i < 8; ++i) {
                     crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
@@ -4938,7 +4974,7 @@ public:
             return active_brands;
         }
 
-        static VMAWARE_CONSTEXPR const char* brand_enum_to_string(const brand_enum brand) {
+        static VMAWARE_CONSTEXPR const char* brand_enum_to_string(const brand_enum brand) noexcept {
             switch (brand) {
                 case brand_enum::INVALID: return "Invalid";
                 case brand_enum::VBOX: return VM::brands::VBOX;
@@ -5042,7 +5078,7 @@ public:
             return buffer;
         }
 
-        static enum brand_enum brand_single(const brand_list_t& list) {
+        static enum brand_enum brand_single(const brand_list_t& list) noexcept {
             const brand_element_t brand = list.front();
             return brand.first;
         }
@@ -5773,7 +5809,7 @@ public:
 
         bool hypervisor_detected = false;
 
-        const u32 ct_seed = timer::get_ct_seed();
+        constexpr u32 ct_seed = timer::get_ct_seed();
         const DWORD_PTR trigger_affinity = timer::getmask(ct_seed, true);
         const DWORD_PTR counter_affinity = timer::getmask(ct_seed, false);
 
@@ -6944,7 +6980,7 @@ public:
         bool pid_match = false;
         bool ppid_match = false;
 
-        auto parse_number = [&](const std::string& prefix) -> int {
+        auto parse_number = [&](const std::string& prefix) noexcept -> int {
             if (line.rfind(prefix, 0) != 0) {
                 return -1;
             }
@@ -8611,7 +8647,7 @@ public:
         const std::string manufacturer = *manufacturer_ptr;
         const std::string keyboard = *keyboard_ptr;
 
-        auto check_platform = [&]() -> bool {
+        auto check_platform = [&]() noexcept -> bool {
             debug("IO_KIT: ", "platform = ", platform);
 
             if (platform.empty()) {
@@ -8627,7 +8663,7 @@ public:
             return (platform == "0");
         };
 
-        auto check_board = [&]() -> bool {
+        auto check_board = [&]() noexcept -> bool {
             debug("IO_KIT: ", "board = ", board);
 
             if (board.empty()) {
@@ -8649,7 +8685,7 @@ public:
             return false;
         };
 
-        auto check_manufacturer = [&]() -> bool {
+        auto check_manufacturer = [&]() noexcept -> bool {
             debug("IO_KIT: ", "manufacturer = ", manufacturer);
 
             if (manufacturer.empty()) {
@@ -8667,7 +8703,7 @@ public:
             return false;
         };
 
-        auto check_keyboard = [&]() -> bool {
+        auto check_keyboard = [&]() noexcept -> bool {
             debug("IO_KIT: ", "keyboard = ", keyboard);
 
             if (keyboard.empty()) {
@@ -9974,10 +10010,6 @@ public:
      * @implements VM::ACPI_SIGNATURE
      */
     [[nodiscard]] static bool acpi_signature() {
-        auto is_hex = [](wchar_t c) noexcept -> bool {
-            return (c >= L'0' && c <= L'9') || (c >= L'A' && c <= L'F');
-        };
-
         // enumerate all devices
         const HDEVINFO handle_dev_info = SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
         if (handle_dev_info == INVALID_HANDLE_VALUE) {
@@ -10036,8 +10068,6 @@ public:
             const wchar_t* ptr = reinterpret_cast<const wchar_t*>(buffer.data());
             const size_t total_wchars = required_size / sizeof(wchar_t); // number of wchar_t slots in buffer
             const wchar_t* buf_end = ptr + (total_wchars ? total_wchars : 0);
-
-            static const wchar_t acpi_prefix[] = L"#ACPI(S";
 
             for (const wchar_t* p = ptr; p < buf_end && *p; p += (wcslen(p) + 1)) {
                 if (wcsstr(p, L"ACPI(DRAC)")) {
@@ -11846,7 +11876,7 @@ public:
         HANDLE current_thread = reinterpret_cast<HANDLE>(-2);
 
         using find_double_cc_ntdll_fn = void* (*)(HMODULE);
-        find_double_cc_ntdll_fn find_double_cc_ntdll = [](HMODULE module) -> void* {
+        find_double_cc_ntdll_fn find_double_cc_ntdll = [](HMODULE module) noexcept -> void* {
             if (!module) return nullptr;
 
             // parse PE headers to find executable sections
@@ -11881,7 +11911,7 @@ public:
         };
 
         using find_double_cc_fn = void* (*)(void*);
-        find_double_cc_fn find_double_cc = [](void* pointer_in_page) -> void* {
+        find_double_cc_fn find_double_cc = [](void* pointer_in_page) noexcept -> void* {
             // align down to the start of the 4KB page
             auto* ptr = reinterpret_cast<u8*>(reinterpret_cast<uintptr_t>(pointer_in_page) & ~0xFFF);
 
@@ -12757,7 +12787,7 @@ public:
             return false;
         }
 
-        auto calculate_sha256 = [&](const u8* const data, const u32 size, u8* const out_digest) noexcept -> bool {
+        auto calculate_sha256 = [&](const u8* const VMAWARE_RESTRICT data, const u32 size, u8* const VMAWARE_RESTRICT out_digest) noexcept -> bool {
             BCRYPT_ALG_HANDLE h_alg = nullptr;
             BCRYPT_HASH_HANDLE h_hash = nullptr;
             DWORD cb_hash_object = 0;
@@ -12796,7 +12826,7 @@ public:
             return (status == 0);
         };
 
-        auto read_tpm_pcr = [&](const TBS_HCONTEXT h_context, const u32 pcr_index, const u16 alg_id, u8* const out_digest, u32* const out_digest_size) noexcept -> bool {
+        auto read_tpm_pcr = [&](const TBS_HCONTEXT h_context, const u32 pcr_index, const u16 alg_id, u8* const VMAWARE_RESTRICT out_digest, u32* const VMAWARE_RESTRICT out_digest_size) noexcept -> bool {
             u8 cmd[20] = { 0 };
             cmd[0] = 0x80; cmd[1] = 0x01;
             cmd[2] = 0x00; cmd[3] = 0x00; cmd[4] = 0x00; cmd[5] = 0x14;
@@ -13274,21 +13304,21 @@ public:
         struct settings {
             flagset flag_collector = generate_default();
 
-            void enable(const enum_flags flag) noexcept {
+            VMAWARE_CONSTEXPR void enable(const enum_flags flag) noexcept {
                 const auto idx = static_cast<size_t>(flag);
                 if (idx < flag_collector.size()) {
                     flag_collector.set(idx, true);
                 }
             }
 
-            void disable(const enum_flags flag) noexcept {
+            VMAWARE_CONSTEXPR void disable(const enum_flags flag) noexcept {
                 const auto idx = static_cast<size_t>(flag);
                 if (idx < flag_collector.size()) {
                     flag_collector.set(idx, false);
                 }
             }
 
-            bool is_set(const enum_flags flag) const noexcept {
+            constexpr bool is_set(const enum_flags flag) const noexcept {
                 const auto idx = static_cast<size_t>(flag);
                 return idx < flag_collector.size() && flag_collector.test(idx);
             }
@@ -13371,7 +13401,7 @@ public:
         }
 
         // overload for zero arguments to prevent C4127 constant conditional warning
-        static flagset arg_handler() {
+        static flagset arg_handler() noexcept {
             flagset collector;
             generate_default(collector);
             return collector;
@@ -13580,7 +13610,7 @@ public:
             return true;
         }
 
-        return is_hardened(flags);
+        return false;
     }
 
 
@@ -14126,7 +14156,7 @@ public:
             type = VM::type(flags);
             conclusion = VM::conclusion(flags);
             is_vm = VM::detect(flags);
-            is_hardened = VM::is_hardened(flags);
+            is_hardened = false;
             percentage = VM::percentage(flags);
             detected_count = VM::detected_count(flags);
             technique_count = VM::technique_count;
