@@ -447,124 +447,126 @@
 
 #define VMAWARE_UNUSED(x) ((void)(x))
 
-#if (CLANG || GCC)
-    #define VMAWARE_SECTION __attribute__((section(".text")))
-#else
-    #define VMAWARE_SECTION
-#endif
+#if (WINDOWS)
+    #if (CLANG || GCC)
+        #define VMAWARE_SECTION __attribute__((section(".text")))
+    #else
+        #define VMAWARE_SECTION
+    #endif
 
-#if (MSVC)
-    #pragma const_seg(".text")
-#endif
+    #if (MSVC)
+        #pragma const_seg(".text")
+    #endif
 
-#if (x86)
-    static const unsigned char vmload_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xDA, 0xC3 };
-    static const unsigned char vmcall_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xC1, 0xC3 };
-    static const unsigned char vmmcall_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xD9, 0xC3 };
-    static const unsigned char blockstep_stub[] VMAWARE_SECTION = {
-        0x53,                                      // 0:  push rbx/ebx (preserve non-volatile register)
-        0x31, 0xC0,                                // 1:  xor eax, eax
-        0x8C, 0xD0,                                // 3:  mov ax, ss
-        0x9C,                                      // 5:  pushfq/pushfd
-        0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00,  // 6:  or dword ptr [rsp/esp], 0x100
-        0x9D,                                      // 13: popfq/popfd
-        0x8E, 0xD0,                                // 14: mov ss, ax  <- shadow starts here
-        0x0F, 0xA2,                                // 16: cpuid       <- buggy hypervisor traps here
-        0x5B,                                      // 18: pop rbx/ebx <- baremetal traps here
-        0x90,                                      // 19: nop         
-        0x9C,                                      // 20: pushfq/pushfd
-        0x81, 0x24, 0x24, 0xFF, 0xFE, 0xFF, 0xFF,  // 21: and dword ptr [rsp/esp], 0xFFFFFEFF
-        0x9D,                                      // 28: popfq/popfd
-        0xC3                                       // 29: ret
-    };
-    static const unsigned char singlestep_stub[] VMAWARE_SECTION = {
-        0x9C,                                     // pushfq
-        0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00, // or dword ptr [rsp], 0x100 (sets TF)
-        0x9D,                                     // popfq
-        0x0F, 0xA2,                               // cpuid
-        0xC7, 0xB2,                               // db 0xC7, 0xB2 (invalid opcode)
-        0xC3                                      // ret
-    };
-    static const unsigned char ud_stub[] VMAWARE_SECTION = { 0x0F, 0x0B, 0xC3 }; // ud2; ret
-
-    #if (x86_64)
-        static const unsigned char trampoline_stub[] VMAWARE_SECTION = {
-            0x49, 0x89, 0xD8,                         // mov r8, rbx (save rbx to volatile register r8)
+    #if (x86)
+        static const unsigned char vmload_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xDA, 0xC3 };
+        static const unsigned char vmcall_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xC1, 0xC3 };
+        static const unsigned char vmmcall_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xD9, 0xC3 };
+        static const unsigned char blockstep_stub[] VMAWARE_SECTION = {
+            0x53,                                      // 0:  push rbx/ebx (preserve non-volatile register)
+            0x31, 0xC0,                                // 1:  xor eax, eax
+            0x8C, 0xD0,                                // 3:  mov ax, ss
+            0x9C,                                      // 5:  pushfq/pushfd
+            0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00,  // 6:  or dword ptr [rsp/esp], 0x100
+            0x9D,                                      // 13: popfq/popfd
+            0x8E, 0xD0,                                // 14: mov ss, ax  <- shadow starts here
+            0x0F, 0xA2,                                // 16: cpuid       <- buggy hypervisor traps here
+            0x5B,                                      // 18: pop rbx/ebx <- baremetal traps here
+            0x90,                                      // 19: nop         
+            0x9C,                                      // 20: pushfq/pushfd
+            0x81, 0x24, 0x24, 0xFF, 0xFE, 0xFF, 0xFF,  // 21: and dword ptr [rsp/esp], 0xFFFFFEFF
+            0x9D,                                      // 28: popfq/popfd
+            0xC3                                       // 29: ret
+        };
+        static const unsigned char singlestep_stub[] VMAWARE_SECTION = {
             0x9C,                                     // pushfq
-            0x81, 0x04, 0x24, 0x00, 0x01, 0x01, 0x00, // or dword ptr [rsp], 0x10100 (set TF)
+            0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00, // or dword ptr [rsp], 0x100 (sets TF)
             0x9D,                                     // popfq
-            0x0F, 0xA2,                               // cpuid 
-            0x4C, 0x89, 0xC3,                         // mov rbx, r8  (restore rbx from r8) - trap happens here
+            0x0F, 0xA2,                               // cpuid
+            0xC7, 0xB2,                               // db 0xC7, 0xB2 (invalid opcode)
             0xC3                                      // ret
         };
-        static const unsigned char switch_stub[] VMAWARE_SECTION = {
-            0x53, 0x55, 0x57, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, // push rbx, rbp, rdi, rsi, r12-r15
-            0x49, 0x89, 0x20,                                                       // qword ptr [r8], rsp
-            0x66, 0x8C, 0xD0,                                                       // mov ax, ss
-            0x50,                                                                   // push rax
-            0x52,                                                                   // push rdx
-            0x9C,                                                                   // pushfq
-            0x48, 0x8B, 0x41, 0x08,                                                 // mov rax, qword ptr [rcx + 8]
-            0x50,                                                                   // push rax
-            0x48, 0x8B, 0x01,                                                       // mov rax, qword ptr [rcx]
-            0x50,                                                                   // push rax
-            0x48, 0xCF                                                              // iretq
-        };
-        static const unsigned char dbvm_intel_stub[] VMAWARE_SECTION = {
-            0x49, 0x89, 0xD0,                               // mov r8, rdx
-            0x48, 0x89, 0xC8,                               // mov rax, rcx
-            0x48, 0xBA, 0x10, 0x32, 0x54, 0x76, 0x00, 0x00, 0x00, 0x00, // mov rdx, 0x76543210
-            0x48, 0xB9, 0x90, 0x90, 0x90, 0x90, 0x00, 0x00, 0x00, 0x00, // mov rcx, 0x90909090
-            0x0F, 0x01, 0xC1,                               // vmcall
-            0x49, 0x89, 0x00,                               // mov [r8], rax (mov [imm64], rax ; &vmcallResult)
-            0xC3                                            // ret
-        };
+        static const unsigned char ud_stub[] VMAWARE_SECTION = { 0x0F, 0x0B, 0xC3 }; // ud2; ret
 
-        static const unsigned char dbvm_amd_stub[] VMAWARE_SECTION = {
-            0x49, 0x89, 0xD0,                               // mov r8, rdx
-            0x48, 0x89, 0xC8,                               // mov rax, rcx
-            0x48, 0xBA, 0x10, 0x32, 0x54, 0x76, 0x00, 0x00, 0x00, 0x00, // mov rdx, 0x76543210
-            0x48, 0xB9, 0x90, 0x90, 0x90, 0x90, 0x00, 0x00, 0x00, 0x00, // mov rcx, 0x90909090
-            0x0F, 0x01, 0xD9,                               // vmmcall
-            0x49, 0x89, 0x00,                               // mov [r8], rax (mov [imm64], rax ; &vmcallResult)
-            0xC3                                            // ret
-        };
+        #if (x86_64)
+            static const unsigned char trampoline_stub[] VMAWARE_SECTION = {
+                0x49, 0x89, 0xD8,                         // mov r8, rbx (save rbx to volatile register r8)
+                0x9C,                                     // pushfq
+                0x81, 0x04, 0x24, 0x00, 0x01, 0x01, 0x00, // or dword ptr [rsp], 0x10100 (set TF)
+                0x9D,                                     // popfq
+                0x0F, 0xA2,                               // cpuid 
+                0x4C, 0x89, 0xC3,                         // mov rbx, r8  (restore rbx from r8) - trap happens here
+                0xC3                                      // ret
+            };
+            static const unsigned char switch_stub[] VMAWARE_SECTION = {
+                0x53, 0x55, 0x57, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, // push rbx, rbp, rdi, rsi, r12-r15
+                0x49, 0x89, 0x20,                                                       // qword ptr [r8], rsp
+                0x66, 0x8C, 0xD0,                                                       // mov ax, ss
+                0x50,                                                                   // push rax
+                0x52,                                                                   // push rdx
+                0x9C,                                                                   // pushfq
+                0x48, 0x8B, 0x41, 0x08,                                                 // mov rax, qword ptr [rcx + 8]
+                0x50,                                                                   // push rax
+                0x48, 0x8B, 0x01,                                                       // mov rax, qword ptr [rcx]
+                0x50,                                                                   // push rax
+                0x48, 0xCF                                                              // iretq
+            };
+            static const unsigned char dbvm_intel_stub[] VMAWARE_SECTION = {
+                0x49, 0x89, 0xD0,                               // mov r8, rdx
+                0x48, 0x89, 0xC8,                               // mov rax, rcx
+                0x48, 0xBA, 0x10, 0x32, 0x54, 0x76, 0x00, 0x00, 0x00, 0x00, // mov rdx, 0x76543210
+                0x48, 0xB9, 0x90, 0x90, 0x90, 0x90, 0x00, 0x00, 0x00, 0x00, // mov rcx, 0x90909090
+                0x0F, 0x01, 0xC1,                               // vmcall
+                0x49, 0x89, 0x00,                               // mov [r8], rax (mov [imm64], rax ; &vmcallResult)
+                0xC3                                            // ret
+            };
 
-        static const unsigned char dbvm_icebp_stub[] VMAWARE_SECTION = {
-            0xF1,                                           // icebp
-            0xC3                                            // ret
-        };
+            static const unsigned char dbvm_amd_stub[] VMAWARE_SECTION = {
+                0x49, 0x89, 0xD0,                               // mov r8, rdx
+                0x48, 0x89, 0xC8,                               // mov rax, rcx
+                0x48, 0xBA, 0x10, 0x32, 0x54, 0x76, 0x00, 0x00, 0x00, 0x00, // mov rdx, 0x76543210
+                0x48, 0xB9, 0x90, 0x90, 0x90, 0x90, 0x00, 0x00, 0x00, 0x00, // mov rcx, 0x90909090
+                0x0F, 0x01, 0xD9,                               // vmmcall
+                0x49, 0x89, 0x00,                               // mov [r8], rax (mov [imm64], rax ; &vmcallResult)
+                0xC3                                            // ret
+            };
+
+            static const unsigned char dbvm_icebp_stub[] VMAWARE_SECTION = {
+                0xF1,                                           // icebp
+                0xC3                                            // ret
+            };
+        #endif
+    #elif (ARM32)
+        // udf #0; bx lr, little-endian for 0xE7F000F0 and 0xE12FFF1E
+        static const unsigned char ud_stub[] VMAWARE_SECTION = { 0xF0, 0x00, 0xF0, 0xE7, 0x1E, 0xFF, 0x2F, 0xE1 };
+    #elif (ARM64)
+        // hlt #0; ret, little-endian for 0xD4400000 and 0xD65F03C0
+        static const unsigned char ud_stub[] VMAWARE_SECTION = { 0x00, 0x00, 0x40, 0xD4, 0xC0, 0x03, 0x5F, 0xD6 };
     #endif
-#elif (ARM32)
-    // udf #0; bx lr, little-endian for 0xE7F000F0 and 0xE12FFF1E
-    static const unsigned char ud_stub[] VMAWARE_SECTION = { 0xF0, 0x00, 0xF0, 0xE7, 0x1E, 0xFF, 0x2F, 0xE1 };
-#elif (ARM64)
-    // hlt #0; ret, little-endian for 0xD4400000 and 0xD65F03C0
-    static const unsigned char ud_stub[] VMAWARE_SECTION = { 0x00, 0x00, 0x40, 0xD4, 0xC0, 0x03, 0x5F, 0xD6 };
-#endif
 
-#if (MSVC)
-    #pragma const_seg()
-#endif
+    #if (MSVC)
+        #pragma const_seg()
+    #endif
 
-#if (CLANG && !MSVC)
-    #if __has_declspec_attribute(guard)
-        #define VMAWARE_NO_CFG __declspec(guard(nocf)) __attribute__((noinline))
-    #elif __has_attribute(nocf_check)
-        #define VMAWARE_NO_CFG __attribute__((nocf_check)) __attribute__((noinline))
+    #if (CLANG && !MSVC)
+        #if __has_declspec_attribute(guard)
+            #define VMAWARE_NO_CFG __declspec(guard(nocf)) __attribute__((noinline))
+        #elif __has_attribute(nocf_check)
+            #define VMAWARE_NO_CFG __attribute__((nocf_check)) __attribute__((noinline))
+        #else
+            #define VMAWARE_NO_CFG __attribute__((noinline))
+        #endif
+    #elif (GCC)
+        #if defined(__has_attribute) && __has_attribute(nocf_check)
+            #define VMAWARE_NO_CFG __attribute__((nocf_check)) __attribute__((noinline))
+        #else
+            #define VMAWARE_NO_CFG __attribute__((noinline))
+        #endif
+    #elif (MSVC)
+        #define VMAWARE_NO_CFG __declspec(guard(nocf)) __declspec(noinline)
     #else
-        #define VMAWARE_NO_CFG __attribute__((noinline))
+        #define VMAWARE_NO_CFG
     #endif
-#elif (GCC)
-    #if defined(__has_attribute) && __has_attribute(nocf_check)
-        #define VMAWARE_NO_CFG __attribute__((nocf_check)) __attribute__((noinline))
-    #else
-        #define VMAWARE_NO_CFG __attribute__((noinline))
-    #endif
-#elif (MSVC)
-    #define VMAWARE_NO_CFG __declspec(guard(nocf)) __declspec(noinline)
-#else
-    #define VMAWARE_NO_CFG
 #endif
 
 struct VM {
@@ -3559,6 +3561,7 @@ public:
 #endif
 
     // memory related functions
+#if (WINDOWS)
     struct memory {
         // uninstrumented indirect-call invokers
         VMAWARE_NO_CFG static void execute(const void* pointer) noexcept {
@@ -3852,6 +3855,7 @@ public:
             return h;
         }
     };
+#endif
 
     // miscellaneous functionalities
     struct util {
