@@ -3192,7 +3192,7 @@ public:
             static char model[128];
             static bool cached;
 
-            static constexpr void store_manufacturer(const char* VMAWARE_RESTRICT s) noexcept {
+            static VMAWARE_CONSTEXPR void store_manufacturer(const char* VMAWARE_RESTRICT s) noexcept {
                 if (!s) { 
                     manufacturer[0] = '\0'; 
                     return; 
@@ -3206,7 +3206,7 @@ public:
                 *(manufacturer + tocopy) = '\0';
                 cached = true;
             }
-            static constexpr void store_model(const char* VMAWARE_RESTRICT s) noexcept {
+            static VMAWARE_CONSTEXPR void store_model(const char* VMAWARE_RESTRICT s) noexcept {
                 if (!s) { 
                     model[0] = '\0';
                     return; 
@@ -4130,7 +4130,7 @@ public:
             oss << std::forward<T>(arg);
         }
 
-        static constexpr void print_to_stream(std::ostringstream&) noexcept {}
+        static VMAWARE_CONSTEXPR void print_to_stream(std::ostringstream&) noexcept {}
 
         template <typename... Args>
         static void print_to_stream(std::ostringstream& oss, Args&&... args) noexcept {
@@ -13319,8 +13319,8 @@ public:
             }
 
             constexpr bool is_set(const enum_flags flag) const noexcept {
-                const auto idx = static_cast<size_t>(flag);
-                return idx < flag_collector.size() && flag_collector.test(idx);
+                return static_cast<size_t>(flag) < flag_collector.size() &&
+                    flag_collector.test(static_cast<size_t>(flag));
             }
         };
 
