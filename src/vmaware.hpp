@@ -4418,6 +4418,56 @@ public:
                 return guest_level != 0;
             };
 
+            // check if the HAL path HalpInitializeErrSrc -> HalpInitializeMce -> HalpMceInit -> HalpHvInitMcaPcrContext is initializing machine-check/WHEA state in a hypervisor-aware context
+            auto is_halh_present = []() noexcept -> bool {
+                const HMODULE ntdll = memory::get_ntdll();
+                if (!ntdll) return true;
+
+                constexpr const char* function_names[] = {
+                    "NtQuerySystemInformation"
+                };
+                void* functions[ARRAYSIZE(function_names)] = {};
+                memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
+                using nt_query_sysinfo_fn = NTSTATUS(__stdcall*)(ULONG, PVOID, ULONG, PULONG);
+                nt_query_sysinfo_fn nt_query_system_information = reinterpret_cast<nt_query_sysinfo_fn>(functions[0]);
+                if (!nt_query_system_information) return false;
+
+                struct entry_struct { ULONG Tag; ULONG PA; ULONG PF; SIZE_T PU; ULONG NPA; ULONG NPF; SIZE_T NPU; };
+                struct info_struct { ULONG Count; entry_struct TagInfo[1]; };
+
+                ULONG size = 1024 * 1024;
+                HANDLE heap = GetProcessHeap();
+                PVOID buffer = HeapAlloc(heap, 0, size);
+                if (!buffer) return true;
+
+                ULONG needed = 0;
+                while (nt_query_system_information(0x16, buffer, size, &needed) == 0xC0000004L) {
+                    size = needed + 4096;
+                    if (PVOID new_buffer = HeapReAlloc(heap, 0, buffer, size)) {
+                        buffer = new_buffer;
+                    }
+                    else {
+                        HeapFree(heap, 0, buffer);
+                        return true;
+                    }
+                }
+
+                bool found = false;
+                const auto* info = static_cast<info_struct*>(buffer);
+                if (info) {
+                    for (ULONG i = 0; i < info->Count; ++i) {
+                        if (info->TagInfo[i].Tag == 0x486C6148) { // HalH
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+
+                HeapFree(heap, 0, buffer);
+                return found;
+            };
+
             hyperx_state state = HYPERV_UNKNOWN;
 
             if (is_hyperv_nested()) {
@@ -4434,7 +4484,6 @@ public:
                         state = HYPERV_ENLIGHTENMENT;
                     }
                     else if (eax() == 11 && is_hyperv_present()) {
-                        // windows machine running under Hyper-V type 2
                         debug("HYPER-X: Detected Hyper-V guest VM");
                         core::add(brand_enum::HYPERV);
                         state = HYPERV_REAL_VM;
@@ -4445,7 +4494,6 @@ public:
                     }
                 }
                 else {
-                    // windows machine running under Hyper-V type 1
                     std::string brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor + 0x100);
 
                     if (util::find(brand_str, "KVM")) {
@@ -4487,7 +4535,7 @@ public:
                         const bool is_hyper_v_host = (brand_str == "Microsoft Hv");
                     #endif
 
-                        if (is_hyper_v_host) {
+                        if (is_hyper_v_host && is_halh_present()) {
                             debug("HYPER-X: Detected Hyper-V host machine");
                             core::add(brand_enum::HYPERV_ROOT);
                             state = HYPERV_HOST;
@@ -8130,17 +8178,16 @@ public:
             void* functions[ARRAYSIZE(function_names)] = {};
             memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-            using nt_query_sysinfo_t = NTSTATUS(__stdcall*)(int, PVOID, ULONG, PULONG); // int is SYSTEM_INFORMATION_CLASS
-            nt_query_sysinfo_t nt_query = reinterpret_cast<nt_query_sysinfo_t>(functions[0]);
-            if (!nt_query)
-                return false;
+            using nt_query_sysinfo_fn = NTSTATUS(__stdcall*)(ULONG, PVOID, ULONG, PULONG); // int is SYSTEM_INFORMATION_CLASS
+            nt_query_sysinfo_fn nt_query_system_information = reinterpret_cast<nt_query_sysinfo_fn>(functions[0]);
+            if (!nt_query_system_information) return false;
 
             // parse header to locate the bitmap
             struct boot_logo_info { ULONG flags, bitmap_offset; };
 
             const int sys_boot_info = 140; // SystemBootLogoInformation
             ULONG needed = 0;
-            NTSTATUS st = nt_query(sys_boot_info, nullptr, 0, &needed);
+            NTSTATUS st = nt_query_system_information(sys_boot_info, nullptr, 0, &needed);
             if (st != static_cast<NTSTATUS>(0xC0000023) &&
                 st != static_cast<NTSTATUS>(0x80000005) &&
                 st != static_cast<NTSTATUS>(0xC0000004))
@@ -8149,7 +8196,7 @@ public:
             std::vector<u8> buffer(needed);
 
             // fetch the boot-logo data
-            st = nt_query(sys_boot_info, buffer.data(), needed, &needed);
+            st = nt_query_system_information(sys_boot_info, buffer.data(), needed, &needed);
             if (!NT_SUCCESS(st))
                 return false;
 
