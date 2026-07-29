@@ -674,7 +674,6 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     }
 
     summary.push_back(bold + "VM detections: " + ansi_exit + count_color + std::to_string(static_cast<u32>(vm.detected_count)) + "/" + std::to_string(static_cast<u32>(vm.technique_count)) + ansi_exit);
-    summary.push_back(bold + "VM hardening: " + ansi_exit + (vm.is_hardened ? (green + "likely") : (grey + "unlikely")) + ansi_exit);
     summary.emplace_back("");
 
     if (arg_bitset.test(VERBOSE)) {
