@@ -10700,6 +10700,9 @@ public:
         if (util::hyper_x() == HYPERV_HOST) {
             return false;
         }
+        if (util::is_running_under_translator()) {
+            return false;
+        }
 
         struct exception_handler {
             static int evaluate(unsigned int code, struct _EXCEPTION_POINTERS* ep, volatile ULONG_PTR* out_trap_ip) {
@@ -12619,6 +12622,9 @@ public:
             u64 cs;
         };
     #pragma pack(pop)
+        if (util::is_running_under_translator()) {
+            return false;
+        }
 
         static_assert(sizeof(iretq_frame) == 16, "iretq_frame size must be exactly 16 bytes for proper hardware exception processing.");
         static_assert(std::is_standard_layout<iretq_frame>::value, "iretq_frame must follow standard layout rules.");
