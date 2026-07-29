@@ -873,12 +873,24 @@ public:
         /* cpuid leaf values */
         struct leaf {
             static constexpr u32
+                basic_info = 0x00000000,
+                features = 0x00000001,
+                ext_features = 0x00000007,
+                ext_topology = 0x0000000B,
+                v2_ext_topology = 0x0000001F,
+                hypervisor = 0x40000000,
+                hv_interface = 0x40000001,
+                hv_privileges = 0x40000003,
+                hv_processors = 0x40000005,
+                hv_nested = 0x40000006,
+                hv_enlightenment = 0x40000100,
                 func_ext = 0x80000000,
                 proc_ext = 0x80000001,
                 brand1 = 0x80000002,
                 brand2 = 0x80000003,
                 brand3 = 0x80000004,
-                hypervisor = 0x40000000,
+                ext_limits = 0x80000008,
+                encrypted_mem = 0x8000001F,
                 amd_easter_egg = 0x8fffffff;
         };
 
@@ -971,11 +983,11 @@ public:
 
             if (p_leaf < cpu::leaf::hypervisor) {
                 /* Standard range: 0x00000000 - 0x3FFFFFFF */
-                cpu::cpuid(eax, unused, unused, unused, 0x00000000);
+                cpu::cpuid(eax, unused, unused, unused, cpu::leaf::basic_info);
                 debug("CPUID: max standard leaf = 0x", std::hex, eax);
                 supported = (p_leaf <= eax);
             }
-            else if (p_leaf < 0x80000000) {
+            else if (p_leaf < cpu::leaf::func_ext) {
                 /* Hypervisor range: 0x40000000 - 0x7FFFFFFF */
                 cpu::cpuid(eax, unused, unused, unused, cpu::leaf::hypervisor);
                 debug("CPUID: max hypervisor leaf = 0x", std::hex, eax);
@@ -1001,7 +1013,7 @@ public:
 
             u32 unused = 0;
             u32 ecx = 0;
-            cpuid(unused, unused, ecx, unused, 0);
+            cpuid(unused, unused, ecx, unused, cpu::leaf::basic_info);
 
             return ecx == authentic_amd_ecx || ecx == amdisbetter_ecx;
         }
@@ -1012,7 +1024,7 @@ public:
 
             u32 unused = 0;
             u32 ecx = 0;
-            cpuid(unused, unused, ecx, unused, 0);
+            cpuid(unused, unused, ecx, unused, cpu::leaf::basic_info);
 
             return ((ecx == intel_ecx1) || (ecx == intel_ecx2));
         }
@@ -1064,10 +1076,10 @@ public:
             const char** cache = nullptr;
 
             switch (leaf_id) {
-                case 0x40000000:
+                case cpu::leaf::hypervisor:
                     cache = &leaf_40000000;
                     break;
-                case 0x40000100:
+                case cpu::leaf::hv_enlightenment:
                     cache = &leaf_40000100;
                     break;
                 default:
@@ -1088,7 +1100,7 @@ public:
 
             static char buffers[2][13];
 
-            const size_t index = (leaf_id == 0x40000000) ? 0 : 1;
+            const size_t index = (leaf_id == cpu::leaf::hypervisor) ? 0 : 1;
 
             u32 regs[3] = { ebx, ecx, edx };
 
@@ -1111,7 +1123,7 @@ public:
             u32 unused = 0;
             u32 eax = 0;
 
-            cpu::cpuid(eax, unused, unused, unused, 1);
+            cpu::cpuid(eax, unused, unused, unused, cpu::leaf::features);
             VMAWARE_UNUSED(unused);
 
             steps.model = ((eax >> 4) & 0b1111);
@@ -4370,7 +4382,8 @@ public:
                         DWORD  MachineAttributes;
                     } pmInfo = {};
 
-                    if (get_proc_info(current_process, (PROCESS_INFORMATION_CLASS)9, &pmInfo, sizeof(pmInfo))) {
+                    constexpr auto process_machine_type_info = static_cast<PROCESS_INFORMATION_CLASS>(9);
+                    if (get_proc_info(current_process, process_machine_type_info, &pmInfo, sizeof(pmInfo))) {
                         if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386 || (native_machine == IMAGE_FILE_MACHINE_ARM64 && pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)) {
                             return true;
                         }
@@ -4417,7 +4430,7 @@ public:
             /* Check if hypervisor feature bit in CPUID Leaf 1, ECX bit 31 is enabled */
             auto is_hyperv_present = []() noexcept -> bool {
                 u32 unused, ecx = 0;
-                cpu::cpuid(unused, unused, ecx, unused, 1);
+                cpu::cpuid(unused, unused, ecx, unused, cpu::leaf::features);
 
                 return (ecx >> 31) & 1;
             };
@@ -4428,7 +4441,7 @@ public:
              */
             auto is_root_partition = []() noexcept -> bool {
                 u32 ebx, unused = 0;
-                cpu::cpuid(unused, ebx, unused, unused, 0x40000003);
+                cpu::cpuid(unused, ebx, unused, unused, cpu::leaf::hv_privileges);
 
                 return (ebx & 1);
             };
@@ -4452,11 +4465,11 @@ public:
             auto is_hyperv_nested = []() noexcept -> bool {
                 u32 eax = 0, ebx = 0, ecx = 0, edx = 0;
 
-                cpu::cpuid(eax, ebx, ecx, edx, 0x40000001);
+                cpu::cpuid(eax, ebx, ecx, edx, cpu::leaf::hv_interface);
                 if (eax != 0x31237648) /* Hv#1 interface */
                     return false;
 
-                cpu::cpuid(eax, ebx, ecx, edx, 0x40000006); /* hypervisor level of the current guest */
+                cpu::cpuid(eax, ebx, ecx, edx, cpu::leaf::hv_nested); /* hypervisor level of the current guest */
                 const u32 guest_level = (eax >> 10) & 0xF;
 
                 return guest_level != 0;
@@ -4520,7 +4533,7 @@ public:
             }
             else {
                 if (!is_root_partition()) {
-                    const std::string enlightenment_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor + 0x100); /* 0x40000100 */
+                    const std::string enlightenment_str = cpu::cpu_manufacturer(cpu::leaf::hv_enlightenment);
 
                     if (util::find(enlightenment_str, "KVM")) {
                         debug("HYPER-X: Detected Hyper-V enlightenments");
@@ -4740,7 +4753,7 @@ public:
                 static const bool supported = []() noexcept -> bool {
                 #if (x86)
                     i32 regs[4];
-                    cpu::cpuid(regs, 1);
+                    cpu::cpuid(regs, cpu::leaf::features);
                     return (regs[2] & (1 << 20)) != 0;
                 #else
                     return false;
@@ -5209,11 +5222,11 @@ public:
     #if (!x86)
         return false;
     #else
-        return (
-            cpu::vmid_template(0) ||
-            cpu::vmid_template(cpu::leaf::hypervisor) || /* 0x40000000 */
-            cpu::vmid_template(cpu::leaf::hypervisor + 0x100) /* 0x40000100 */
-        );
+         return (
+             cpu::vmid_template(cpu::leaf::basic_info) ||
+             cpu::vmid_template(cpu::leaf::hypervisor) ||
+             cpu::vmid_template(cpu::leaf::hv_enlightenment)
+         );
     #endif
     }
 
@@ -5286,7 +5299,7 @@ public:
         u32 ecx = 0; 
         u32 edx = 0;
 
-        cpu::cpuid(eax, ebx, ecx, edx, 1); 
+        cpu::cpuid(eax, ebx, ecx, edx, cpu::leaf::features);
         constexpr u32 HYPERVISOR_MASK = (1u << 31);
         const hyperx_state state = util::hyper_x();
 
@@ -5377,7 +5390,7 @@ public:
 
             u32 unused = 0;
             u32 eax = 0;
-            cpu::cpuid(eax, unused, unused, unused, 1);
+            cpu::cpuid(eax, unused, unused, unused, cpu::leaf::features);
 
             auto is_k7 = [](const u32 eax) noexcept -> bool {
                 if ((eax & 0x0FF00F00) != 0x00000600) {
@@ -5715,19 +5728,19 @@ public:
         u32 ebx = 0;
         u32 ecx = 0;
         u32 edx = 0;
-        cpu::cpuid(eax, ebx, ecx, edx, 0x40000001);
+        cpu::cpuid(eax, ebx, ecx, edx, cpu::leaf::hv_interface);
 
         constexpr u32 simplevisor = 0x00766853; /* " vhS" */
 
-        debug("CPUID_SIGNATURE: eax = ", eax);
+        debug("CPUID_SIGNATURE: eax = ", std::hex, eax);
 
         if (eax == simplevisor) {
             return core::add(brand_enum::SIMPLEVISOR);
         }
 
         if (cpu::is_intel()) {
-            const bool has_leaf_b = cpu::is_leaf_supported(0x0B);
-            const bool has_leaf_1f = cpu::is_leaf_supported(0x1F);
+            const bool has_leaf_b = cpu::is_leaf_supported(cpu::leaf::ext_topology);
+            const bool has_leaf_1f = cpu::is_leaf_supported(cpu::leaf::v2_ext_topology);
 
             /* If neither extended topology leaf is supported, we can't perform the check */
             if (!has_leaf_b && !has_leaf_1f) {
@@ -5760,18 +5773,18 @@ public:
              * leaf 1's Initial APIC ID is the ABA guard
              */
             for (;;) {
-                cpu::cpuid(l1_eax, l1_ebx, l1_ecx, l1_edx, 1, 0);
+                cpu::cpuid(l1_eax, l1_ebx, l1_ecx, l1_edx, cpu::leaf::features, 0);
                 aba_start = (l1_ebx >> 24) & 0xFF; /* Initial APIC ID */
 
                 if (has_leaf_b) {
-                    cpu::cpuid(vb_eax, vb_ebx, vb_ecx, vb_edx, 0x0B, 0);
+                    cpu::cpuid(vb_eax, vb_ebx, vb_ecx, vb_edx, cpu::leaf::ext_topology, 0);
                 }
 
                 if (has_leaf_1f) {
-                    cpu::cpuid(v1f_eax, v1f_ebx, v1f_ecx, v1f_edx, 0x1F, 0);
+                    cpu::cpuid(v1f_eax, v1f_ebx, v1f_ecx, v1f_edx, cpu::leaf::v2_ext_topology, 0);
                 }
 
-                cpu::cpuid(unused, l1_ebx, unused, unused, 1, 0);
+                cpu::cpuid(unused, l1_ebx, unused, unused, cpu::leaf::features, 0);
                 aba_end = (l1_ebx >> 24) & 0xFF;
 
                 if (aba_start == aba_end || ++retries >= 8) { break; }
@@ -5820,7 +5833,7 @@ public:
             }
         }
         else if (cpu::is_amd()) {
-            const bool has_leaf_7 = cpu::is_leaf_supported(7);
+            const bool has_leaf_7 = cpu::is_leaf_supported(cpu::leaf::ext_features);
 
             if (!has_leaf_7) {
                 return false;
@@ -5830,7 +5843,7 @@ public:
             u32 l7_ebx = 0;
             u32 l7_ecx = 0;
             u32 l7_edx = 0;
-            cpu::cpuid(l7_eax, l7_ebx, l7_ecx, l7_edx, 7, 0);
+            cpu::cpuid(l7_eax, l7_ebx, l7_ecx, l7_edx, cpu::leaf::ext_features, 0);
 
             /*
              * Intel enumerates hardware mitigations in Leaf 7.0.EDX:
@@ -5868,7 +5881,7 @@ public:
         u32 unused = 0;
         u32 ecx = 0; 
         u32 edx = 0;
-        cpu::cpuid(unused, unused, ecx, edx, 0x40000003);
+        cpu::cpuid(unused, unused, ecx, edx, cpu::leaf::hv_privileges);
 
         constexpr u32 ECX_SIG = 0x4D4D5645u; /* 'EVMM' -> 0x4D4D5645 */
         constexpr u32 EDX_SIG = 0x43544E49u; /* 'INTC' -> 0x43544E49 */
@@ -5949,7 +5962,7 @@ public:
             if (serialize_available) {
                 /* SERIALIZE requires Ice Lake or newer */
                 u32 l7_eax = 0, l7_ebx = 0, l7_ecx = 0, l7_edx = 0;
-                cpu::cpuid(l7_eax, l7_ebx, l7_ecx, l7_edx, 7, 0);
+                cpu::cpuid(l7_eax, l7_ebx, l7_ecx, l7_edx, cpu::leaf::ext_features, 0);
                 if (!(l7_edx & (1u << 14))) {
                     serialize_available = false;
                 }
@@ -6404,11 +6417,11 @@ public:
 
             /* VMM = Time spent in hypervisor and baremetal; nVMM = Time spent in baremetal */
             const double latency_ratio = best_ref_l ? (double)best_cpuid_l / (double)best_ref_l : 0;
-            debug("TIMER: VMM -> ", best_cpuid_l, " | nVMM -> ", best_ref_l, " | Ratio -> ", latency_ratio);
+            debug("TIMER: Instruction > VMM -> ", best_cpuid_l, " | nVMM -> ", best_ref_l, " | Ratio -> ", latency_ratio);
 
         #if (x86_64)
             const double npf_ratio = best_add_l ? (double)best_npf_l / (double)best_add_l : 0;
-            debug("NPF: VMM -> ", best_npf_l, " | nVMM -> ", best_add_l, " | Ratio -> ", npf_ratio);
+            debug("TIMER: Memory > VMM -> ", best_npf_l, " | nVMM -> ", best_add_l, " | Ratio -> ", npf_ratio);
         #else
             const double npf_ratio = 0.0;
         #endif
@@ -6831,17 +6844,16 @@ public:
             return false;
         }
 
-        constexpr u32 encrypted_memory_capability = 0x8000001f;
         constexpr u32 msr_index = 0xc0010131;
 
-        if (!cpu::is_leaf_supported(encrypted_memory_capability)) {
+        if (!cpu::is_leaf_supported(cpu::leaf::encrypted_mem)) {
             return false;
         }
 
         u32 eax = 0;
         u32 unused = 0;
 
-        cpu::cpuid(eax, unused, unused, unused, encrypted_memory_capability);
+        cpu::cpuid(eax, unused, unused, unused, cpu::leaf::encrypted_mem);
 
         if (!(eax & (1 << 1))) {
             return false;
@@ -10152,14 +10164,14 @@ public:
     [[nodiscard]] static bool virtual_processors() {
     #if (x86)
         int regs[4];
-        __cpuid(regs, 0x40000000);
+        __cpuid(regs, cpu::leaf::hypervisor);
 
         const u32 max_leaf = static_cast<u32>(regs[0]);
-        if (max_leaf < 0x40000005) {
+        if (max_leaf < cpu::leaf::hv_processors) {
             return false;
         }
 
-        __cpuid(regs, 0x40000005);
+        __cpuid(regs, cpu::leaf::hv_processors);
         const u32 max_virtual_processors = static_cast<u32>(regs[0]);
         const u32 max_logical_processors = static_cast<u32>(regs[1]);
 
@@ -11453,7 +11465,7 @@ public:
 
         /* 1) Check for commonly disabled instructions on patches and VMs */
         u32 a = 0, b = 0, c = 0, d = 0;
-        cpu::cpuid(a, b, c, d, 1u);
+        cpu::cpuid(a, b, c, d, cpu::leaf::features);
 
         constexpr u32 AES_NI_BIT = 1u << 25;
         const bool aes_support = (c & AES_NI_BIT) != 0;
@@ -11527,9 +11539,9 @@ public:
         const bool osxsave_adv = (c & CPUID1_OSXSAVE) != 0;
 
         u32 a7 = 0, b7 = 0, c7 = 0, d7 = 0;
-        cpu::cpuid(a, b, c, d, 0u, 0u);
+        cpu::cpuid(a, b, c, d, cpu::leaf::basic_info, 0u);
         if (a >= 7u) {
-            cpu::cpuid(a7, b7, c7, d7, 7u, 0u);
+            cpu::cpuid(a7, b7, c7, d7, cpu::leaf::ext_features, 0u);
         }
 
         const bool avx2_adv = (b7 & CPUID7_AVX2) != 0;
