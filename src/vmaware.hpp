@@ -5911,7 +5911,7 @@ public:
                 state.counter = current + 1; /* better than doing incq in inline assembly, standard increment forces the correct cache behavior we want */
                 std::atomic_signal_fence(std::memory_order_seq_cst);
             }
-            };
+        };
 
         /* It will execute cpuid and serialize or lfence, and compare its latency */
         auto trigger_thread = [&]()
@@ -5976,10 +5976,11 @@ public:
             const size_t batch_size = batch_dist(gen);
 
             std::vector<timer::timer_tick_t> vm_samples(batch_size), ref_samples(batch_size); /* pre page-fault MMU, we won't warm-up cpuid samples for the P-states intentionally */
-            std::vector<timer::timer_tick_t> npf_samples, add_samples;
             VirtualLock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t)); /* lock the memory for the samples to prevent page faults if permissions are enough */
             VirtualLock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
 
+        #if (x86_64)
+            std::vector<timer::timer_tick_t> npf_samples, add_samples;
             using whv_create_partition_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE*);
             using whv_set_partition_property_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE, WHV_PARTITION_PROPERTY_CODE, const void*, UINT32);
             using whv_setup_partition_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE);
@@ -6159,7 +6160,7 @@ public:
                     }
                 }
             }
-
+        #endif  
             state.start_test.store(true, std::memory_order_release);
 
             /* Independent multi-trial state initialization */
@@ -6167,8 +6168,10 @@ public:
             const size_t local_max_attempts = batch_size * trials;
             timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
             timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+        #if (x86_64)
             timer::timer_tick_t best_npf_l = (std::numeric_limits<timer::timer_tick_t>::max)();
             timer::timer_tick_t best_add_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+        #endif
 
             /* Cache and cpu scheduler warm-up won't affect anything in the measurement loop, so ramp up frequency/P-states to a high non-AVX Turbo/P-state without vmexits */
             timer::warmup_cpu(serialize_available);
@@ -6287,6 +6290,7 @@ public:
                 }
 
                 /* If Hyper-V is enabled, check if there's another hypervisor sitting on top of Hyper-V with an unconditional vmexit */
+            #if (x86_64)
                 if (check_nested_hypervisors) {
                     size_t npf_valid = 0;
                     size_t npf_invalid = 0;
@@ -6306,8 +6310,8 @@ public:
                             volatile u32 init_b = 2;
                             u32 a = init_a;
                             u32 b = init_b;
-                            for (u32 i = 0; i < 1500; i++) {
-                                a += b; b += a; a += b; b += a; a += b;
+                            for (u32 i = 0; i < 1500; i++) { /* add is the most stable instruction across all CPU architectures and models, normally 1-cycle latency */
+                                a += b; b += a; a += b; b += a; a += b; /* fibonacci dependency so ratio stays constant */
                                 b += a; a += b; b += a; a += b; b += a;
                             }
                             seed += (static_cast<unsigned long long>(a) + b);
@@ -6315,14 +6319,14 @@ public:
                         std::atomic_signal_fence(std::memory_order_acq_rel);
                         r_post = state.counter;
 
-                        sync = state.counter;
-                        while (state.counter == sync);
-                        sync = state.counter;
-                        while (state.counter == sync);
-
                         values[4].Reg64 = 0x1000;
                         whv_set_virtual_processor_registers(p, 0, names, reg_count, values);
                         WHV_RUN_VP_EXIT_CONTEXT exit_ctx{};
+
+                        sync = state.counter;
+                        while (state.counter == sync);
+                        sync = state.counter;
+                        while (state.counter == sync);
 
                         v_pre = state.counter;
                         std::atomic_signal_fence(std::memory_order_seq_cst);
@@ -6360,7 +6364,7 @@ public:
                         if (add_l < best_add_l) best_add_l = add_l;
                     }
                 }
-
+            #endif
                 if (valid > 0) {
                     /* Same as above */
                     std::vector<timer::timer_tick_t> active_vm_samples(vm_samples.begin(), vm_samples.begin() + valid);
@@ -6378,10 +6382,14 @@ public:
 
             /* VMM = Time spent in hypervisor and baremetal; nVMM = Time spent in baremetal */
             const double latency_ratio = best_ref_l ? (double)best_cpuid_l / (double)best_ref_l : 0;
-            const double npf_ratio = best_add_l ? (double)best_npf_l / (double)best_add_l : 0;
-
             debug("TIMER: VMM -> ", best_cpuid_l, " | nVMM -> ", best_ref_l, " | Ratio -> ", latency_ratio);
+
+        #if (x86_64)
+            const double npf_ratio = best_add_l ? (double)best_npf_l / (double)best_add_l : 0;
             debug("NPF: VMM -> ", best_npf_l, " | nVMM -> ", best_add_l, " | Ratio -> ", npf_ratio);
+        #else
+            const double npf_ratio = 0.0;
+        #endif
 
             if (latency_ratio >= threshold || (check_nested_hypervisors && npf_ratio >= 4.0)) {
                 hypervisor_detected = true;
@@ -6396,6 +6404,7 @@ public:
                 hypervisor_detected = true;
             }
 
+        #if (x86_64)
             if (mem) {
                 SIZE_T free_size = 0;
                 nt_free_virtual_memory(current_process, &mem, &free_size, MEM_RELEASE);
@@ -6410,6 +6419,7 @@ public:
             if (winhv_dll) {
                 FreeLibrary(winhv_dll);
             }
+        #endif
 
             SetThreadPriorityBoost(current_thread, FALSE);
             SetThreadPriority(current_thread, old_thread_priority);
