@@ -628,7 +628,6 @@ public:
         SINGLE_STEP,
         EIP_OVERFLOW,
         SVM_EXCEPTIONS,
-        HYPERV_NESTED,
         MEASURED_BOOT,
         TPM_PASSTHROUGH, 
 
@@ -9304,7 +9303,7 @@ public:
     /**
      * @brief Check if the function "wine_get_unix_file_name" is present and if the OS booted from a VHD container
      * @category Windows
-     * @implements VM::WINE_FUNC
+     * @implements VM::WINE
      */
     [[nodiscard]] static bool wine() {
         #if (_WIN32_WINNT < _WIN32_WINNT_WIN8)
@@ -10017,7 +10016,7 @@ public:
 
 
     /**
-     * @brief Check for GPU capabilities related to VMs
+     * @brief Check for virtual GPU capabilities
      * @category Windows
      * @implements VM::GPU_CAPABILITIES
      */
@@ -11169,7 +11168,6 @@ public:
          * -------------------------------------------------------------------------
          * helper lambdas
          * -------------------------------------------------------------------------
-         *
          */
         auto buffer_contains_ascii_ci = [](const BYTE* data, size_t len, const char* pat) noexcept -> bool {
             if (!data || len == 0 || !pat) return false;
@@ -11267,7 +11265,6 @@ public:
          * -------------------------------------------------------------------------
          * main logic block
          * -------------------------------------------------------------------------
-         *
          */
         do {
             if (!OpenProcessToken(current_process_handle, TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token_handle)) break;
@@ -11429,7 +11426,7 @@ public:
                         found_redhat = true;
             }
             if (found_redhat) {
-                debug("NVRAM: QEMU/OVMF detected");
+                debug("NVRAM: QEMU/OVMF certificates detected");
                 detection_result = core::add(brand_enum::QEMU);
                 break;
             }
@@ -12057,7 +12054,7 @@ public:
 
 
     /**
-     * @brief Check the presence of system timers
+     * @brief Check for the absence of system timers
      * @category x86, Windows
      * @implements VM::CLOCK
      */
@@ -12189,7 +12186,7 @@ public:
 
 
     /**
-     * @brief Check whether the hypervisor correctly handles MSR behavior
+     * @brief Check whether the hypervisor mishandles MSR behavior
      * @category Windows, x86
      * @implements VM::MSR
      */
@@ -12837,16 +12834,6 @@ public:
 
 
     /**
-     * @brief Check whether a hypervisor is nested within a Hyper-V partition
-     * @category Windows, x86
-     * @implements VM::HYPERV_NESTED
-     */
-    [[nodiscard]] static bool hyperv_nested() {
-        return util::hyper_x() == HYPERV_NESTED_VM;
-    }
-
-
-    /**
      * @brief Check measured boot logs exported by the TPM
      * @category Windows
      * @implements VM::MEASURED_BOOT
@@ -13022,9 +13009,9 @@ public:
                         const u64 base_addr = read_u64(payload);
                         const u64 blob_len = read_u64(payload + 8);
 
+                        /* OVMF's memory bounds of the SEC and PEI execution phases */
                         if ((base_addr == 0x830000 && blob_len == 0xD0000) ||
                             (base_addr == 0x900000 && blob_len == 0xE80000)) {
-                            debug("MEASURED_BOOT: Detected OVMF's memory bounds of the SEC and PEI execution phases");
                             return true;
                         }
                     }
@@ -14337,7 +14324,6 @@ public:
             case EIP_OVERFLOW: return "EIP_OVERFLOW";
             case SVM_EXCEPTIONS: return "SVM_EXCEPTIONS";
             case CGROUP: return "CGROUP";
-            case HYPERV_NESTED: return "HYPERV_NESTED";
             case MEASURED_BOOT: return "MEASURED_BOOT";
             case TPM_PASSTHROUGH: return "TPM_PASSTHROUGH";
             /* END OF TECHNIQUE LIST */
@@ -14800,7 +14786,6 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::SINGLE_STEP, {100, VM::single_step}},
             {VM::TPM_PASSTHROUGH, {100, VM::tpm_passthrough}},
             {VM::NVRAM, {100, VM::nvram}},
-            {VM::HYPERV_NESTED, {100, VM::hyperv_nested}},
             {VM::CPU_HEURISTIC, {90, VM::cpu_heuristic}},
             {VM::ACPI_SIGNATURE, {100, VM::acpi_signature}},
             {VM::CLOCK, {45, VM::clock}},

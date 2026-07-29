@@ -611,7 +611,6 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::EIP_OVERFLOW, "instructions in compat mode");
     checker(VM::SVM_EXCEPTIONS, "SVM exceptions");
     checker(VM::CGROUP, "cgroup namespace");
-    checker(VM::HYPERV_NESTED, "nested virtualization");
     checker(VM::MEASURED_BOOT, "measured boot logs");
     checker(VM::TPM_PASSTHROUGH, "TPM passthrough");
     checker(VM::HYPERVISOR_HOOK, "EPT/NPT hooking");
