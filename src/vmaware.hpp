@@ -372,12 +372,14 @@
     #include <devpkey.h>
     #include <devguid.h>
     #include <bcrypt.h>
+    #include <winhvplatform.h>
 
     #pragma comment(lib, "setupapi.lib")
     #pragma comment(lib, "powrprof.lib")
     #pragma comment(lib, "advapi32.lib")
     #pragma comment(lib, "gdi32.lib")
     #pragma comment(lib, "user32.lib")
+
 #elif (LINUX)
     #if (x86)
         #include <cpuid.h>
@@ -5874,8 +5876,10 @@ public:
 
         /* Calculation of minimum threshold */
         double threshold = 2.5;
+        bool check_nested_hypervisors = false;
         if (util::hyper_x() == HYPERV_HOST) {
             threshold = 50.0;
+            check_nested_hypervisors = true;
         }
 
         /* Shared state and results */
@@ -5907,7 +5911,7 @@ public:
                 state.counter = current + 1; /* better than doing incq in inline assembly, standard increment forces the correct cache behavior we want */
                 std::atomic_signal_fence(std::memory_order_seq_cst);
             }
-        };
+            };
 
         /* It will execute cpuid and serialize or lfence, and compare its latency */
         auto trigger_thread = [&]()
@@ -5968,22 +5972,203 @@ public:
             };
 
             std::mt19937 gen(seq);
-            std::uniform_int_distribution<size_t> batch_dist(30000, 70000);
+            std::uniform_int_distribution<size_t> batch_dist(10000, 30000);
             const size_t batch_size = batch_dist(gen);
 
-            SleepEx(0, FALSE); /* try to get fresh quantum before starting warm-up phase, give time to the kernel to setup priorities */
-
             std::vector<timer::timer_tick_t> vm_samples(batch_size), ref_samples(batch_size); /* pre page-fault MMU, we won't warm-up cpuid samples for the P-states intentionally */
+            std::vector<timer::timer_tick_t> npf_samples, add_samples;
             VirtualLock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t)); /* lock the memory for the samples to prevent page faults if permissions are enough */
             VirtualLock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
 
-            state.start_test.store(true, std::memory_order_release); 
+            using whv_create_partition_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE*);
+            using whv_set_partition_property_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE, WHV_PARTITION_PROPERTY_CODE, const void*, UINT32);
+            using whv_setup_partition_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE);
+            using whv_create_virtual_processor_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE, UINT32, UINT32);
+            using whv_map_gpa_range_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE, void*, WHV_GUEST_PHYSICAL_ADDRESS, UINT64, WHV_MAP_GPA_RANGE_FLAGS);
+            using whv_set_virtual_processor_registers_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE, UINT32, const WHV_REGISTER_NAME*, UINT32, const WHV_REGISTER_VALUE*);
+            using whv_run_virtual_processor_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE, UINT32, void*, UINT32);
+            using whv_delete_partition_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE);
+            using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
+            using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
+
+            whv_create_partition_fn whv_create_partition = nullptr;
+            whv_set_partition_property_fn whv_set_partition_property = nullptr;
+            whv_setup_partition_fn whv_setup_partition = nullptr;
+            whv_create_virtual_processor_fn whv_create_virtual_processor = nullptr;
+            whv_map_gpa_range_fn whv_map_gpa_range = nullptr;
+            whv_set_virtual_processor_registers_fn whv_set_virtual_processor_registers = nullptr;
+            whv_run_virtual_processor_fn whv_run_virtual_processor = nullptr;
+            whv_delete_partition_fn whv_delete_partition = nullptr;
+            nt_allocate_virtual_memory_fn nt_allocate_virtual_memory = nullptr;
+            nt_free_virtual_memory_fn nt_free_virtual_memory = nullptr;
+
+            HMODULE winhv_dll = nullptr;
+            HMODULE ntdll_dll = nullptr;
+            WHV_PARTITION_HANDLE p{};
+            PVOID mem = nullptr;
+            const UINT32 reg_count = 12;
+            WHV_REGISTER_NAME names[reg_count]{};
+            WHV_REGISTER_VALUE values[reg_count]{};
+
+            bool npf_samples_locked = false;
+
+            if (check_nested_hypervisors) {
+                winhv_dll = LoadLibraryW(L"WinHvPlatform.dll");
+                ntdll_dll = memory::get_ntdll();
+
+                if (!winhv_dll || !ntdll_dll) {
+                    check_nested_hypervisors = false;
+                }
+                else {
+                    constexpr const char* whv_function_names[] = {
+                        "WHvCreatePartition",
+                        "WHvSetPartitionProperty",
+                        "WHvSetupPartition",
+                        "WHvCreateVirtualProcessor",
+                        "WHvMapGpaRange",
+                        "WHvSetVirtualProcessorRegisters",
+                        "WHvRunVirtualProcessor",
+                        "WHvDeletePartition"
+                    };
+                    void* whv_functions[ARRAYSIZE(whv_function_names)] = {};
+                    memory::get_function_address(winhv_dll, whv_function_names, whv_functions, ARRAYSIZE(whv_function_names));
+
+                    constexpr const char* nt_function_names[] = {
+                        "NtAllocateVirtualMemory",
+                        "NtFreeVirtualMemory"
+                    };
+                    void* nt_functions[ARRAYSIZE(nt_function_names)] = {};
+                    memory::get_function_address(ntdll_dll, nt_function_names, nt_functions, ARRAYSIZE(nt_function_names));
+
+                    whv_create_partition = reinterpret_cast<whv_create_partition_fn>(whv_functions[0]);
+                    whv_set_partition_property = reinterpret_cast<whv_set_partition_property_fn>(whv_functions[1]);
+                    whv_setup_partition = reinterpret_cast<whv_setup_partition_fn>(whv_functions[2]);
+                    whv_create_virtual_processor = reinterpret_cast<whv_create_virtual_processor_fn>(whv_functions[3]);
+                    whv_map_gpa_range = reinterpret_cast<whv_map_gpa_range_fn>(whv_functions[4]);
+                    whv_set_virtual_processor_registers = reinterpret_cast<whv_set_virtual_processor_registers_fn>(whv_functions[5]);
+                    whv_run_virtual_processor = reinterpret_cast<whv_run_virtual_processor_fn>(whv_functions[6]);
+                    whv_delete_partition = reinterpret_cast<whv_delete_partition_fn>(whv_functions[7]);
+
+                    nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(nt_functions[0]);
+                    nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(nt_functions[1]);
+
+                    if (!whv_create_partition || !whv_set_partition_property || !whv_setup_partition ||
+                        !whv_create_virtual_processor || !whv_map_gpa_range || !whv_set_virtual_processor_registers ||
+                        !whv_run_virtual_processor || !whv_delete_partition || !nt_allocate_virtual_memory || !nt_free_virtual_memory) {
+                        FreeLibrary(winhv_dll);
+                        winhv_dll = nullptr;
+                        check_nested_hypervisors = false;
+                    }
+                }
+            }
+
+            if (check_nested_hypervisors) {
+                npf_samples.resize(batch_size);
+                add_samples.resize(batch_size);
+
+                const bool lock1 = VirtualLock(npf_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+                const bool lock2 = VirtualLock(add_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+                npf_samples_locked = lock1 && lock2;
+
+                if (FAILED(whv_create_partition(&p))) {
+                    check_nested_hypervisors = false;
+                }
+                else {
+                    UINT32 cpu_count = 1;
+                    whv_set_partition_property(p, WHvPartitionPropertyCodeProcessorCount, &cpu_count, sizeof(cpu_count));
+                    if (FAILED(whv_setup_partition(p))) {
+                        whv_delete_partition(p);
+                        p = nullptr;
+                        check_nested_hypervisors = false;
+                    }
+                    else if (FAILED(whv_create_virtual_processor(p, 0, 0))) {
+                        whv_delete_partition(p);
+                        p = nullptr;
+                        check_nested_hypervisors = false;
+                    }
+                    else {
+                        SIZE_T region_size = 0x2000;
+                        const NTSTATUS status = nt_allocate_virtual_memory(current_process, &mem, 0, &region_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+                        if (!NT_SUCCESS(status)) {
+                            whv_delete_partition(p);
+                            p = nullptr;
+                            check_nested_hypervisors = false;
+                        }
+                        else if (FAILED(whv_map_gpa_range(p, mem, 0, 0x2000, static_cast<WHV_MAP_GPA_RANGE_FLAGS>(7)))) {
+                            SIZE_T free_size = 0;
+                            nt_free_virtual_memory(current_process, &mem, &free_size, MEM_RELEASE);
+                            mem = nullptr;
+                            whv_delete_partition(p);
+                            p = nullptr;
+                            check_nested_hypervisors = false;
+                        }
+                        else {
+                            /* It uses a 16-bit address offset of 0x3000 (little-endian 00 30). Since VMAware's dsSeg.Base is 0, the physical address (GPA) it attempts to access is DS.Base + 0x3000 = 0x3000 */
+                            u8 code[] = { 0xA0, 0x00, 0x30 }; /* Because the CS descriptor specifies a 16-bit default size, the processor decodes 0xA0 as MOV AL, [0x3000] */
+                            memcpy((u8*)mem + 0x1000, code, sizeof(code));
+
+                            WHV_X64_SEGMENT_REGISTER cs_seg = { 0 };
+                            cs_seg.Base = 0;
+                            cs_seg.Limit = 0xFFFF;
+                            cs_seg.Selector = 0;
+                            cs_seg.Attributes = 0x9B;
+                           /* 
+                            * 0x9B here translates to SegmentType = 0xB (Execute/Read, accessed code segment)
+                            * NonSystemSegment = 1, DescriptorPrivilegeLevel = 0 (DPL matches real mode CPL of 0), and Present = 1,
+                            * the Default (D) bit (bit 14 of the attributes union) is left at 0 telling the hardware that this is a 16-bit segment
+                            */
+
+                            WHV_X64_SEGMENT_REGISTER ds_seg = { 0 };
+                            ds_seg.Base = 0;
+                            ds_seg.Limit = 0xFFFF;
+                            ds_seg.Selector = 0;
+                            ds_seg.Attributes = 0x93; /* This translates to SegmentType = 0x3 (Read/Write, accessed data segment), which is the standard configuration for real-mode data segments */
+
+                            names[0] = WHvX64RegisterCr0;
+                            names[1] = WHvX64RegisterCr3;
+                            names[2] = WHvX64RegisterCr4;
+                            names[3] = WHvX64RegisterEfer;
+                            names[4] = WHvX64RegisterRip;
+                            names[5] = WHvX64RegisterRflags;
+                            names[6] = WHvX64RegisterCs;
+                            names[7] = WHvX64RegisterDs;
+                            names[8] = WHvX64RegisterEs;
+                            names[9] = WHvX64RegisterSs;
+                            names[10] = WHvX64RegisterFs;
+                            names[11] = WHvX64RegisterGs;
+
+                            memset(values, 0, sizeof(values));
+                            /* 
+                             * In CR0, Bit 0 (PE - Protection Enable) is set to 0 and Bit 31 (PG - Paging) too, this makes VMAware's guest VP L2 run in real-address mode 
+                             * The other set bits (CD, NW, and ET) match the standard architectural power-on reset state of x86 processors
+                             */
+                            values[0].Reg64 = 0x60000010;
+                            values[1].Reg64 = 0x0;
+                            values[2].Reg64 = 0x0;
+                            values[3].Reg64 = 0x0;
+                            values[4].Reg64 = 0x1000;
+                            values[5].Reg64 = 0x2;
+                            values[6].Segment = cs_seg;
+                            values[7].Segment = ds_seg;
+                            values[8].Segment = ds_seg;
+                            values[9].Segment = ds_seg;
+                            values[10].Segment = ds_seg;
+                            values[11].Segment = ds_seg;
+                            /* Since paging is disabled, #PF exceptions are architecturally impossible to be triggered by VMAware, forcing always an unconditional NPF */
+                        }
+                    }
+                }
+            }
+
+            state.start_test.store(true, std::memory_order_release);
 
             /* Independent multi-trial state initialization */
             constexpr int trials = 3;
             const size_t local_max_attempts = batch_size * trials;
             timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
             timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+            timer::timer_tick_t best_npf_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+            timer::timer_tick_t best_add_l = (std::numeric_limits<timer::timer_tick_t>::max)();
 
             /* Cache and cpu scheduler warm-up won't affect anything in the measurement loop, so ramp up frequency/P-states to a high non-AVX Turbo/P-state without vmexits */
             timer::warmup_cpu(serialize_available);
@@ -6008,7 +6193,7 @@ public:
                          */
                         sync = state.counter;
                         while (state.counter == sync); /* fastest busy-waiting strategy, PAUSE can conditionally exit, calling APIs like SwitchToThread() would be even worse */
-                        
+
                         r_pre = state.counter;
                         std::atomic_signal_fence(std::memory_order_acq_rel);
                         _serialize(); _serialize(); _serialize(); /* first serialize is slower because of having to deal with the pipeline, subsequent only pay the architectural cost of the serialization itself */
@@ -6022,7 +6207,7 @@ public:
 
                         v_pre = state.counter;
                         std::atomic_signal_fence(std::memory_order_seq_cst); /* _ReadWriteBarrier() aka dont emit runtime fences */
-                    #if (GCC || CLANG)
+                    #if (GCC || CLANG)  
                         size_t a = 0;
                         size_t b = 0, c = 0, d = 0;
                         __asm__ volatile (
@@ -6036,7 +6221,7 @@ public:
                         std::atomic_signal_fence(std::memory_order_seq_cst);
                         v_post = state.counter;
 
-                        /* We dont filter by cycles spent here (for example by querying thread cycle time) because the point of this function is to not use TSC or any other clock */
+                        /* We dont filter by cycles spent here (for example by querying thread cycle time) because the kernel would use TSC and the point of this function is to not use TSC or any other clock */
                         if (v_post > v_pre && r_post > r_pre) {
                             vm_samples[valid] = v_post - v_pre;
                             ref_samples[valid] = r_post - r_pre;
@@ -6056,7 +6241,7 @@ public:
                         timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
                         sync = state.counter;
-                        while (state.counter == sync); 
+                        while (state.counter == sync);
                         sync = state.counter;
                         while (state.counter == sync);
 
@@ -6066,14 +6251,14 @@ public:
                         _mm_lfence(); _mm_lfence(); _mm_lfence(); _mm_lfence();
                         std::atomic_signal_fence(std::memory_order_acq_rel);
                         r_post = state.counter;
-                        
+
                         sync = state.counter;
-                        while (state.counter == sync); 
+                        while (state.counter == sync);
                         sync = state.counter;
-                        while (state.counter == sync); 
+                        while (state.counter == sync);
 
                         v_pre = state.counter;
-                        std::atomic_signal_fence(std::memory_order_seq_cst); 
+                        std::atomic_signal_fence(std::memory_order_seq_cst);
                     #if (GCC || CLANG)
                         size_t a = 0;
                         size_t b = 0, c = 0, d = 0;
@@ -6101,30 +6286,106 @@ public:
                     }
                 }
 
-                if (valid == 0) {
-                    continue;
+                /* If Hyper-V is enabled, check if there's another hypervisor sitting on top of Hyper-V with an unconditional vmexit */
+                if (check_nested_hypervisors) {
+                    size_t npf_valid = 0;
+                    size_t npf_invalid = 0;
+
+                    while (npf_valid < batch_size && npf_invalid < local_max_attempts) {
+                        timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
+
+                        sync = state.counter;
+                        while (state.counter == sync);
+                        sync = state.counter;
+                        while (state.counter == sync);
+
+                        r_pre = state.counter;
+                        std::atomic_signal_fence(std::memory_order_acq_rel);
+                        {
+                            volatile u32 init_a = 1;
+                            volatile u32 init_b = 2;
+                            u32 a = init_a;
+                            u32 b = init_b;
+                            for (u32 i = 0; i < 1500; i++) {
+                                a += b; b += a; a += b; b += a; a += b;
+                                b += a; a += b; b += a; a += b; b += a;
+                            }
+                            seed += (static_cast<unsigned long long>(a) + b);
+                        }
+                        std::atomic_signal_fence(std::memory_order_acq_rel);
+                        r_post = state.counter;
+
+                        sync = state.counter;
+                        while (state.counter == sync);
+                        sync = state.counter;
+                        while (state.counter == sync);
+
+                        values[4].Reg64 = 0x1000;
+                        whv_set_virtual_processor_registers(p, 0, names, reg_count, values);
+                        WHV_RUN_VP_EXIT_CONTEXT exit_ctx{};
+
+                        v_pre = state.counter;
+                        std::atomic_signal_fence(std::memory_order_seq_cst);
+                        /* 
+                         * Since GPA 0x3000 is outside our mapped range (0 to 0x2000), CPU triggers an EPT/NPT violation (GPA fault) because it belongs to the second-level address translation 
+                         * Nested page faults ALWAYS require L0 involvement to be handled, and VMAware can force L0 to synthethize a nested VMEXIT so it forwards the event to L1 
+                         * This type of VMEXIT is the only VMEXIT that can be reached from L2 CPL3 in both AMD and Intel
+                         * WHP is just used to make the vCPU in 16-bit real mode and disable first-level address translation faults, and to not make EPT violations to be translated as a #VE
+                         */
+                        whv_run_virtual_processor(p, 0, &exit_ctx, sizeof(exit_ctx));
+                        std::atomic_signal_fence(std::memory_order_seq_cst);
+                        v_post = state.counter;
+
+                        if (v_post > v_pre && r_post > r_pre && exit_ctx.ExitReason == WHvRunVpExitReasonMemoryAccess) {
+                            npf_samples[npf_valid] = v_post - v_pre;
+                            add_samples[npf_valid] = r_post - r_pre;
+                            npf_valid++;
+                        }
+                        else {
+                            npf_invalid++;
+                        }
+                    }
+
+                    if (npf_valid > 0) {
+                        /* Discard the unused default-initialized zero-elements */
+                        std::vector<timer::timer_tick_t> active_npf_samples(npf_samples.begin(), npf_samples.begin() + npf_valid);
+                        std::vector<timer::timer_tick_t> active_add_samples(add_samples.begin(), add_samples.begin() + npf_valid);
+
+                        /* Check for lowest dense cluster with no interrupt spikes, filter noise we can't directly detect (SMIs, NMIs, etc) */
+                        const timer::timer_tick_t npf_l = timer::calculate_latency(active_npf_samples);
+                        const timer::timer_tick_t add_l = timer::calculate_latency(active_add_samples);
+
+                        /* Record the cleanest/lowest latency observed across the independent trials */
+                        if (npf_l < best_npf_l) best_npf_l = npf_l;
+                        if (add_l < best_add_l) best_add_l = add_l;
+                    }
                 }
 
-                /* Discard the unused default-initialized zero-elements */
-                std::vector<timer::timer_tick_t> active_vm_samples(vm_samples.begin(), vm_samples.begin() + valid);
-                std::vector<timer::timer_tick_t> active_ref_samples(ref_samples.begin(), ref_samples.begin() + valid);
+                if (valid > 0) {
+                    /* Same as above */
+                    std::vector<timer::timer_tick_t> active_vm_samples(vm_samples.begin(), vm_samples.begin() + valid);
+                    std::vector<timer::timer_tick_t> active_ref_samples(ref_samples.begin(), ref_samples.begin() + valid);
 
-                /* Check for lowest dense cluster with no interrupt spikes, filter noise we can't detect (SMIs, NMIs, etc) */
-                const timer::timer_tick_t cpuid_l = timer::calculate_latency(active_vm_samples);
-                const timer::timer_tick_t ref_l = timer::calculate_latency(active_ref_samples);
+                    const timer::timer_tick_t cpuid_l = timer::calculate_latency(active_vm_samples);
+                    const timer::timer_tick_t ref_l = timer::calculate_latency(active_ref_samples);
 
-                /* Record the cleanest/lowest latency observed across the independent trials */
-                if (cpuid_l < best_cpuid_l) best_cpuid_l = cpuid_l;
-                if (ref_l < best_ref_l) best_ref_l = ref_l;
+                    if (cpuid_l < best_cpuid_l) best_cpuid_l = cpuid_l;
+                    if (ref_l < best_ref_l) best_ref_l = ref_l;
+                }
             }
 
             state.test_done.store(true, std::memory_order_release);
 
+            /* VMM = Time spent in hypervisor and baremetal; nVMM = Time spent in baremetal */
             const double latency_ratio = best_ref_l ? (double)best_cpuid_l / (double)best_ref_l : 0;
+            const double npf_ratio = best_add_l ? (double)best_npf_l / (double)best_add_l : 0;
 
-            /* VMM = Time spent in hypervisor; nVMM = Time spent in baremetal */
-            debug("TIMER: VMM -> ", best_cpuid_l, " | nVMM -> ", best_ref_l, " | Ratio -> ", latency_ratio); /* these ARE NOT cycles */
-            if (latency_ratio >= threshold) hypervisor_detected = true;
+            debug("TIMER: VMM -> ", best_cpuid_l, " | nVMM -> ", best_ref_l, " | Ratio -> ", latency_ratio);
+            debug("NPF: VMM -> ", best_npf_l, " | nVMM -> ", best_add_l, " | Ratio -> ", npf_ratio);
+
+            if (latency_ratio >= threshold || (check_nested_hypervisors && npf_ratio >= 4.0)) {
+                hypervisor_detected = true;
+            }
 
             /*
              * Detect IPI-based counter pausing bypasses
@@ -6133,6 +6394,21 @@ public:
              */
             if (best_cpuid_l > 2500 || best_ref_l > 2500) {
                 hypervisor_detected = true;
+            }
+
+            if (mem) {
+                SIZE_T free_size = 0;
+                nt_free_virtual_memory(current_process, &mem, &free_size, MEM_RELEASE);
+            }
+            if (p) {
+                whv_delete_partition(p);
+            }
+            if (npf_samples_locked) {
+                VirtualUnlock(npf_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+                VirtualUnlock(add_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+            }
+            if (winhv_dll) {
+                FreeLibrary(winhv_dll);
             }
 
             SetThreadPriorityBoost(current_thread, FALSE);
