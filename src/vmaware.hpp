@@ -9301,7 +9301,7 @@ public:
 
              
     /**
-     * @brief Check if the function "wine_get_unix_file_name" is present and if the OS booted from a VHD container
+     * @brief Check for Wine Is Not An Emulator artifacts
      * @category Windows
      * @implements VM::WINE
      */
@@ -9313,7 +9313,8 @@ public:
                 BOOL isNativeVhdBoot = 0;
                 /*
                  * We dont call NtQuerySystemInformation with SystemPrefetchPathInformation | SystemHandleInformation
-                 * the point is to check if this kernel32.dll function throws an exception
+                 * the point is to check if this kernel32.dll function throws an exception. This should actually make
+                 * VMAware unable to run on Wine since there's a missing import
                  */
                 IsNativeVhdBoot(&isNativeVhdBoot);
                 VMAWARE_UNUSED(isNativeVhdBoot);
@@ -9323,6 +9324,19 @@ public:
                 return true;
             }
         #endif
+
+        const HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+        if (!k32) {
+           return false;
+        }
+
+        constexpr const char* function_names[] = { "wine_get_unix_file_name" };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        memory::get_function_address(k32, function_names, functions, ARRAYSIZE(function_names));
+
+        if (functions[0] != nullptr) {
+            return core::add(brand_enum::WINE);
+        }
 
         return false;
     }
