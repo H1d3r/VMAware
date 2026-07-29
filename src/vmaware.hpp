@@ -9276,21 +9276,21 @@ public:
      */
     [[nodiscard]] static bool dll() {
         static constexpr struct {
-            const char* dll_name;
+            const wchar_t* dll_name;
             enum brand_enum brand;
         } dlls[] = {
-            {"sbiedll.dll",   brand_enum::SANDBOXIE},
-            {"pstorec.dll",   brand_enum::CWSANDBOX},
-            {"vmcheck.dll",   brand_enum::VPC},
-            {"cmdvrt32.dll",  brand_enum::COMODO},
-            {"cmdvrt64.dll",  brand_enum::COMODO},
-            {"cuckoomon.dll", brand_enum::CUCKOO},
-            {"SxIn.dll",      brand_enum::QIHOO},
-            {"wpespy.dll",    brand_enum::NULL_BRAND}
+            {L"sbiedll.dll",   brand_enum::SANDBOXIE},
+            {L"pstorec.dll",   brand_enum::CWSANDBOX},
+            {L"vmcheck.dll",   brand_enum::VPC},
+            {L"cmdvrt32.dll",  brand_enum::COMODO},
+            {L"cmdvrt64.dll",  brand_enum::COMODO},
+            {L"cuckoomon.dll", brand_enum::CUCKOO},
+            {L"SxIn.dll",      brand_enum::QIHOO},
+            {L"wpespy.dll",    brand_enum::NULL_BRAND}
         };
 
         for (const auto& x : dlls) {
-            if (GetModuleHandleA(x.dll_name) != nullptr) {
+            if (GetModuleHandleW(x.dll_name) != nullptr) {
                 debug("DLL: Found ", x.dll_name, " (", brands::brand_enum_to_string(x.brand), ")");
                 return core::add(x.brand);
             }
@@ -9310,14 +9310,14 @@ public:
             return false;
         #else
             __try {
-                BOOL isNativeVhdBoot = 0;
+                BOOL is_native_vhd_boot = 0;
                 /*
                  * We dont call NtQuerySystemInformation with SystemPrefetchPathInformation | SystemHandleInformation
                  * the point is to check if this kernel32.dll function throws an exception. This should actually make
                  * VMAware unable to run on Wine since there's a missing import
                  */
-                IsNativeVhdBoot(&isNativeVhdBoot);
-                VMAWARE_UNUSED(isNativeVhdBoot);
+                IsNativeVhdBoot(&is_native_vhd_boot);
+                VMAWARE_UNUSED(is_native_vhd_boot);
             }
             __except (EXCEPTION_EXECUTE_HANDLER) {
                 debug("WINE: SEH invoked");
