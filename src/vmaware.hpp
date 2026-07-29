@@ -817,7 +817,7 @@ public:
     static u16 technique_count; /* get total number of techniques */
 
     static std::vector<enum_flags> disabled_techniques;
-    static constexpr std::array<enum_flags, 1> experimental_techniques{ { TPM_PASSTHROUGH } };
+    static constexpr std::array<enum_flags, 1> experimental_techniques{ { TIMER } };
 
 #if (WINDOWS)
     using brand_score_t = i32;
