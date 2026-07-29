@@ -870,7 +870,7 @@ public:
 
     /* Various cpu operation stuff */
     struct cpu {
-        /* Cpuid leaf values */
+        /* cpuid leaf values */
         struct leaf {
             static constexpr u32
                 func_ext = 0x80000000,
@@ -969,7 +969,7 @@ public:
             u32 unused = 0;
             bool supported = false;
 
-            if (p_leaf < 0x40000000) {
+            if (p_leaf < cpu::leaf::hypervisor) {
                 /* Standard range: 0x00000000 - 0x3FFFFFFF */
                 cpu::cpuid(eax, unused, unused, unused, 0x00000000);
                 debug("CPUID: max standard leaf = 0x", std::hex, eax);
@@ -1057,24 +1057,46 @@ public:
         #endif
         }
 
-        [[nodiscard]] static std::string cpu_manufacturer(const u32 leaf_id) {
+        [[nodiscard]] static const char* cpu_manufacturer(const u32 leaf_id) {
+            static const char* leaf_40000000 = nullptr;
+            static const char* leaf_40000100 = nullptr;
+
+            const char** cache = nullptr;
+
+            switch (leaf_id) {
+                case 0x40000000:
+                    cache = &leaf_40000000;
+                    break;
+                case 0x40000100:
+                    cache = &leaf_40000100;
+                    break;
+                default:
+                    return "";
+            }
+
+            if (*cache) {
+                return *cache;
+            }
+
             u32 eax = 0, ebx = 0, ecx = 0, edx = 0;
             cpu::cpuid(eax, ebx, ecx, edx, leaf_id);
 
-            if (ebx == 0 && ecx == 0 && edx == 0) return "";
-
-            u32 regs[3] = { 0 };
-            if (leaf_id >= 0x40000000) {
-                regs[0] = ebx; regs[1] = ecx; regs[2] = edx;
-            }
-            else {
-                regs[0] = ebx; regs[1] = edx; regs[2] = ecx;
+            if (ebx == 0 && ecx == 0 && edx == 0) {
+                *cache = "";
+                return *cache;
             }
 
-            char buffer[13];
-            memcpy(buffer, regs, sizeof(regs));
-            buffer[12] = '\0';
-            return { buffer };
+            static char buffers[2][13];
+
+            const size_t index = (leaf_id == 0x40000000) ? 0 : 1;
+
+            u32 regs[3] = { ebx, ecx, edx };
+
+            memcpy(buffers[index], regs, sizeof(regs));
+            buffers[index][12] = '\0';
+
+            *cache = buffers[index];
+            return *cache;
         }
 
         struct stepping_struct {
@@ -4304,22 +4326,32 @@ public:
         }
 
 
-        [[nodiscard]] static bool is_running_under_translator() {
+        [[nodiscard]] static bool is_x86_process_on_arm() {
+        #if (WINDOWS)
+            const char* brand = cpu::get_brand();
+            if (brand && strstr(brand, "Virtual CPU")) {
+                return true;
+            }
+        #endif
+
         #if (WINDOWS && _WIN32_WINNT >= _WIN32_WINNT_WIN10)
             const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-            USHORT procMachine = 0, nativeMachine = 0;
-            const auto pIsWow64Process2 = &IsWow64Process2;
+            USHORT proc_machine = 0, native_machine = 0;
 
-            if (pIsWow64Process2(current_process, &procMachine, &nativeMachine)) {
-                if (nativeMachine == IMAGE_FILE_MACHINE_ARM64 &&
-                    (procMachine == IMAGE_FILE_MACHINE_AMD64 || procMachine == IMAGE_FILE_MACHINE_I386)) {
-                    debug("Translator detected x64/x86 process on ARM64");
+            const auto is_wow64_process_2 = &IsWow64Process2;
+            if (is_wow64_process_2(current_process, &proc_machine, &native_machine)) {
+                const bool translated =
+                    (native_machine == IMAGE_FILE_MACHINE_ARM64 && (proc_machine == IMAGE_FILE_MACHINE_AMD64 || proc_machine == IMAGE_FILE_MACHINE_I386)) 
+                    ||
+                    (native_machine == IMAGE_FILE_MACHINE_ARMNT && proc_machine == IMAGE_FILE_MACHINE_I386);
+
+                if (translated) {
                     return true;
                 }
             }
 
-            /* Only if we got MACHINE_UNKNOWN on process but native is ARM64 */
-            if (nativeMachine == IMAGE_FILE_MACHINE_ARM64) {
+            /* Fallback */
+            if (native_machine == IMAGE_FILE_MACHINE_ARM64 || native_machine == IMAGE_FILE_MACHINE_ARMNT) {
                 using get_process_information_fn = BOOL(__stdcall*)(HANDLE, PROCESS_INFORMATION_CLASS, PVOID, DWORD);
                 const HMODULE ntdll = memory::get_ntdll();
                 if (ntdll == nullptr) {
@@ -4330,17 +4362,16 @@ public:
                 void* functions[ARRAYSIZE(function_names)] = {};
                 memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-                get_process_information_fn get_proc_info = reinterpret_cast<get_process_information_fn>(functions[0]);
+                auto get_proc_info = reinterpret_cast<get_process_information_fn>(functions[0]);
                 if (get_proc_info) {
                     struct PROCESS_MACHINE_INFORMATION {
                         USHORT ProcessMachine;
                         USHORT Res0;
                         DWORD  MachineAttributes;
                     } pmInfo = {};
-                    /* ProcessMachineTypeInfo == 9 per MS Q&A */
+
                     if (get_proc_info(current_process, (PROCESS_INFORMATION_CLASS)9, &pmInfo, sizeof(pmInfo))) {
-                        if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64 || pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386) {
-                            debug("Translator detected x64/x86 process on ARM64 by fallback");
+                        if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386 || (native_machine == IMAGE_FILE_MACHINE_ARM64 && pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)) {
                             return true;
                         }
                     }
@@ -4350,20 +4381,13 @@ public:
 
             if (cpu::is_leaf_supported(cpu::leaf::hypervisor)) {
                 const std::string vendor = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
-                
+
                 if (vendor == "VirtualApple" ||   /* Apple Rosetta */
                     vendor == "PowerVM Lx86")     /* IBM PowerVM Lx86 */
                 {
                     return true;
                 }
             }
-
-        #if (WINDOWS)
-            const char* brand = cpu::get_brand();
-            if (brand && strstr(brand, "Virtual CPU")) {
-                return true;
-            }
-        #endif
 
             return false;
         }
@@ -5347,9 +5371,7 @@ public:
             }
 
             /* Technique 3: Check for absence of AMD easter egg for K7 and K8 CPUs */
-            constexpr u32 AMD_EASTER_EGG = 0x8fffffff; /* this is the CPUID leaf of the AMD easter egg */
-
-            if (!cpu::is_leaf_supported(AMD_EASTER_EGG)) {
+            if (!cpu::is_leaf_supported(cpu::leaf::amd_easter_egg)) {
                 return false;
             }
 
@@ -5382,7 +5404,7 @@ public:
             }
 
             u32 ecx_bochs = 0;
-            cpu::cpuid(unused, unused, ecx_bochs, unused, AMD_EASTER_EGG);
+            cpu::cpuid(unused, unused, ecx_bochs, unused, cpu::leaf::amd_easter_egg);
 
             if (ecx_bochs == 0) {
                 return true;
@@ -5869,8 +5891,8 @@ public:
     #if (x86 && WINDOWS)
         using timer = struct timer;
 
-        if (util::is_running_under_translator()) {
-            debug("TIMER: Running inside a binary translation layer");
+        if (util::is_x86_process_on_arm()) {
+            debug("BINARY_TRANSLATOR: Running inside a binary translation layer");
             return false;
         }
 
@@ -10700,7 +10722,7 @@ public:
         if (util::hyper_x() == HYPERV_HOST) {
             return false;
         }
-        if (util::is_running_under_translator()) {
+        if (util::is_x86_process_on_arm()) {
             return false;
         }
 
@@ -11425,8 +11447,7 @@ public:
     [[nodiscard]] static bool cpu_heuristic() {
         bool spoofed = false;
     #if (x86)
-        if (util::is_running_under_translator()) {
-            debug("CPU_HEURISTIC: Running inside a binary translation layer");
+        if (util::is_x86_process_on_arm()) {
             return false;
         }
 
@@ -12032,8 +12053,7 @@ public:
     #if (ARM)
 		return false; /* ARM systems do not have the classic x86 timers */
     #else   
-		if (util::is_running_under_translator()) {
-            debug("CLOCK: Running inside an ARM CPU");
+		if (util::is_x86_process_on_arm()) {
             return false;
         }
 
@@ -12273,7 +12293,9 @@ public:
     #if (!x86)
         return false;
     #else
-        if (util::is_running_under_translator()) return false;
+        if (util::is_x86_process_on_arm()) {
+            return false;
+        }
         const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
@@ -12622,7 +12644,8 @@ public:
             u64 cs;
         };
     #pragma pack(pop)
-        if (util::is_running_under_translator()) {
+
+        if (util::is_x86_process_on_arm()) {
             return false;
         }
 
@@ -12779,7 +12802,7 @@ public:
         }
 
         u32 eax = 0, ebx = 0, ecx = 0, edx = 0;
-        cpu::cpuid(eax, ebx, ecx, edx, 0x80000001);
+        cpu::cpuid(eax, ebx, ecx, edx, cpu::leaf::proc_ext);
         const bool svmcpuid_visible = ((ecx >> 2) & 1) != 0;
 
         const DWORD exception_status = memory::execute_handler(vmload_stub);
