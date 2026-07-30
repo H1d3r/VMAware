@@ -6114,7 +6114,7 @@ public:
                 names[11] = WHvX64RegisterGs;
 
                 memset(values, 0, sizeof(values));
-                /*
+                /* a
                  * In CR0, Bit 0 (PE - Protection Enable) is set to 0 and Bit 31 (PG - Paging) too, this makes VMAware's guest VP L2 run in real-address mode
                  * The other set bits (CD, NW, and ET) match the standard architectural power-on reset state of x86 processors
                  */
@@ -6372,23 +6372,43 @@ public:
         state.test_done.store(true, std::memory_order_release);
         t1.join();
 
-        /* VMM = Time spent in hypervisor and baremetal; nVMM = Time spent in baremetal */
-        const double latency_ratio = best_ref_l ? (double)best_cpuid_l / (double)best_ref_l : 0;
-        debug("TIMER: Instruction > VMM -> ", best_cpuid_l, " | nVMM -> ", best_ref_l, " | Ratio -> ", latency_ratio);
+        const bool invalid_measurement = (best_ref_l == (std::numeric_limits<timer::timer_tick_t>::max)()) && (best_cpuid_l == (std::numeric_limits<timer::timer_tick_t>::max)());
+
+        /* Analyze instruction latency results and report exactly what VMAware found */
+        if (!invalid_measurement) {
+            /* VMM = Time spent in hypervisor and baremetal; nVMM = Time spent in baremetal */
+            const double latency_ratio = best_ref_l ? (double)best_cpuid_l / (double)best_ref_l : 0;
+            debug("TIMER: Instruction > VMM -> ", best_cpuid_l, " | nVMM -> ", best_ref_l, " | Ratio -> ", latency_ratio);
+
+            /* High latency can occur even with CPUID interception disabled if vCPU pinning is not 1:1, thus detecting the hypervisor, as this is a cache-based counter */
+            if (latency_ratio >= threshold) {
+                debug("TIMER: Detected #VMEXIT latency"); 
+                hypervisor_detected = true;
+            }
+            else if (best_cpuid_l >= 2500 || best_ref_l >= 2500) { /* If latency is abnormally high, it means something was spamming interrupts */
+                debug("TIMER: Detected artificial IPI delivery to timing threads");
+                hypervisor_detected = true;
+            }
+        }
+        else {
+            /* 
+             * The only way for this situation to occur is if the measurement and the counter runs in the same physical core
+             * VMAware will never choose the same physical core to run two threads simultaneously, because its able to detect SMT siblings
+             * If there's no single valid reference, it means that the two threads were running in the same physical core, even if the kernel (and thus, VMAware) believes they were on different cores 
+             * This is proof that there's another OS scheduler running on top of the current guest OS
+             */
+            debug("TIMER: Detected hypervisor with no 1:1 vCPU pinning");
+            hypervisor_detected = true;
+        }
 
     #if (x86_64)
+        /* Analyze memory latency results */
         if (check_nested_hypervisors) {
             const double npf_ratio = best_add_l ? (double)best_npf_l / (double)best_add_l : 0;
             debug("TIMER: Memory > VMM -> ", best_npf_l, " | nVMM -> ", best_add_l, " | Ratio -> ", npf_ratio);
             if (npf_ratio >= 3.75) hypervisor_detected = true;
         }
-    #endif 
 
-        if (latency_ratio >= threshold || best_cpuid_l > 2500 || best_ref_l > 2500) {
-            hypervisor_detected = true;
-        }
-
-    #if (x86_64)
         if (mem && nt_free_virtual_memory) {
             SIZE_T free_size = 0;
             nt_free_virtual_memory(current_process, &mem, &free_size, MEM_RELEASE);
