@@ -549,10 +549,10 @@
             };
         #endif
     #elif (ARM32)
-        /* Udf #0; bx lr, little-endian for 0xE7F000F0 and 0xE12FFF1E */
+        /* udf #0; bx lr, little-endian for 0xE7F000F0 and 0xE12FFF1E */
         static const unsigned char ud_stub[] VMAWARE_SECTION = { 0xF0, 0x00, 0xF0, 0xE7, 0x1E, 0xFF, 0x2F, 0xE1 };
     #elif (ARM64)
-        /* Hlt #0; ret, little-endian for 0xD4400000 and 0xD65F03C0 */
+        /* hlt #0; ret, little-endian for 0xD4400000 and 0xD65F03C0 */
         static const unsigned char ud_stub[] VMAWARE_SECTION = { 0x00, 0x00, 0x40, 0xD4, 0xC0, 0x03, 0x5F, 0xD6 };
     #endif
 

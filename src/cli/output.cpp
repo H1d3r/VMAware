@@ -579,7 +579,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::SMBIOS_VM_BIT, "SMBIOS VM bit");
     checker(VM::PODMAN_FILE, "podman file");
     checker(VM::WSL_PROC, "WSL string in /proc");
-    checker(VM::DRIVERS, "driver names");
+    checker(VM::DRIVERS, "drivers");
     checker(VM::DISK_SERIAL, "disk serial number");
     checker(VM::GPU_CAPABILITIES, "GPU capabilities");
     checker(VM::POWER_CAPABILITIES, "power capabilities");
