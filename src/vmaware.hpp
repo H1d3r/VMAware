@@ -9934,7 +9934,7 @@ public:
                 strstr(driverPath, "VBoxGuest") || /* only installed after vbox guest additions */
                 strstr(driverPath, "VBoxMouse") ||
                 strstr(driverPath, "VBoxSF")
-                ) {
+               ) {
                 debug("DRIVERS: Detected VBox driver: ", driverPath);
                 region_size = 0;
                 nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
@@ -9945,11 +9945,29 @@ public:
                 strstr(driverPath, "vmusbmouse") ||
                 strstr(driverPath, "vmmouse") ||
                 strstr(driverPath, "vmmemctl")
-                ) {
+               ) {
                 debug("DRIVERS: Detected VMware driver: ", driverPath);
                 region_size = 0;
                 nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
                 return core::add(brand_enum::VMWARE);
+            }
+
+            if (
+                strstr(driverPath, "prl_pv") ||
+                strstr(driverPath, "prl_tg") ||
+                strstr(driverPath, "prl_time")
+               ) {
+                debug("DRIVERS: Detected Parallels driver: ", driverPath);
+                region_size = 0;
+                nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
+                return core::add(brand_enum::PARALLELS);
+            }
+
+            if (strstr(driverPath, "SbieDrv")) {
+                debug("DRIVERS: Detected Sandboxie driver: ", driverPath);
+                region_size = 0;
+                nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
+                return core::add(brand_enum::SANDBOXIE);
             }
         }
 
