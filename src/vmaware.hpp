@@ -598,7 +598,6 @@ public:
         GPU_CAPABILITIES = 0,
         ACPI_SIGNATURE,
         POWER_CAPABILITIES,
-        IVSHMEM,
         DRIVERS,
         HANDLES,
         VIRTUAL_PROCESSORS,
@@ -3610,7 +3609,6 @@ public:
                     return 0ull;
                 }
 
-                debug("TIMER: Experimental algorithm for CPU topology analysis is running, false positives may occur.");
                 debug("TIMER: Measurement thread designated CPU -> ", best_logical, " | Counter thread designated CPU -> ", counter_logical);
                 return 1ull << best_logical;
             }
@@ -6340,17 +6338,15 @@ public:
             /* If Hyper-V is enabled, check if there's another hypervisor sitting on top of Hyper-V with an unconditional vmexit */
         #if (x86_64)
             if (check_nested_hypervisors) {
-                std::vector<timer::timer_tick_t> npf_samples(100);
-                std::vector<timer::timer_tick_t> add_samples(100);
-
-                VirtualLock(npf_samples.data(), 100 * sizeof(timer::timer_tick_t));
-                VirtualLock(add_samples.data(), 100 * sizeof(timer::timer_tick_t));
+                constexpr int samples = 100;
+                std::vector<timer::timer_tick_t> npf_samples(samples);
+                std::vector<timer::timer_tick_t> add_samples(samples);
 
                 size_t npf_valid = 0;
 
                 volatile timer::timer_tick_t* const nested_counter_ptr = &state.counter;
 
-                for (size_t i = 0; i < 100; ++i) {
+                for (size_t i = 0; i < samples; ++i) {
                     timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
                     sync = *nested_counter_ptr;
@@ -6419,9 +6415,6 @@ public:
                     if (npf_l < best_npf_l) best_npf_l = npf_l;
                     if (add_l < best_add_l) best_add_l = add_l;
                 }
-
-                VirtualUnlock(npf_samples.data(), 100 * sizeof(timer::timer_tick_t));
-                VirtualUnlock(add_samples.data(), 100 * sizeof(timer::timer_tick_t));
             }
         #endif
 
@@ -9824,7 +9817,7 @@ public:
 
 
     /**
-     * @brief Check for VM-specific names for drivers
+     * @brief Check for drivers used in VMs
      * @category Windows
      * @implements VM::DRIVERS
      */
@@ -9851,88 +9844,6 @@ public:
         using SYSTEM_MODULE_INFORMATION_EX = _SYSTEM_MODULE_INFORMATION_EX;
         using PSYSTEM_MODULE_INFORMATION_EX = _SYSTEM_MODULE_INFORMATION_EX*;
 
-        constexpr ULONG system_module_information = 11;
-        const HMODULE ntdll = memory::get_ntdll();
-        if (!ntdll) return false;
-
-        constexpr const char* function_names[] = { "NtQuerySystemInformation", "NtAllocateVirtualMemory", "NtFreeVirtualMemory" };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
-        using nt_query_system_information_fn = NTSTATUS(__stdcall*)(ULONG SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength);
-        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(
-            HANDLE ProcessHandle,
-            PVOID* BaseAddress,
-            ULONG_PTR ZeroBits,
-            PSIZE_T RegionSize,
-            ULONG AllocationType,
-            ULONG Protect
-        );
-        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE ProcessHandle, PVOID* BaseAddress, PSIZE_T RegionSize, ULONG FreeType);
-
-        const auto nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(functions[0]);
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[1]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[2]);
-
-        if (nt_query_system_information == nullptr || nt_allocate_virtual_memory == nullptr || nt_free_virtual_memory == nullptr)
-            return false;
-        
-        ULONG ul_size = 0;
-        NTSTATUS status = nt_query_system_information(system_module_information, nullptr, 0, &ul_size);
-        if (status != ((NTSTATUS)0xC0000004L)) return false;
-
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-        PVOID allocated_memory = nullptr;
-        SIZE_T region_size = ul_size;
-        nt_allocate_virtual_memory(current_process, &allocated_memory, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-
-        const auto system_module_info_ex = reinterpret_cast<PSYSTEM_MODULE_INFORMATION_EX>(allocated_memory);
-        status = nt_query_system_information(system_module_information, system_module_info_ex, ul_size, &ul_size);
-        if (!(((NTSTATUS)(status)) >= 0)) {
-            region_size = 0;
-            nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
-            return false;
-        }
-
-        for (ULONG i = 0; i < system_module_info_ex->NumberOfModules; ++i) {
-            const char* driverPath = reinterpret_cast<const char*>(system_module_info_ex->Module[i].ImageName);
-            if (
-                strstr(driverPath, "VBoxGuest") || /* only installed after vbox guest additions */
-                strstr(driverPath, "VBoxMouse") ||
-                strstr(driverPath, "VBoxSF")
-            ) {
-                debug("DRIVERS: Detected VBox driver: ", driverPath);
-                region_size = 0;
-                nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
-                return core::add(brand_enum::VBOX);
-            }
-
-            if (
-                strstr(driverPath, "vmusbmouse") ||
-                strstr(driverPath, "vmmouse") ||
-                strstr(driverPath, "vmmemctl")
-            ) {
-                debug("DRIVERS: Detected VMware driver: ", driverPath);
-                region_size = 0;
-                nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
-                return core::add(brand_enum::VMWARE);
-            }
-        }
-
-        SIZE_T free_size = 0;
-        nt_free_virtual_memory(current_process, &allocated_memory, &free_size, MEM_RELEASE);
-        return false;
-    }
-
-
-
-    /**
-     * @brief Check for IVSHMEM device presence
-     * @category Windows
-     * @author dmfrpro (https://github.com/dmfrpro)
-     * @implements VM::IVSHMEM
-     */
-    [[nodiscard]] static bool ivshmem() {
         typedef struct _KEY_FULL_INFORMATION {
             LARGE_INTEGER LastWriteTime;
             ULONG         TitleIndex;
@@ -9961,21 +9872,89 @@ public:
             MaxKeyInfoClass
         } KEY_INFORMATION_CLASS;
 
+        constexpr ULONG system_module_information = 11;
         const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
-        constexpr const char* function_names[] = { "RtlInitUnicodeString", "NtOpenKey", "NtQueryKey", "NtClose" };
+        constexpr const char* function_names[] = {
+            "NtQuerySystemInformation",
+            "NtAllocateVirtualMemory",
+            "NtFreeVirtualMemory",
+            "RtlInitUnicodeString",
+            "NtOpenKey",
+            "NtQueryKey",
+            "NtClose"
+        };
         void* functions[ARRAYSIZE(function_names)] = {};
         memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(functions[0]);
-        const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[1]);
-        const auto nt_query_key = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, KEY_INFORMATION_CLASS, PVOID, ULONG, PULONG)>(functions[2]);
-        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[3]);
+        using nt_query_system_information_fn = NTSTATUS(__stdcall*)(ULONG SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength);
+        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(
+            HANDLE ProcessHandle,
+            PVOID* BaseAddress,
+            ULONG_PTR ZeroBits,
+            PSIZE_T RegionSize,
+            ULONG AllocationType,
+            ULONG Protect
+        );
+        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE ProcessHandle, PVOID* BaseAddress, PSIZE_T RegionSize, ULONG FreeType);
 
-        if (!rtl_init_unicode_string || !nt_open_key || !nt_query_key || !nt_close) {
+        const auto nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(functions[0]);
+        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[1]);
+        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[2]);
+        const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(functions[3]);
+        const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[4]);
+        const auto nt_query_key = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, KEY_INFORMATION_CLASS, PVOID, ULONG, PULONG)>(functions[5]);
+        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[6]);
+
+        if (nt_query_system_information == nullptr || nt_allocate_virtual_memory == nullptr || nt_free_virtual_memory == nullptr ||
+            rtl_init_unicode_string == nullptr || nt_open_key == nullptr || nt_query_key == nullptr || nt_close == nullptr)
+            return false;
+
+        ULONG ul_size = 0;
+        NTSTATUS status = nt_query_system_information(system_module_information, nullptr, 0, &ul_size);
+        if (status != ((NTSTATUS)0xC0000004L)) return false;
+
+        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
+        PVOID allocated_memory = nullptr;
+        SIZE_T region_size = ul_size;
+        nt_allocate_virtual_memory(current_process, &allocated_memory, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
+        const auto system_module_info_ex = reinterpret_cast<PSYSTEM_MODULE_INFORMATION_EX>(allocated_memory);
+        status = nt_query_system_information(system_module_information, system_module_info_ex, ul_size, &ul_size);
+        if (!(((NTSTATUS)(status)) >= 0)) {
+            region_size = 0;
+            nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
             return false;
         }
+
+        for (ULONG i = 0; i < system_module_info_ex->NumberOfModules; ++i) {
+            const char* driverPath = reinterpret_cast<const char*>(system_module_info_ex->Module[i].ImageName);
+            if (
+                strstr(driverPath, "VBoxGuest") || /* only installed after vbox guest additions */
+                strstr(driverPath, "VBoxMouse") ||
+                strstr(driverPath, "VBoxSF")
+                ) {
+                debug("DRIVERS: Detected VBox driver: ", driverPath);
+                region_size = 0;
+                nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
+                return core::add(brand_enum::VBOX);
+            }
+
+            if (
+                strstr(driverPath, "vmusbmouse") ||
+                strstr(driverPath, "vmmouse") ||
+                strstr(driverPath, "vmmemctl")
+                ) {
+                debug("DRIVERS: Detected VMware driver: ", driverPath);
+                region_size = 0;
+                nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
+                return core::add(brand_enum::VMWARE);
+            }
+        }
+
+        SIZE_T free_size = 0;
+        nt_free_virtual_memory(current_process, &allocated_memory, &free_size, MEM_RELEASE);
 
         /*
          * Targeted GUID for IVSHMEM (Inter-VM Shared Memory).
@@ -10035,7 +10014,11 @@ public:
 
         nt_close(key);
 
-        return number_of_subkeys > 0;
+        if (number_of_subkeys > 0) {
+            return core::add(brand_enum::QEMU);
+        }
+
+        return false;
     }
 
 
@@ -14317,7 +14300,6 @@ public:
             case WSL_PROC: return "WSL_PROC";
             case DRIVERS: return "DRIVERS";
             case DISK_SERIAL: return "DISK_SERIAL";
-            case IVSHMEM: return "IVSHMEM";
             case GPU_CAPABILITIES: return "GPU_CAPABILITIES";
             case HANDLES: return "HANDLES";
             case QEMU_FW_CFG: return "QEMU_FW_CFG";
@@ -14819,7 +14801,6 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::WINE, {100, VM::wine}},
             {VM::DBVM, {150, VM::dbvm}},
             {VM::UD, {100, VM::ud}},
-            {VM::IVSHMEM, {100, VM::ivshmem}},
             {VM::DRIVERS, {100, VM::drivers}},
             {VM::HYPERVISOR_QUERY, {100, VM::hypervisor_query}},
             {VM::HANDLES, {100, VM::device_handles}},
