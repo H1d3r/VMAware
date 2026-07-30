@@ -6365,7 +6365,8 @@ public:
                             a += b; b += a; a += b; b += a; a += b; /* fibonacci dependency so ratio stays constant */
                             b += a; a += b; b += a; a += b; b += a;
                         }
-                        state.counter += (static_cast<unsigned long long>(a) + b);
+                        volatile u32 sink = a + b; /* Prevent dead-code elimination using a local volatile sink */
+                        VMAWARE_UNUSED(sink);
                     }
                     std::atomic_signal_fence(std::memory_order_acq_rel);
                     r_post = *nested_counter_ptr;
@@ -6442,7 +6443,7 @@ public:
         if (check_nested_hypervisors) {
             const double npf_ratio = best_add_l ? (double)best_npf_l / (double)best_add_l : 0;
             debug("TIMER: Memory > VMM -> ", best_npf_l, " | nVMM -> ", best_add_l, " | Ratio -> ", npf_ratio);
-            if (npf_ratio >= 4.0) hypervisor_detected = true;
+            if (npf_ratio >= 3.75) hypervisor_detected = true;
         }
     #endif 
 
