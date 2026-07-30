@@ -162,7 +162,7 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 | <img src="assets/language_icons/rust-logo-512x512.png" width="20"> Rust | [link](https://github.com/MarcelDev/vmaware-rs) | Very good API, well tested, actively maintained | [Marcel](https://github.com/MarcelDev) |
 
 > [!WARNING]
-> Although unofficial ports exists, they are not tried and tested compared to our official ones. Use them at your own risk.
+> Although unofficial ports exists, they are not tested compared to our official ones. Use them at your own risk.
 
 <br>
 
