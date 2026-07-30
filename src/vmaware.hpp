@@ -4479,7 +4479,7 @@ public:
 
             /*
              * 0x40000003 on EBX indicates the flags that a parent partition specified to create a child partition (https://learn.microsoft.com/en-us/virtualization/hyper-v-on-windows/tlfs/datatypes/hv_partition_privilege_mask)
-             * some CPU models like N-models (N4200, etc) expose 0x40000003 leaves without exposing the hypervisor bit
+             * some CPU models like N4200 expose 0x40000003 leaves without exposing the hypervisor bit
              */
             auto is_root_partition = []() noexcept -> bool {
                 u32 ebx, unused = 0;
@@ -4491,16 +4491,13 @@ public:
             /*
              * on Hyper-V virtual machines, the cpuid function reports an EAX value of 11
              * this value is tied to the Hyper-V partition model, where each virtual machine runs as a child partition
-             * these child partitions have limited privileges and access to hypervisor resources, 
-             * which is reflected in the maximum input value for hypervisor CPUID information as 11
              * essentially, it indicates that the hypervisor is managing the VM and that the VM is not running directly on hardware but rather in a virtualized environment
              */
             auto eax = []() noexcept -> u32 {
                 u32 eax_reg, unused = 0;
                 cpu::cpuid(eax_reg, unused, unused, unused, cpu::leaf::hypervisor);
 
-                /* Truncation is intentional */
-                return eax_reg & 0xFF;
+                return eax_reg & 0xFF; /* Truncation is intentional */
             };
 
             /* Check whether a hypervisor is nested within a Hyper-V partition */
@@ -4517,22 +4514,23 @@ public:
                 return guest_level != 0;
             };
 
+            const char* enlightenment_str = cpu::cpu_manufacturer(cpu::leaf::hv_enlightenment);
+            if (enlightenment_str && util::find(enlightenment_str, "KVM")) {
+                debug("HYPER-X: Detected Hyper-V enlightenments");
+                core::add(brand_enum::QEMU_KVM_HYPERV);
+                memo::hyperx::store(HYPERV_ENLIGHTENMENT);
+                return HYPERV_ENLIGHTENMENT;
+            }
+
             hyperx_state state = HYPERV_UNKNOWN;
 
-            if (is_hyperv_nested()) {
+            if (is_hyperv_nested()) {                            
                 debug("HYPER-X: Detected Hyper-V in nested state");
                 state = HYPERV_NESTED_VM;
             }
             else {
                 if (!is_root_partition()) {
-                    const std::string enlightenment_str = cpu::cpu_manufacturer(cpu::leaf::hv_enlightenment);
-
-                    if (util::find(enlightenment_str, "KVM")) {
-                        debug("HYPER-X: Detected Hyper-V enlightenments");
-                        core::add(brand_enum::QEMU_KVM_HYPERV);
-                        state = HYPERV_ENLIGHTENMENT;
-                    }
-                    else if (eax() == 11 && is_hyperv_present()) {
+                    if (eax() == 11 && is_hyperv_present()) {
                         debug("HYPER-X: Detected Hyper-V guest VM");
                         core::add(brand_enum::HYPERV);
                         state = HYPERV_REAL_VM;
@@ -4543,63 +4541,52 @@ public:
                     }
                 }
                 else {
-                    std::string brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor + 0x100);
+                    /* If we reach here, we do some sanity checks to ensure a hypervisor is not trying to spoof itself as Hyper-V, attempting to bypass some detections */
+                    const char* brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
+                #if (x86_64)
+                    u8 idtr_buffer[10] = { 0 };
 
-                    if (util::find(brand_str, "KVM")) {
-                        debug("HYPER-X: Detected Hyper-V enlightenments");
-                        core::add(brand_enum::QEMU_KVM_HYPERV);
-                        state = HYPERV_ENLIGHTENMENT;
-                    }
-                    else {
-                        /* If we reach here, we do some sanity checks to ensure a hypervisor is not trying to spoof itself as Hyper-V, attempting to bypass some detections */
-                        brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
+                    /* Not using SEH here on purpose, and doesn't matter in what CPU core this runs on */
+                    #if (CLANG || GCC)
+                        __asm__ volatile("sidt %0" : "=m"(idtr_buffer));
+                    #elif (MSVC)
+                        #pragma pack(push, 1)
+                        struct {
+                            USHORT Limit;
+                            ULONG_PTR Base;
+                        } idtr = { 0 };
+                        #pragma pack(pop)       
+                        __sidt(&idtr);
 
-                    #if (x86_64)
-                        u8 idtr_buffer[10] = { 0 };
-
-                        /* We know we're not using SEH here, it's on purpose, and doesn't matter in what CPU core this runs on */
-                        #if (CLANG || GCC)
-                            __asm__ volatile("sidt %0" : "=m"(idtr_buffer));
-                        #elif (MSVC)
-                            #pragma pack(push, 1)
-                                struct {
-                                    USHORT Limit;
-                                    ULONG_PTR Base;
-                                } idtr = { 0 };
-                            #pragma pack(pop)       
-                            __sidt(&idtr);
-
-                            volatile u8* idtr_ptr = (volatile u8*)&idtr;
-                            for (size_t j = 0; j < sizeof(idtr); ++j) {
-                                idtr_buffer[j] = idtr_ptr[j];
-                            }
-                        #endif
-
-                        ULONG_PTR idt_base = 0;
-                        memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
-
-                        /* If running under Hyper-V in AMD64 (doesnt matter the VTL/partition level), the returned IDT base is emulated at KiOp_SGDTSIDT to prevent kernel address leakage */
-                        const bool is_hyper_v_host = (idt_base == 0xfffff80000001000) && (brand_str == "Microsoft Hv");
-                    #else
-                        const bool is_hyper_v_host = (brand_str == "Microsoft Hv");
+                        volatile u8* idtr_ptr = (volatile u8*)&idtr;
+                        for (size_t j = 0; j < sizeof(idtr); ++j) {
+                            idtr_buffer[j] = idtr_ptr[j];
+                        }
                     #endif
 
-                        if (is_hyper_v_host) {
-                            debug("HYPER-X: Detected Hyper-V host machine");
-                            core::add(brand_enum::HYPERV_ROOT);
-                            state = HYPERV_HOST;
-                        }
-                        else {
-                            debug("HYPER-X: Detected hypervisor trying to spoof itself as Hyper-V");
-                            core::add(brand_enum::NULL_BRAND, 150);
-                            state = HYPERV_SPOOFED;
-                        }
+                    ULONG_PTR idt_base = 0;
+                    memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
+
+                    /* If running under Hyper-V in AMD64 (doesnt matter the VTL/partition level), the returned IDT base is emulated at KiOp_SGDTSIDT to prevent kernel address leakage */
+                    const bool is_hyper_v_host = (idt_base == 0xfffff80000001000) && (enlightenment_str && strcmp(brand_str, "Microsoft Hv") == 0);
+                #else
+                    const bool is_hyper_v_host = (enlightenment_str && strcmp(brand_str, "Microsoft Hv") == 0);
+                #endif
+
+                    if (is_hyper_v_host) {
+                        debug("HYPER-X: Detected Hyper-V host machine");
+                        core::add(brand_enum::HYPERV_ROOT);
+                        state = HYPERV_HOST;
                     }
+                    else {
+                        debug("HYPER-X: Detected hypervisor trying to spoof itself as Hyper-V");
+                        core::add(brand_enum::NULL_BRAND, 150);
+                        state = HYPERV_SPOOFED;
+                    }               
                 }
             }
 
             memo::hyperx::store(state);
-
             return state;
         #endif
         }
