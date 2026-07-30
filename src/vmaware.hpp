@@ -8042,6 +8042,57 @@ public:
                 }
             }
 
+            /* 5) DMA Remapping table validation */
+            if (memcmp(header.signature, "DMAR", 4) == 0) {
+                size_t offset = 48; /* Subtables start at offset 48 (0x30) */
+                while (offset + 4 <= buffer_len) {
+                    u16 subtable_type = 0;
+                    u16 subtable_len = 0;
+                    memcpy(&subtable_type, buffer + offset, sizeof(u16));
+                    memcpy(&subtable_len, buffer + offset + 2, sizeof(u16));
+
+                    if (subtable_len < 4 || offset + subtable_len > buffer_len) {
+                        break;
+                    }
+
+                    /* Subtable type 0x0000 is DRHD(Hardware Unit Definition) */
+                    if (subtable_type == 0x0000 && subtable_len >= 16) {
+                        size_t scope_offset = offset + 16;
+                        const size_t scope_end = offset + subtable_len;
+
+                        while (scope_offset + 6 <= scope_end) {
+                            const u8 scope_type = buffer[scope_offset];
+                            const u8 scope_len = buffer[scope_offset + 1];
+
+                            if (scope_len < 6 || scope_offset + scope_len > scope_end) {
+                                break;
+                            }
+
+                            const u8 bus_num = buffer[scope_offset + 5];
+
+                            /* QEMU / KVM maps the virtual IOAPIC to Bus 0xFF */
+                            if (scope_type == 0x03 && bus_num == 0xFF) {
+                                debug("FIRMWARE: DMAR IOAPIC mapped to invalid bus 0xFF (QEMU signature)");
+                                return core::add(brand_enum::QEMU);
+                            }
+
+                            /* Declaring Device 2 as a PCI Bridge(Type 02) is a topology conflict on Intel which reserves this for IGD */
+                            if (scope_type == 0x02 && scope_len >= 8 && bus_num == 0x00) { /* PCI Bridge Device */
+                                const u8 dev_num = buffer[scope_offset + 6];
+                                const u8 func_num = buffer[scope_offset + 7];
+                                if (dev_num == 0x02 && func_num == 0x00) {
+                                    debug("FIRMWARE: DMAR PCI Bridge on invalid Device 0x02 (QEMU root port signature)");
+                                    return core::add(brand_enum::QEMU);
+                                }
+                            }
+
+                            scope_offset += scope_len;
+                        }
+                    }
+                    offset += subtable_len;
+                }
+            }
+
             return false;
         };
 
