@@ -5945,10 +5945,11 @@ public:
      * @category Windows, x86
      * @implements VM::TIMER
      */
+    [[nodiscard]] static bool timer() 
     #if ((CLANG || GCC))
-        __attribute__((__target__("serialize")))
+            __attribute__((__target__("serialize")))
     #endif
-    [[nodiscard]] static bool timer() {
+    {
     #if (x86 && WINDOWS)
         using timer = struct timer;
 
