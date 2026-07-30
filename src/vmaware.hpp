@@ -9957,65 +9957,66 @@ public:
         nt_free_virtual_memory(current_process, &allocated_memory, &free_size, MEM_RELEASE);
 
         /*
-         * Targeted GUID for IVSHMEM (Inter-VM Shared Memory).
-         * This device is typically used in KVM/QEMU environments (like Looking Glass) to pass memory between host and guest
+         * Targeted GUIDs:
+         * 1. IVSHMEM (Inter-VM Shared Memory). Typically used in KVM/QEMU environments (like Looking Glass) to pass memory between host and guest.
+         * 2. Looking Glass Indirect Display Driver (LGIdd).
          */
-        constexpr GUID GUID_IVSHMEM_IFACE =
-        { 0xdf576976, 0x569d, 0x4672, { 0x95, 0xa0, 0xf5, 0x7e, 0x4e, 0xa0, 0xb2, 0x10 } };
+        constexpr GUID TARGETED_GUIDS[] = {
+            { 0xdf576976, 0x569d, 0x4672, { 0x95, 0xa0, 0xf5, 0x7e, 0x4e, 0xa0, 0xb2, 0x10 } },
+            { 0x997b0b66, 0xb74c, 0x4017, { 0x9a, 0x89, 0xe4, 0xaa, 0xd4, 0x1d, 0x37, 0x80 } }
+        };
 
-        /*
-         * Construct the registry path for the DeviceClasses key
-         * We access the "DeviceClasses" registry hive directly to find hardware interfaces
-         */
-        wchar_t interface_class_path[256];
-        swprintf_s(
-            interface_class_path,
-            ARRAYSIZE(interface_class_path),
-            L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\DeviceClasses\\{%08lX-%04hX-%04hX-%02hhX%02hhX-%02hhX%02hhX%02hhX%02hhX%02hhX%02hhX}",
-            GUID_IVSHMEM_IFACE.Data1, GUID_IVSHMEM_IFACE.Data2, GUID_IVSHMEM_IFACE.Data3,
-            GUID_IVSHMEM_IFACE.Data4[0], GUID_IVSHMEM_IFACE.Data4[1], GUID_IVSHMEM_IFACE.Data4[2],
-            GUID_IVSHMEM_IFACE.Data4[3], GUID_IVSHMEM_IFACE.Data4[4], GUID_IVSHMEM_IFACE.Data4[5],
-            GUID_IVSHMEM_IFACE.Data4[6], GUID_IVSHMEM_IFACE.Data4[7]
-        );
+        for (const auto& guid : TARGETED_GUIDS) {
+            /*
+             * Construct the registry path for the DeviceClasses key
+             * We access the "DeviceClasses" registry hive directly to find hardware interfaces
+             */
+            wchar_t interface_class_path[256];
+            swprintf_s(
+                interface_class_path,
+                ARRAYSIZE(interface_class_path),
+                L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\DeviceClasses\\{%08lX-%04hX-%04hX-%02hhX%02hhX-%02hhX%02hhX%02hhX%02hhX%02hhX%02hhX}",
+                guid.Data1, guid.Data2, guid.Data3,
+                guid.Data4[0], guid.Data4[1], guid.Data4[2],
+                guid.Data4[3], guid.Data4[4], guid.Data4[5],
+                guid.Data4[6], guid.Data4[7]
+            );
 
-        UNICODE_STRING unicode_path;
-        rtl_init_unicode_string(&unicode_path, interface_class_path);
+            UNICODE_STRING unicode_path;
+            rtl_init_unicode_string(&unicode_path, interface_class_path);
 
-        OBJECT_ATTRIBUTES object_attributes;
-        RtlZeroMemory(&object_attributes, sizeof(object_attributes));
-        object_attributes.Length = sizeof(object_attributes);
-        object_attributes.ObjectName = &unicode_path;
-        object_attributes.Attributes = OBJ_CASE_INSENSITIVE;
+            OBJECT_ATTRIBUTES object_attributes;
+            RtlZeroMemory(&object_attributes, sizeof(object_attributes));
+            object_attributes.Length = sizeof(object_attributes);
+            object_attributes.ObjectName = &unicode_path;
+            object_attributes.Attributes = OBJ_CASE_INSENSITIVE;
 
-        HANDLE key = nullptr;
-        NTSTATUS st = nt_open_key(&key, KEY_READ, &object_attributes);
-        if (!NT_SUCCESS(st) || key == nullptr) {
-            return false;
-        }
+            HANDLE key = nullptr;
+            NTSTATUS st = nt_open_key(&key, KEY_READ, &object_attributes);
+            if (!NT_SUCCESS(st) || key == nullptr) {
+                continue;
+            }
 
-        /*
-         * We query the "Full Information" of the key to get the count of subkeys
-         * The existence of the class key alone isn't enough cuz Windows might register the class but have no devices
-         * If SubKeys > 0, it means actual device instances (for ex. PCI devices) are registered under this interface
-         */
-        BYTE info_buffer[512] = {};
-        ULONG returned_len = 0;
-        st = nt_query_key(key, KeyFullInformation, info_buffer, sizeof(info_buffer), &returned_len);
+            /*
+             * We query the "Full Information" of the key to get the count of subkeys
+             * The existence of the class key alone isn't enough cuz Windows might register the class but have no devices
+             * If SubKeys > 0, it means actual device instances (for ex. PCI devices) are registered under this interface
+             */
+            BYTE info_buffer[512] = {};
+            ULONG returned_len = 0;
+            st = nt_query_key(key, KeyFullInformation, info_buffer, sizeof(info_buffer), &returned_len);
 
-        DWORD number_of_subkeys = 0;
-        if (NT_SUCCESS(st) && returned_len >= sizeof(KEY_FULL_INFORMATION)) {
-            auto* kfi = reinterpret_cast<KEY_FULL_INFORMATION*>(info_buffer);
-            number_of_subkeys = static_cast<DWORD>(kfi->SubKeys);
-        }
-        else {
+            DWORD number_of_subkeys = 0;
+            if (NT_SUCCESS(st) && returned_len >= sizeof(KEY_FULL_INFORMATION)) {
+                auto* kfi = reinterpret_cast<KEY_FULL_INFORMATION*>(info_buffer);
+                number_of_subkeys = static_cast<DWORD>(kfi->SubKeys);
+            }
+
             nt_close(key);
-            return false;
-        }
 
-        nt_close(key);
-
-        if (number_of_subkeys > 0) {
-            return core::add(brand_enum::QEMU);
+            if (number_of_subkeys > 0) {
+                return core::add(brand_enum::QEMU);
+            }
         }
 
         return false;
