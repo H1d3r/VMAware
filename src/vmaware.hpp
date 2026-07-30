@@ -4517,56 +4517,6 @@ public:
                 return guest_level != 0;
             };
 
-            /* Check if the HAL path HalpInitializeErrSrc -> HalpInitializeMce -> HalpMceInit -> HalpHvInitMcaPcrContext is initializing machine-check/WHEA state in a hypervisor-aware context */
-            auto is_halh_present = []() noexcept -> bool {
-                const HMODULE ntdll = memory::get_ntdll();
-                if (!ntdll) return true;
-
-                constexpr const char* function_names[] = {
-                    "NtQuerySystemInformation"
-                };
-                void* functions[ARRAYSIZE(function_names)] = {};
-                memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
-                using nt_query_sysinfo_fn = NTSTATUS(__stdcall*)(ULONG, PVOID, ULONG, PULONG);
-                nt_query_sysinfo_fn nt_query_system_information = reinterpret_cast<nt_query_sysinfo_fn>(functions[0]);
-                if (!nt_query_system_information) return false;
-
-                struct entry_struct { ULONG Tag; ULONG PA; ULONG PF; SIZE_T PU; ULONG NPA; ULONG NPF; SIZE_T NPU; };
-                struct info_struct { ULONG Count; entry_struct TagInfo[1]; };
-
-                ULONG size = 1024 * 1024;
-                HANDLE heap = GetProcessHeap();
-                PVOID buffer = HeapAlloc(heap, 0, size);
-                if (!buffer) return true;
-
-                ULONG needed = 0;
-                while (nt_query_system_information(0x16, buffer, size, &needed) == static_cast<NTSTATUS>(0xC0000004L)) {
-                    size = needed + 4096;
-                    if (PVOID new_buffer = HeapReAlloc(heap, 0, buffer, size)) {
-                        buffer = new_buffer;
-                    }
-                    else {
-                        HeapFree(heap, 0, buffer);
-                        return true;
-                    }
-                }
-
-                bool found = false;
-                const auto* info = static_cast<info_struct*>(buffer);
-                if (info) {
-                    for (ULONG i = 0; i < info->Count; ++i) {
-                        if (info->TagInfo[i].Tag == 0x486C6148) { /* HalH */
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-
-                HeapFree(heap, 0, buffer);
-                return found;
-            };
-
             hyperx_state state = HYPERV_UNKNOWN;
 
             if (is_hyperv_nested()) {
@@ -4634,7 +4584,7 @@ public:
                         const bool is_hyper_v_host = (brand_str == "Microsoft Hv");
                     #endif
 
-                        if (is_hyper_v_host && is_halh_present()) {
+                        if (is_hyper_v_host) {
                             debug("HYPER-X: Detected Hyper-V host machine");
                             core::add(brand_enum::HYPERV_ROOT);
                             state = HYPERV_HOST;
