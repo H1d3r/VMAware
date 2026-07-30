@@ -8043,6 +8043,39 @@ public:
                 }
             }
 
+            /* 6) APIC/MADT table validation */
+            if (memcmp(header.signature, "APIC", 4) == 0) {
+                size_t offset = 44; /* MADT subtables start at offset 44 (0x2C) */
+                size_t qemu_override_count = 0;
+
+                while (offset + 2 <= buffer_len) {
+                    const u8 subtable_type = buffer[offset];
+                    const u8 subtable_len = buffer[offset + 1];
+
+                    if (subtable_len < 2 || offset + subtable_len > buffer_len) {
+                        break;
+                    }
+
+                    /* Subtable type 0x02 is Interrupt Source Override */
+                    if (subtable_type == 0x02 && subtable_len == 10) {
+                        const u8 source = buffer[offset + 3];
+                        u16 flags = 0;
+                        memcpy(&flags, buffer + offset + 8, sizeof(u16));
+
+                        /* QEMU default configuration overrides IRQs 5, 9, 10, 11 to Active High, Level Triggered (Flags: 0x000D) */
+                        if ((source == 5 || source == 9 || source == 10 || source == 11) && flags == 0x000D) {
+                            qemu_override_count++;
+                        }
+                    }
+                    offset += subtable_len;
+                }
+
+                if (qemu_override_count >= 4) {
+                    debug("FIRMWARE: APIC table contains QEMU-specific Interrupt Source Overrides");
+                    return core::add(brand_enum::QEMU);
+                }
+            }
+
             return false;
         };
 
