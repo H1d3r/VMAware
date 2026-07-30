@@ -752,7 +752,6 @@ public:
         AZURE_HYPERV,
         SIMPLEVISOR,
         HYPERV_ROOT,
-        HYPERV_SPOOF,
         UML,
         POWERVM,
         GCE,
@@ -4644,7 +4643,7 @@ public:
                         }
                         else {
                             debug("HYPER-X: Detected hypervisor trying to spoof itself as Hyper-V");
-                            core::add(brand_enum::HYPERV_SPOOF, 150);
+                            core::add(brand_enum::NULL_BRAND, 150);
                             state = HYPERV_SPOOFED;
                         }
                     }
@@ -4934,7 +4933,6 @@ public:
         static constexpr const char* AZURE_HYPERV = "Microsoft Azure Hyper-V";
         static constexpr const char* SIMPLEVISOR = "SimpleVisor";
         static constexpr const char* HYPERV_ROOT = "Hyper-V root partition (host system)";
-        static constexpr const char* HYPERV_SPOOF = "Impersonated Microsoft Hyper-V";
         static constexpr const char* UML = "User-mode Linux";
         static constexpr const char* POWERVM = "IBM PowerVM";
         static constexpr const char* GCE = "Google Compute Engine (KVM)";
@@ -5175,7 +5173,6 @@ public:
                 case brand_enum::AZURE_HYPERV: return VM::brands::AZURE_HYPERV;
                 case brand_enum::SIMPLEVISOR: return VM::brands::SIMPLEVISOR;
                 case brand_enum::HYPERV_ROOT: return VM::brands::HYPERV_ROOT;
-                case brand_enum::HYPERV_SPOOF: return VM::brands::HYPERV_SPOOF;
                 case brand_enum::UML: return VM::brands::UML;
                 case brand_enum::POWERVM: return VM::brands::POWERVM;
                 case brand_enum::GCE: return VM::brands::GCE;
@@ -5947,7 +5944,7 @@ public:
      */
     [[nodiscard]] static bool timer() 
     #if ((CLANG || GCC))
-            __attribute__((__target__("serialize")))
+        __attribute__((__target__("serialize")))
     #endif
     {
     #if (x86 && WINDOWS)
@@ -6018,7 +6015,7 @@ public:
         SetThreadPriority(current_thread, THREAD_PRIORITY_HIGHEST);
         SetThreadPriorityBoost(current_thread, TRUE); /* disable dynamic thread priority adjustments by Windows, not turbo boosts by the hardware itself */
 
-        const u32 ct_seed = timer::config::get_seed();
+        VMAWARE_CONSTEXPR const u32 ct_seed = timer::config::get_seed();
         const size_t batch_size = timer::config::generate_batch_size(ct_seed);
 
         std::vector<timer::timer_tick_t> vm_samples(batch_size), ref_samples(batch_size); /* pre page-fault MMU, we won't warm-up cpuid samples for the P-states intentionally */
@@ -14529,7 +14526,6 @@ public:
             case brand_enum::HYPERPLATFORM: return "Hypervisor (type 1)";
             case brand_enum::MINIVISOR: return "Hypervisor (type 1)";
             case brand_enum::HYPERV_ROOT: return "Host machine"; /* this refers to the type 1 hypervisor where Windows normally runs under, we put "Host machine" to clarify you're not running under a traditional VM if this is detected */
-            case brand_enum::HYPERV_SPOOF: return "Unknown"; /* this refers to any hypervisor trying to disguise itself as a legitimate Hyper-V instance */
             case brand_enum::NULL_BRAND: return "Unknown";
             case brand_enum::INVALID: return "Invalid";
         }
