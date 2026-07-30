@@ -4,7 +4,6 @@
    <img src="https://img.shields.io/github/actions/workflow/status/NotRequiem/VMAware/build_infrastructure.yml">
    <img src="https://img.shields.io/github/downloads/NotRequiem/VMAware/total">
    <img src="https://img.shields.io/badge/License-MIT-yellow.svg">
-   <a href="https://deepwiki.com/NotRequiem/VMAware"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
    <br><br>
    <b>VMAware</b> (VM + Aware) — это кроссплатформенный C++ фреймворк для обнаружения виртуальных машин.
    <br><br>
@@ -150,11 +149,9 @@ endif()
 
 ## Документация и обзор кода 📒
 
-Полная документация доступна [здесь](docs/documentation.md). Все детали: функции, техники, настройки и примеры. Поверьте, это не так страшно ;)
+Полная документация доступна [здесь](docs/documentation.md). 
 
-Об архитектуре и дизайне библиотеки можно узнать на https://deepwiki.com/NotRequiem/VMAware.
-
-Информация в DeepWiki или других неофициальных источниках может быть неточной.
+Все детали: функции, техники, настройки и примеры. Поверьте, это не так страшно ;)
 
 <br>
 

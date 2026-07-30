@@ -4,7 +4,6 @@
    <img src="https://img.shields.io/github/actions/workflow/status/NotRequiem/VMAware/build_infrastructure.yml">
    <img src="https://img.shields.io/github/downloads/NotRequiem/VMAware/total">
    <img src="https://img.shields.io/badge/License-MIT-yellow.svg">
-   <a href="https://deepwiki.com/NotRequiem/VMAware"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
    <br><br>
    <b>VMAware</b> (VM + Aware) is a cross-platform C++ framework for virtual machine detection.
    <br><br>
@@ -142,11 +141,9 @@ The module file and function version is located [here](auxiliary/vmaware_downloa
 <br>
 
 ## Documentation and code overview 📒
-You can view the full docs [here](docs/documentation.md). All the details such as functions, techniques, settings, and examples are provided. Trust me, it's not too intimidating ;)
+You can view the full docs [here](docs/documentation.md). 
 
-If you want to have a general concept of our architecture, head over to https://deepwiki.com/NotRequiem/VMAware.
-
-Information described in DeepWiki or other non official sources may not be accurate.
+All the details such as functions, techniques, settings, and examples are provided. Trust me, it's not too intimidating ;)
 
 <br>
 

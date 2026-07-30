@@ -4,7 +4,6 @@
    <img src="https://img.shields.io/github/actions/workflow/status/NotRequiem/VMAware/build_infrastructure.yml">
    <img src="https://img.shields.io/github/downloads/NotRequiem/VMAware/total">
    <img src="https://img.shields.io/badge/License-MIT-yellow.svg">
-   <a href="https://deepwiki.com/NotRequiem/VMAware"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
    <br><br>
    <b>VMAware</b> (VM + Aware) 是一个跨平台的C++虚拟机检测库。
    <br><br>
@@ -148,9 +147,9 @@ endif()
 
 ## 文档与代码概述 📒
 
-您可在 [docs/documentation.md](docs/documentation.md) 查看完整文档 。其中详尽列出了所有细节，包括功能、技术、设置及示例。相信我，内容并不复杂
+您可在 [docs/documentation.md](docs/documentation.md) 查看完整文档 。
 
-若想了解本库的架构与设计，请访问 [DeepWiki - VMAware](https://deepwiki.com/NotRequiem/VMAware)
+其中详尽列出了所有细节，包括功能、技术、设置及示例。相信我，内容并不复杂
 
 <br>
 

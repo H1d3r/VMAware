@@ -5,7 +5,6 @@
    <img src="https://img.shields.io/github/actions/workflow/status/NotRequiem/VMAware/build_infrastructure.yml">
    <img src="https://img.shields.io/github/downloads/NotRequiem/VMAware/total">
    <img src="https://img.shields.io/badge/License-MIT-yellow.svg">
-   <a href="https://deepwiki.com/NotRequiem/VMAware"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
    <b>VMAware</b> (VM + Aware)는 가상 머신 탐지를 위한 크로스 플랫폼 C++ 라이브러리 입니다.
    <br><br>
    <a href="README.md">English 🇬🇧</a> | <a href="README_CN.md">中文 🇨🇳</a> | <a href="README_FR.md">Français 🇫🇷</a>
@@ -144,9 +143,9 @@ endif()
 <br>
 
 ## 문서 및 코드 개요 📒
-전체 문서는 [이곳](docs/documentation.md) 에서 확인하실 수 있습니다. 함수, 기술, 설정, 예시가 포함되어 있습니다. 복잡하지 않아요! ;)
+전체 문서는 [이곳](docs/documentation.md) 에서 확인하실 수 있습니다. 
 
-이 라이브러리의 아키텍처 및 디자인에 대해 상세히 알고싶으시면, https://deepwiki.com/NotRequiem/VMAware 을 방문하세요
+함수, 기술, 설정, 예시가 포함되어 있습니다. 복잡하지 않아요! ;)
 
 <br>
 
