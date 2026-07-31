@@ -4406,70 +4406,79 @@ public:
 
 
         [[nodiscard]] static bool is_x86_process_on_arm() {
-        #if (WINDOWS)
-            const char* brand = cpu::get_brand();
-            if (brand && strstr(brand, "Virtual CPU")) {
-                return true;
-            }
-        #endif
-
-        #if (WINDOWS && _WIN32_WINNT >= _WIN32_WINNT_WIN10)
-            const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-            USHORT proc_machine = 0, native_machine = 0;
-
-            const auto is_wow64_process_2 = &IsWow64Process2;
-            if (is_wow64_process_2(current_process, &proc_machine, &native_machine)) {
-                const bool translated =
-                    (native_machine == IMAGE_FILE_MACHINE_ARM64 && (proc_machine == IMAGE_FILE_MACHINE_AMD64 || proc_machine == IMAGE_FILE_MACHINE_I386)) 
-                    ||
-                    (native_machine == IMAGE_FILE_MACHINE_ARMNT && proc_machine == IMAGE_FILE_MACHINE_I386);
-
-                if (translated) {
+            static const bool cached = []() -> bool {
+            #if (WINDOWS)
+                if (const char* brand = cpu::get_brand();
+                    brand && strstr(brand, "Virtual CPU")) {
                     return true;
                 }
-            }
+            #endif
 
-            /* Fallback */
-            if (native_machine == IMAGE_FILE_MACHINE_ARM64 || native_machine == IMAGE_FILE_MACHINE_ARMNT) {
-                using get_process_information_fn = BOOL(__stdcall*)(HANDLE, PROCESS_INFORMATION_CLASS, PVOID, DWORD);
-                const HMODULE ntdll = memory::get_ntdll();
-                if (ntdll == nullptr) {
-                    return false;
+            #if (WINDOWS && _WIN32_WINNT >= _WIN32_WINNT_WIN10)
+                const HANDLE current_process = reinterpret_cast<HANDLE>(-1);
+
+                USHORT proc_machine = 0;
+                USHORT native_machine = 0;
+
+                if (IsWow64Process2(current_process, &proc_machine, &native_machine)) {
+                    if ((native_machine == IMAGE_FILE_MACHINE_ARM64 &&
+                        (proc_machine == IMAGE_FILE_MACHINE_AMD64 ||
+                            proc_machine == IMAGE_FILE_MACHINE_I386)) ||
+                        (native_machine == IMAGE_FILE_MACHINE_ARMNT &&
+                            proc_machine == IMAGE_FILE_MACHINE_I386)) {
+                        return true;
+                    }
                 }
 
-                constexpr const char* function_names[] = { "GetProcessInformation" };
-                void* functions[ARRAYSIZE(function_names)] = {};
-                memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+                if (native_machine == IMAGE_FILE_MACHINE_ARM64 ||
+                    native_machine == IMAGE_FILE_MACHINE_ARMNT) {
 
-                auto get_proc_info = reinterpret_cast<get_process_information_fn>(functions[0]);
-                if (get_proc_info) {
-                    struct PROCESS_MACHINE_INFORMATION {
-                        USHORT ProcessMachine;
-                        USHORT Res0;
-                        DWORD  MachineAttributes;
-                    } pmInfo = {};
+                    using get_process_information_fn =
+                        BOOL(__stdcall*)(HANDLE, PROCESS_INFORMATION_CLASS, PVOID, DWORD);
 
-                    constexpr auto process_machine_type_info = static_cast<PROCESS_INFORMATION_CLASS>(9);
-                    if (get_proc_info(current_process, process_machine_type_info, &pmInfo, sizeof(pmInfo))) {
-                        if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386 || (native_machine == IMAGE_FILE_MACHINE_ARM64 && pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)) {
-                            return true;
+                    if (HMODULE ntdll = memory::get_ntdll()) {
+                        constexpr const char* names[] = { "GetProcessInformation" };
+                        void* funcs[1] = {};
+                        memory::get_function_address(ntdll, names, funcs, 1);
+
+                        if (auto get_proc_info =
+                            reinterpret_cast<get_process_information_fn>(funcs[0])) {
+
+                            struct PROCESS_MACHINE_INFORMATION {
+                                USHORT ProcessMachine;
+                                USHORT Res0;
+                                DWORD MachineAttributes;
+                            } pmInfo{};
+
+                            constexpr auto process_machine_type_info =
+                                static_cast<PROCESS_INFORMATION_CLASS>(9);
+
+                            if (get_proc_info(current_process,
+                                process_machine_type_info,
+                                &pmInfo,
+                                sizeof(pmInfo))) {
+                                if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386 ||
+                                    (native_machine == IMAGE_FILE_MACHINE_ARM64 &&
+                                        pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)) {
+                                    return true;
+                                }
+                            }
                         }
                     }
                 }
-            }
-        #endif
+            #endif
 
-            if (cpu::is_leaf_supported(cpu::leaf::hypervisor)) {
-                const std::string vendor = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
+                if (cpu::is_leaf_supported(cpu::leaf::hypervisor)) {
+                    const std::string vendor = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
 
-                if (vendor == "VirtualApple" ||   /* Apple Rosetta */
-                    vendor == "PowerVM Lx86")     /* IBM PowerVM Lx86 */
-                {
-                    return true;
+                    return vendor == "VirtualApple" ||
+                        vendor == "PowerVM Lx86";
                 }
-            }
 
-            return false;
+                return false;
+            }();
+
+            return cached;
         }
 
 
@@ -5909,8 +5918,6 @@ public:
     #endif
     {
     #if (x86 && WINDOWS)
-        using timer = struct timer;
-
         if (util::is_x86_process_on_arm()) {
             debug("TIMER: Running inside a binary translation layer");
             return false;
@@ -7545,6 +7552,10 @@ public:
      * 
      */
     [[nodiscard]] static bool system_registers() {
+        if (util::is_x86_process_on_arm()) {
+            return false;
+        }
+
         /*
          * Even though SMSW queries a status register (CR0), it is historically grouped with descriptor table checks in virtualization detection
          * (often called "Red Pill" techniques)
@@ -9596,6 +9607,10 @@ public:
      * @implements VM::VPC_INVALID
      */
     [[nodiscard]] static bool vpc_invalid() {
+        if (util::is_x86_process_on_arm()) {
+            return false;
+        }
+
         bool rc = false;
     #if (x86_32 && !CLANG)
 
@@ -9636,6 +9651,7 @@ public:
             rc = false;
         }
     #endif
+
         return rc;
     }
 
@@ -9647,6 +9663,10 @@ public:
      * @implements VM::VMWARE_STR
      */
     [[nodiscard]] static bool vmware_str() {
+        if (util::is_x86_process_on_arm()) {
+            return false;
+        }
+
     #if (x86_32)
         u16 tr = 0;
         __asm {
@@ -10589,6 +10609,10 @@ public:
      * @implements VM::TRAP
      */
     [[nodiscard]] static bool trap() {
+        if (util::is_x86_process_on_arm()) {
+            return false;
+        }
+
         bool hypervisor_caught = false;
     #if (x86_64)
         /*
@@ -10832,6 +10856,10 @@ public:
     #if (!x86_64)
         return false;
     #else
+        if (util::is_x86_process_on_arm()) {
+            return false;
+        }
+
         constexpr u32 PW2 = 0xFEDCBA98U;
 
         struct vmcall_info {
@@ -12214,6 +12242,10 @@ public:
     #if (!x86)
         return false;
     #else
+        if (util::is_x86_process_on_arm()) {
+            return false;
+        }
+
         constexpr u32 random_msr = 0xDEADBEEFu;
 
         auto try_read = [](u32 msr_index) noexcept -> bool {
@@ -12279,6 +12311,10 @@ public:
     #if (!x86)
         return false;
     #else
+        if (util::is_x86_process_on_arm()) {
+            return false;
+        }
+
         const void* stubs[2] = { vmcall_stub, vmmcall_stub };
         bool is_kvm_detected = false;
         bool generic_hypervisor = false;
@@ -12630,6 +12666,9 @@ public:
         if (util::hyper_x() == HYPERV_HOST) {
             return false;
         }
+        if (util::is_x86_process_on_arm()) {
+            return false;
+        }
 
         bool is_vm = true;
         DWORD exc_code = 0;
@@ -12827,6 +12866,9 @@ public:
         }
 
         if (util::hyper_x() == HYPERV_HOST) {
+            return false;
+        }
+        if (util::is_x86_process_on_arm()) {
             return false;
         }
 
