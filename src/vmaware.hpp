@@ -4408,8 +4408,8 @@ public:
         [[nodiscard]] static bool is_x86_process_on_arm() {
             static const bool cached = []() -> bool {
             #if (WINDOWS)
-                if (const char* brand = cpu::get_brand();
-                    brand && strstr(brand, "Virtual CPU")) {
+                const char* brand = cpu::get_brand();
+                if (brand && strstr(brand, "Virtual CPU")) {
                     return true;
                 }
             #endif
