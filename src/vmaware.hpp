@@ -3609,7 +3609,7 @@ public:
                     return 0ull;
                 }
 
-                debug("TIMER: Measurement thread designated CPU -> ", best_logical, " | Counter thread designated CPU -> ", counter_logical);
+                debug("TIMER: Measurement thread -> CPU ", best_logical, " | Counter thread -> CPU ", counter_logical);
                 return 1ull << best_logical;
             }
         };
@@ -6140,7 +6140,7 @@ public:
         SleepEx(0, FALSE); 
 
         /* Independent multi-trial state initialization */
-        constexpr int trials = 3;
+        constexpr int trials = 5;
         const size_t local_max_attempts = batch_size * trials;
         timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
         timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
