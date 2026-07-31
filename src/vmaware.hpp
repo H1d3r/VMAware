@@ -5063,78 +5063,79 @@ public:
 
         static VMAWARE_CONSTEXPR const char* brand_enum_to_string(const brand_enum brand) noexcept {
             switch (brand) {
-                case brand_enum::INVALID: return "Invalid";
-                case brand_enum::VBOX: return VM::brands::VBOX;
-                case brand_enum::VMWARE: return VM::brands::VMWARE;
-                case brand_enum::VMWARE_EXPRESS: return VM::brands::VMWARE_EXPRESS;
-                case brand_enum::VMWARE_ESX: return VM::brands::VMWARE_ESX;
-                case brand_enum::VMWARE_GSX: return VM::brands::VMWARE_GSX;
-                case brand_enum::VMWARE_WORKSTATION: return VM::brands::VMWARE_WORKSTATION;
-                case brand_enum::VMWARE_FUSION: return VM::brands::VMWARE_FUSION;
-                case brand_enum::VMWARE_HARD: return VM::brands::VMWARE_HARD;
-                case brand_enum::BHYVE: return VM::brands::BHYVE;
-                case brand_enum::KVM: return VM::brands::KVM;
-                case brand_enum::QEMU: return VM::brands::QEMU;
-                case brand_enum::QEMU_KVM: return VM::brands::QEMU_KVM;
-                case brand_enum::KVM_HYPERV: return VM::brands::KVM_HYPERV;
-                case brand_enum::QEMU_KVM_HYPERV: return VM::brands::QEMU_KVM_HYPERV;
-                case brand_enum::HYPERV: return VM::brands::HYPERV;
-                case brand_enum::HYPERV_VPC: return VM::brands::HYPERV_VPC;
-                case brand_enum::PARALLELS: return VM::brands::PARALLELS;
-                case brand_enum::XEN: return VM::brands::XEN;
-                case brand_enum::ACRN: return VM::brands::ACRN;
-                case brand_enum::QNX: return VM::brands::QNX;
-                case brand_enum::HYBRID: return VM::brands::HYBRID;
-                case brand_enum::SANDBOXIE: return VM::brands::SANDBOXIE;
-                case brand_enum::DOCKER: return VM::brands::DOCKER;
-                case brand_enum::WINE: return VM::brands::WINE;
-                case brand_enum::VPC: return VM::brands::VPC;
-                case brand_enum::ANUBIS: return VM::brands::ANUBIS;
-                case brand_enum::JOEBOX: return VM::brands::JOEBOX;
-                case brand_enum::THREATEXPERT: return VM::brands::THREATEXPERT;
-                case brand_enum::CWSANDBOX: return VM::brands::CWSANDBOX;
-                case brand_enum::COMODO: return VM::brands::COMODO;
-                case brand_enum::BOCHS: return VM::brands::BOCHS;
-                case brand_enum::NVMM: return VM::brands::NVMM;
-                case brand_enum::BSD_VMM: return VM::brands::BSD_VMM;
-                case brand_enum::INTEL_HAXM: return VM::brands::INTEL_HAXM;
-                case brand_enum::UNISYS: return VM::brands::UNISYS;
-                case brand_enum::LMHS: return VM::brands::LMHS;
-                case brand_enum::CUCKOO: return VM::brands::CUCKOO;
-                case brand_enum::BLUESTACKS: return VM::brands::BLUESTACKS;
-                case brand_enum::JAILHOUSE: return VM::brands::JAILHOUSE;
-                case brand_enum::APPLE_VZ: return VM::brands::APPLE_VZ;
-                case brand_enum::INTEL_KGT: return VM::brands::INTEL_KGT;
-                case brand_enum::AZURE_HYPERV: return VM::brands::AZURE_HYPERV;
-                case brand_enum::SIMPLEVISOR: return VM::brands::SIMPLEVISOR;
-                case brand_enum::HYPERV_ROOT: return VM::brands::HYPERV_ROOT;
-                case brand_enum::UML: return VM::brands::UML;
-                case brand_enum::POWERVM: return VM::brands::POWERVM;
-                case brand_enum::GCE: return VM::brands::GCE;
-                case brand_enum::OPENSTACK: return VM::brands::OPENSTACK;
-                case brand_enum::KUBEVIRT: return VM::brands::KUBEVIRT;
-                case brand_enum::AWS_NITRO: return VM::brands::AWS_NITRO;
-                case brand_enum::PODMAN: return VM::brands::PODMAN;
-                case brand_enum::WSL: return VM::brands::WSL;
-                case brand_enum::OPENVZ: return VM::brands::OPENVZ;
-                case brand_enum::BAREVISOR: return VM::brands::BAREVISOR;
-                case brand_enum::HYPERPLATFORM: return VM::brands::HYPERPLATFORM;
-                case brand_enum::MINIVISOR: return VM::brands::MINIVISOR;
-                case brand_enum::INTEL_TDX: return VM::brands::INTEL_TDX;
-                case brand_enum::LKVM: return VM::brands::LKVM;
-                case brand_enum::AMD_SEV: return VM::brands::AMD_SEV;
-                case brand_enum::AMD_SEV_ES: return VM::brands::AMD_SEV_ES;
-                case brand_enum::AMD_SEV_SNP: return VM::brands::AMD_SEV_SNP;
-                case brand_enum::NEKO_PROJECT: return VM::brands::NEKO_PROJECT;
-                case brand_enum::NOIRVISOR: return VM::brands::NOIRVISOR;
-                case brand_enum::QIHOO: return VM::brands::QIHOO;
-                case brand_enum::DBVM: return VM::brands::DBVM;
-                case brand_enum::UTM: return VM::brands::UTM;
-                case brand_enum::COMPAQ: return VM::brands::COMPAQ;
-                case brand_enum::INSIGNIA: return VM::brands::INSIGNIA;
-                case brand_enum::CONNECTIX: return VM::brands::CONNECTIX;
-                case brand_enum::CONTAINERD: return VM::brands::CONTAINERD;
-                case brand_enum::NULL_BRAND: return VM::brands::NULL_BRAND; /* do not modify placement of this, it's used as an anchor point to count the number of brands */
+                case brand_enum::INVALID:               return "Invalid";
+                case brand_enum::VBOX:                  return VM::brands::VBOX;
+                case brand_enum::VMWARE:                return VM::brands::VMWARE;
+                case brand_enum::VMWARE_EXPRESS:        return VM::brands::VMWARE_EXPRESS;
+                case brand_enum::VMWARE_ESX:            return VM::brands::VMWARE_ESX;
+                case brand_enum::VMWARE_GSX:            return VM::brands::VMWARE_GSX;
+                case brand_enum::VMWARE_WORKSTATION:    return VM::brands::VMWARE_WORKSTATION;
+                case brand_enum::VMWARE_FUSION:         return VM::brands::VMWARE_FUSION;
+                case brand_enum::VMWARE_HARD:           return VM::brands::VMWARE_HARD;
+                case brand_enum::BHYVE:                 return VM::brands::BHYVE;
+                case brand_enum::KVM:                   return VM::brands::KVM;
+                case brand_enum::QEMU:                  return VM::brands::QEMU;
+                case brand_enum::QEMU_KVM:              return VM::brands::QEMU_KVM;
+                case brand_enum::KVM_HYPERV:            return VM::brands::KVM_HYPERV;
+                case brand_enum::QEMU_KVM_HYPERV:       return VM::brands::QEMU_KVM_HYPERV;
+                case brand_enum::HYPERV:                return VM::brands::HYPERV;
+                case brand_enum::HYPERV_VPC:            return VM::brands::HYPERV_VPC;
+                case brand_enum::PARALLELS:             return VM::brands::PARALLELS;
+                case brand_enum::XEN:                   return VM::brands::XEN;
+                case brand_enum::ACRN:                  return VM::brands::ACRN;
+                case brand_enum::QNX:                   return VM::brands::QNX;
+                case brand_enum::HYBRID:                return VM::brands::HYBRID;
+                case brand_enum::SANDBOXIE:             return VM::brands::SANDBOXIE;
+                case brand_enum::DOCKER:                return VM::brands::DOCKER;
+                case brand_enum::WINE:                  return VM::brands::WINE;
+                case brand_enum::VPC:                   return VM::brands::VPC;
+                case brand_enum::ANUBIS:                return VM::brands::ANUBIS;
+                case brand_enum::JOEBOX:                return VM::brands::JOEBOX;
+                case brand_enum::THREATEXPERT:          return VM::brands::THREATEXPERT;
+                case brand_enum::CWSANDBOX:             return VM::brands::CWSANDBOX;
+                case brand_enum::COMODO:                return VM::brands::COMODO;
+                case brand_enum::BOCHS:                 return VM::brands::BOCHS;
+                case brand_enum::NVMM:                  return VM::brands::NVMM;
+                case brand_enum::BSD_VMM:               return VM::brands::BSD_VMM;
+                case brand_enum::INTEL_HAXM:            return VM::brands::INTEL_HAXM;
+                case brand_enum::UNISYS:                return VM::brands::UNISYS;
+                case brand_enum::LMHS:                  return VM::brands::LMHS;
+                case brand_enum::CUCKOO:                return VM::brands::CUCKOO;
+                case brand_enum::BLUESTACKS:            return VM::brands::BLUESTACKS;
+                case brand_enum::JAILHOUSE:             return VM::brands::JAILHOUSE;
+                case brand_enum::APPLE_VZ:              return VM::brands::APPLE_VZ;
+                case brand_enum::INTEL_KGT:             return VM::brands::INTEL_KGT;
+                case brand_enum::AZURE_HYPERV:          return VM::brands::AZURE_HYPERV;
+                case brand_enum::SIMPLEVISOR:           return VM::brands::SIMPLEVISOR;
+                case brand_enum::HYPERV_ROOT:           return VM::brands::HYPERV_ROOT;
+                case brand_enum::UML:                   return VM::brands::UML;
+                case brand_enum::POWERVM:               return VM::brands::POWERVM;
+                case brand_enum::GCE:                   return VM::brands::GCE;
+                case brand_enum::OPENSTACK:             return VM::brands::OPENSTACK;
+                case brand_enum::KUBEVIRT:              return VM::brands::KUBEVIRT;
+                case brand_enum::AWS_NITRO:             return VM::brands::AWS_NITRO;
+                case brand_enum::PODMAN:                return VM::brands::PODMAN;
+                case brand_enum::WSL:                   return VM::brands::WSL;
+                case brand_enum::OPENVZ:                return VM::brands::OPENVZ;
+                case brand_enum::BAREVISOR:             return VM::brands::BAREVISOR;
+                case brand_enum::HYPERPLATFORM:         return VM::brands::HYPERPLATFORM;
+                case brand_enum::MINIVISOR:             return VM::brands::MINIVISOR;
+                case brand_enum::INTEL_TDX:             return VM::brands::INTEL_TDX;
+                case brand_enum::LKVM:                  return VM::brands::LKVM;
+                case brand_enum::AMD_SEV:               return VM::brands::AMD_SEV;
+                case brand_enum::AMD_SEV_ES:            return VM::brands::AMD_SEV_ES;
+                case brand_enum::AMD_SEV_SNP:           return VM::brands::AMD_SEV_SNP;
+                case brand_enum::NEKO_PROJECT:          return VM::brands::NEKO_PROJECT;
+                case brand_enum::NOIRVISOR:             return VM::brands::NOIRVISOR;
+                case brand_enum::QIHOO:                 return VM::brands::QIHOO;
+                case brand_enum::DBVM:                  return VM::brands::DBVM;
+                case brand_enum::UTM:                   return VM::brands::UTM;
+                case brand_enum::COMPAQ:                return VM::brands::COMPAQ;
+                case brand_enum::INSIGNIA:              return VM::brands::INSIGNIA;
+                case brand_enum::CONNECTIX:             return VM::brands::CONNECTIX;
+                case brand_enum::CONTAINERD:            return VM::brands::CONTAINERD;
+                /* do not modify placement of NULL_BRAND, it's used as an anchor point to count the number of brands */
+                case brand_enum::NULL_BRAND:            return VM::brands::NULL_BRAND;
             }
 
             return "Invalid";
@@ -14583,7 +14584,6 @@ public:
         }
 
         const u8 percent_tmp = percentage(flags);
-        const bool has_hardener = is_hardened();
         
         constexpr const char* very_unlikely = "Very unlikely";
         constexpr const char* unlikely = "Unlikely";
@@ -14598,42 +14598,33 @@ public:
 
             const brand_enum first_brand = brands::brand_single(list);
 
-            const char* hardener = "";
-            
-            if (has_hardener) {
-                hardener = "hardened ";
-            }
-
             const char* addition = " a ";
 
             /*
              * This basically just fixes the grammatical syntax
              * by either having "a" or "an" before the VM brand
              * name. It would look weird if the conclusion
-             * message was "an VirtualBox" or "a Anubis", so this
-             * condition fixes that issue.
+             * message was "an VirtualBox" or "a Anubis"
              */
-            if (
-                !has_hardener && (
-                    (first_brand == brand_enum::ACRN) ||
-                    (first_brand == brand_enum::ANUBIS) ||
-                    (first_brand == brand_enum::BSD_VMM) ||
-                    (first_brand == brand_enum::INTEL_HAXM) ||
-                    (first_brand == brand_enum::APPLE_VZ) ||
-                    (first_brand == brand_enum::INTEL_KGT) ||
-                    (first_brand == brand_enum::POWERVM) ||
-                    (first_brand == brand_enum::OPENSTACK) ||
-                    (first_brand == brand_enum::AWS_NITRO) ||
-                    (first_brand == brand_enum::OPENVZ) ||
-                    (first_brand == brand_enum::INTEL_TDX) ||
-                    (first_brand == brand_enum::AMD_SEV) ||
-                    (first_brand == brand_enum::AMD_SEV_ES) ||
-                    (first_brand == brand_enum::AMD_SEV_SNP) ||
-                    (first_brand == brand_enum::NULL_BRAND)
-                )
-            ) {
-                addition = " an ";
-            }
+            if 
+            ( 
+                (first_brand == brand_enum::ACRN)        ||
+                (first_brand == brand_enum::ANUBIS)      ||
+                (first_brand == brand_enum::BSD_VMM)     ||
+                (first_brand == brand_enum::INTEL_HAXM)  ||
+                (first_brand == brand_enum::APPLE_VZ)    ||
+                (first_brand == brand_enum::INTEL_KGT)   ||
+                (first_brand == brand_enum::POWERVM)     ||
+                (first_brand == brand_enum::OPENSTACK)   ||
+                (first_brand == brand_enum::AWS_NITRO)   ||
+                (first_brand == brand_enum::OPENVZ)      ||
+                (first_brand == brand_enum::INTEL_TDX)   ||
+                (first_brand == brand_enum::AMD_SEV)     ||
+                (first_brand == brand_enum::AMD_SEV_ES)  ||
+                (first_brand == brand_enum::AMD_SEV_SNP) ||
+                (first_brand == brand_enum::NULL_BRAND)              
+            )   
+            {             addition = " an ";             }
 
             std::string brand_str;
 
@@ -14643,10 +14634,12 @@ public:
              */
             if (first_brand == brand_enum::NULL_BRAND) {
                 brand_str = "unknown";
-            } else {
+            } 
+            else {
                 if (core::is_enabled(flags, MULTIPLE)) {
                     brand_str = brands::brand_multiple(flags);
-                } else {
+                } 
+                else {
                     brand_str = brands::brand_enum_to_string(first_brand);
                 }
             }
@@ -14654,7 +14647,6 @@ public:
             const std::string result = 
                 std::string(category) + 
                 addition + 
-                hardener + 
                 brand_str + 
                 /* Hyper-V artifacts are an exception due to how unique the circumstance is */
                 (first_brand == brand_enum::HYPERV_ROOT ? "" : " VM");
@@ -14663,10 +14655,6 @@ public:
 
             return result;
         };
-
-        if (has_hardener) {
-            return make_conclusion(inside_vm);
-        }
 
         if (core::is_enabled(flags, DYNAMIC)) {
             if (percent_tmp == 0) { return "Running on baremetal"; }
