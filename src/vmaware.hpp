@@ -3363,7 +3363,7 @@ public:
             /*
              *  Golden Rules (must happen ALWAYS; if they don't happen the check should be aborted):
              *  1. The check needs AT LEAST two different physical cores, so if one single core is detected, returns
-             *  2. The counter thread should always be in the middle available logical CPU when there's more than 2 cores, and in the core 2 (1-indexed) when there's 2 cores
+             *  2. The counter thread should always be in the middle available physical CPU when there's more than 2 cores, and in the core 2 (1-indexed) when there's 2 cores
              *
              *  Silver Rules (in order of priority):
              *  1. SMT Sibling Isolation: Disqualify any logical core sharing the same physical core as the counter thread to prevent execution port and pipeline contention.
@@ -3372,7 +3372,7 @@ public:
              *  4. Deduct points (-800) for candidate cores that share an L2 cache with the counter thread but reside on different physical cores (targeting and resolving Intel E-core cluster L2 controller bottlenecks).
              *  5. Prioritize cores with matching efficiency classes (+100) to align power and frequency (DVFS) domains.
              *  6. Apply a minor index-distance penalty to select the closest physical neighbor on the silicon layout/ring bus stop.
-             *  7. Penalize edge logical cores (-50) to avoid OS interrupt and background DPC scheduler noise.
+             *  7. Penalize edge logical cores (-50) because those are where most OS interrupt and background DPC scheduler noise occur.
             */
             [[nodiscard]] static DWORD_PTR get_mask(const bool measurement) {
                 const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
@@ -3517,12 +3517,38 @@ public:
                 }
 
                 /* counter: middle available logical CPU when >2, otherwise second available logical CPU */
-                const DWORD counter_pos0 = (n == 2) ? 1u : (n / 2u);
-                if (counter_pos0 >= n) {
+                DWORD unique_cores[64]{};
+                DWORD unique_cores_count = 0;
+                DWORD core_to_logical[64]{};
+
+                for (DWORD i = 0; i < n; ++i) {
+                    const DWORD log = idxs[i];
+                    const DWORD core = logical_to_core[log];
+
+                    bool already_seen = false;
+                    for (DWORD c = 0; c < unique_cores_count; ++c) {
+                        if (unique_cores[c] == core) {
+                            already_seen = true;
+                            break;
+                        }
+                    }
+                    if (!already_seen) {
+                        unique_cores[unique_cores_count] = core;
+                        core_to_logical[unique_cores_count] = log;
+                        unique_cores_count++;
+                    }
+                }
+
+                if (unique_cores_count < 2) {
                     return 0ull;
                 }
 
-                const DWORD counter_logical = idxs[counter_pos0];
+                const DWORD counter_pos0 = (unique_cores_count == 2) ? 1u : (unique_cores_count / 2u);
+                if (counter_pos0 >= unique_cores_count) {
+                    return 0ull;
+                }
+
+                const DWORD counter_logical = core_to_logical[counter_pos0];
                 const DWORD counter_core = logical_to_core[counter_logical];
                 const DWORD counter_numa = logical_to_numa[counter_logical];
                 const BYTE counter_efficiency = logical_to_efficiency[counter_logical];
@@ -5886,7 +5912,7 @@ public:
         using timer = struct timer;
 
         if (util::is_x86_process_on_arm()) {
-            debug("BINARY_TRANSLATOR: Running inside a binary translation layer");
+            debug("TIMER: Running inside a binary translation layer");
             return false;
         }
 
