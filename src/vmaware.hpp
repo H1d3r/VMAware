@@ -5932,6 +5932,10 @@ public:
             check_nested_hypervisors = true;
         }
 
+        #if (x86_32)
+            VMAWARE_UNUSED(check_nested_hypervisors);
+        #endif
+
         static timer::cache_state state;
         static_assert(alignof(timer::cache_state) >= 64, "timer::cache_state must be aligned to 64 bytes to prevent cache-line thrashing (false sharing).");
         static_assert(std::is_standard_layout<timer::cache_state>::value, "timer::cache_state must be standard layout for predictable memory offsets.");
@@ -13173,18 +13177,18 @@ public:
             u32 count = 0;
             u32 capacity = 0;
 
-            void push(const tracked_event& ev) noexcept {
+            bool push(const tracked_event& ev) noexcept {
                 if (count == capacity) {
                     const u32 new_cap = capacity ? capacity * 2 : 16;
                     tracked_event* const new_items = static_cast<tracked_event*>(realloc(items, new_cap * sizeof(tracked_event)));
-                    if (new_items) {
-                        items = new_items;
-                        capacity = new_cap;
+                    if (!new_items) {
+                        return false;
                     }
+                    items = new_items;
+                    capacity = new_cap;
                 }
-                if (count < capacity) {
-                    items[count++] = ev;
-                }
+                items[count++] = ev;
+                return true;
             }
 
             void free_list() noexcept {
@@ -13240,6 +13244,9 @@ public:
         using TBS_HCONTEXT = void*;
         using TBS_RESULT = unsigned long;
 
+        using tbsi_context_create_t = TBS_RESULT(__stdcall*)(const void*, TBS_HCONTEXT*);
+        using tbsi_get_tcg_log_ex_t = TBS_RESULT(__stdcall*)(u32, u8*, u32*);
+        using tbsip_submit_command_t = TBS_RESULT(__stdcall*)(TBS_HCONTEXT, u32, u32, const u8*, u32, u8*, u32*);
         using tbsip_context_close_t = TBS_RESULT(__stdcall*)(TBS_HCONTEXT);
 
         auto read_u16 = [](const u8* const ptr) noexcept -> u16 {
@@ -13254,10 +13261,34 @@ public:
             return val;
         };
 
+        using bcrypt_open_algorithm_provider_t = NTSTATUS(__stdcall*)(BCRYPT_ALG_HANDLE*, LPCWSTR, LPCWSTR, ULONG);
+        using bcrypt_get_property_t = NTSTATUS(__stdcall*)(BCRYPT_HANDLE, LPCWSTR, PUCHAR, ULONG, ULONG*, ULONG);
+        using bcrypt_create_hash_t = NTSTATUS(__stdcall*)(BCRYPT_ALG_HANDLE, BCRYPT_HASH_HANDLE*, PUCHAR, ULONG, PUCHAR, ULONG, ULONG);
+        using bcrypt_hash_data_t = NTSTATUS(__stdcall*)(BCRYPT_HASH_HANDLE, PUCHAR, ULONG, ULONG);
+        using bcrypt_finish_hash_t = NTSTATUS(__stdcall*)(BCRYPT_HASH_HANDLE, PUCHAR, ULONG, ULONG);
+        using bcrypt_destroy_hash_t = NTSTATUS(__stdcall*)(BCRYPT_HASH_HANDLE);
+        using bcrypt_close_algorithm_provider_t = NTSTATUS(__stdcall*)(BCRYPT_ALG_HANDLE, ULONG);
+
+        bcrypt_open_algorithm_provider_t p_bcrypt_open_algorithm_provider = nullptr;
+        bcrypt_get_property_t p_bcrypt_get_property = nullptr;
+        bcrypt_create_hash_t p_bcrypt_create_hash = nullptr;
+        bcrypt_hash_data_t p_bcrypt_hash_data = nullptr;
+        bcrypt_finish_hash_t p_bcrypt_finish_hash = nullptr;
+        bcrypt_destroy_hash_t p_bcrypt_destroy_hash = nullptr;
+        bcrypt_close_algorithm_provider_t p_bcrypt_close_algorithm_provider = nullptr;
+
+        tbsi_context_create_t p_tbsi_context_create = nullptr;
+        tbsi_get_tcg_log_ex_t p_tbsi_get_tcg_log_ex = nullptr;
+        tbsip_submit_command_t p_tbsip_submit_command = nullptr;
+        tbsip_context_close_t p_tbsip_context_close = nullptr;
+
         HMODULE bcrypt_dll = nullptr;
         HMODULE tbs_dll = nullptr;
         TBS_HCONTEXT h_tbs_context = nullptr;
         u8* log_buffer = nullptr;
+        BCRYPT_ALG_HANDLE h_bcrypt_alg = nullptr;
+        u8* hash_object_buffer = nullptr;
+        DWORD cb_hash_object = 0;
         tracked_event_list pcr_events[24] = {};
         bool passthrough_detected = false;
 
@@ -13269,14 +13300,18 @@ public:
                 free(log_buffer);
                 log_buffer = nullptr;
             }
-            if (h_tbs_context && tbs_dll) {
-                const char* close_name[] = { "Tbsip_Context_Close" };
-                void* close_func[1] = { nullptr };
-                memory::get_function_address(tbs_dll, close_name, close_func, 1);
-                const auto p_tbsip_context_close = reinterpret_cast<tbsip_context_close_t>(close_func[0]);
-                if (p_tbsip_context_close) {
-                    p_tbsip_context_close(h_tbs_context);
+            if (hash_object_buffer) {
+                free(hash_object_buffer);
+                hash_object_buffer = nullptr;
+            }
+            if (h_bcrypt_alg) {
+                if (p_bcrypt_close_algorithm_provider) {
+                    p_bcrypt_close_algorithm_provider(h_bcrypt_alg, 0);
                 }
+                h_bcrypt_alg = nullptr;
+            }
+            if (h_tbs_context && p_tbsip_context_close) {
+                p_tbsip_context_close(h_tbs_context);
                 h_tbs_context = nullptr;
             }
             if (tbs_dll) {
@@ -13312,24 +13347,35 @@ public:
         void* bcrypt_funcs[7] = { nullptr };
         memory::get_function_address(bcrypt_dll, bcrypt_names, bcrypt_funcs, 7);
 
-        using bcrypt_open_algorithm_provider_t = NTSTATUS(__stdcall*)(BCRYPT_ALG_HANDLE*, LPCWSTR, LPCWSTR, ULONG);
-        using bcrypt_get_property_t = NTSTATUS(__stdcall*)(BCRYPT_HANDLE, LPCWSTR, PUCHAR, ULONG, ULONG*, ULONG);
-        using bcrypt_create_hash_t = NTSTATUS(__stdcall*)(BCRYPT_ALG_HANDLE, BCRYPT_HASH_HANDLE*, PUCHAR, ULONG, PUCHAR, ULONG, ULONG);
-        using bcrypt_hash_data_t = NTSTATUS(__stdcall*)(BCRYPT_HASH_HANDLE, PUCHAR, ULONG, ULONG);
-        using bcrypt_finish_hash_t = NTSTATUS(__stdcall*)(BCRYPT_HASH_HANDLE, PUCHAR, ULONG, ULONG);
-        using bcrypt_destroy_hash_t = NTSTATUS(__stdcall*)(BCRYPT_HASH_HANDLE);
-        using bcrypt_close_algorithm_provider_t = NTSTATUS(__stdcall*)(BCRYPT_ALG_HANDLE, ULONG);
-
-        const auto p_bcrypt_open_algorithm_provider = reinterpret_cast<bcrypt_open_algorithm_provider_t>(bcrypt_funcs[0]);
-        const auto p_bcrypt_get_property = reinterpret_cast<bcrypt_get_property_t>(bcrypt_funcs[1]);
-        const auto p_bcrypt_create_hash = reinterpret_cast<bcrypt_create_hash_t>(bcrypt_funcs[2]);
-        const auto p_bcrypt_hash_data = reinterpret_cast<bcrypt_hash_data_t>(bcrypt_funcs[3]);
-        const auto p_bcrypt_finish_hash = reinterpret_cast<bcrypt_finish_hash_t>(bcrypt_funcs[4]);
-        const auto p_bcrypt_destroy_hash = reinterpret_cast<bcrypt_destroy_hash_t>(bcrypt_funcs[5]);
-        const auto p_bcrypt_close_algorithm_provider = reinterpret_cast<bcrypt_close_algorithm_provider_t>(bcrypt_funcs[6]);
+        p_bcrypt_open_algorithm_provider = reinterpret_cast<bcrypt_open_algorithm_provider_t>(bcrypt_funcs[0]);
+        p_bcrypt_get_property = reinterpret_cast<bcrypt_get_property_t>(bcrypt_funcs[1]);
+        p_bcrypt_create_hash = reinterpret_cast<bcrypt_create_hash_t>(bcrypt_funcs[2]);
+        p_bcrypt_hash_data = reinterpret_cast<bcrypt_hash_data_t>(bcrypt_funcs[3]);
+        p_bcrypt_finish_hash = reinterpret_cast<bcrypt_finish_hash_t>(bcrypt_funcs[4]);
+        p_bcrypt_destroy_hash = reinterpret_cast<bcrypt_destroy_hash_t>(bcrypt_funcs[5]);
+        p_bcrypt_close_algorithm_provider = reinterpret_cast<bcrypt_close_algorithm_provider_t>(bcrypt_funcs[6]);
 
         if (!p_bcrypt_open_algorithm_provider || !p_bcrypt_get_property || !p_bcrypt_create_hash ||
             !p_bcrypt_hash_data || !p_bcrypt_finish_hash || !p_bcrypt_destroy_hash || !p_bcrypt_close_algorithm_provider) {
+            free_resources();
+            return false;
+        }
+
+        NTSTATUS b_status = p_bcrypt_open_algorithm_provider(&h_bcrypt_alg, L"SHA256", nullptr, 0);
+        if (b_status != 0) {
+            free_resources();
+            return false;
+        }
+
+        DWORD cb_data = sizeof(DWORD);
+        b_status = p_bcrypt_get_property(h_bcrypt_alg, L"ObjectLength", reinterpret_cast<PBYTE>(&cb_hash_object), cb_data, &cb_data, 0);
+        if (b_status != 0 || cb_hash_object == 0) {
+            free_resources();
+            return false;
+        }
+
+        hash_object_buffer = static_cast<u8*>(malloc(cb_hash_object));
+        if (!hash_object_buffer) {
             free_resources();
             return false;
         }
@@ -13343,14 +13389,10 @@ public:
         void* tbs_funcs[4] = { nullptr };
         memory::get_function_address(tbs_dll, tbs_names, tbs_funcs, 4);
 
-        using tbsi_context_create_t = TBS_RESULT(__stdcall*)(const void*, TBS_HCONTEXT*);
-        using tbsi_get_tcg_log_ex_t = TBS_RESULT(__stdcall*)(u32, u8*, u32*);
-        using tbsip_submit_command_t = TBS_RESULT(__stdcall*)(TBS_HCONTEXT, u32, u32, const u8*, u32, u8*, u32*);
-
-        const auto p_tbsi_context_create = reinterpret_cast<tbsi_context_create_t>(tbs_funcs[0]);
-        const auto p_tbsi_get_tcg_log_ex = reinterpret_cast<tbsi_get_tcg_log_ex_t>(tbs_funcs[1]);
-        const auto p_tbsip_submit_command = reinterpret_cast<tbsip_submit_command_t>(tbs_funcs[2]);
-        const auto p_tbsip_context_close = reinterpret_cast<tbsip_context_close_t>(tbs_funcs[3]);
+        p_tbsi_context_create = reinterpret_cast<tbsi_context_create_t>(tbs_funcs[0]);
+        p_tbsi_get_tcg_log_ex = reinterpret_cast<tbsi_get_tcg_log_ex_t>(tbs_funcs[1]);
+        p_tbsip_submit_command = reinterpret_cast<tbsip_submit_command_t>(tbs_funcs[2]);
+        p_tbsip_context_close = reinterpret_cast<tbsip_context_close_t>(tbs_funcs[3]);
 
         if (!p_tbsi_context_create || !p_tbsi_get_tcg_log_ex || !p_tbsip_submit_command || !p_tbsip_context_close) {
             free_resources();
@@ -13358,32 +13400,9 @@ public:
         }
 
         auto calculate_sha256 = [&](const u8* const VMAWARE_RESTRICT data, const u32 size, u8* const VMAWARE_RESTRICT out_digest) noexcept -> bool {
-            BCRYPT_ALG_HANDLE h_alg = nullptr;
             BCRYPT_HASH_HANDLE h_hash = nullptr;
-            DWORD cb_hash_object = 0;
-            DWORD cb_data = sizeof(DWORD);
-
-            NTSTATUS status = p_bcrypt_open_algorithm_provider(&h_alg, L"SHA256", nullptr, 0);
+            NTSTATUS status = p_bcrypt_create_hash(h_bcrypt_alg, &h_hash, hash_object_buffer, cb_hash_object, nullptr, 0, 0);
             if (status != 0) return false;
-
-            status = p_bcrypt_get_property(h_alg, L"ObjectLength", reinterpret_cast<PBYTE>(&cb_hash_object), cb_data, &cb_data, 0);
-            if (status != 0) {
-                p_bcrypt_close_algorithm_provider(h_alg, 0);
-                return false;
-            }
-
-            u8* const hash_object = static_cast<u8*>(_malloca(cb_hash_object));
-            if (!hash_object) {
-                p_bcrypt_close_algorithm_provider(h_alg, 0);
-                return false;
-            }
-
-            status = p_bcrypt_create_hash(h_alg, &h_hash, hash_object, cb_hash_object, nullptr, 0, 0);
-            if (status != 0) {
-                _freea(hash_object);
-                p_bcrypt_close_algorithm_provider(h_alg, 0);
-                return false;
-            }
 
             status = p_bcrypt_hash_data(h_hash, const_cast<PUCHAR>(data), size, 0);
             if (status == 0) {
@@ -13391,9 +13410,6 @@ public:
             }
 
             p_bcrypt_destroy_hash(h_hash);
-            _freea(hash_object);
-            p_bcrypt_close_algorithm_provider(h_alg, 0);
-
             return (status == 0);
         };
 
@@ -13574,14 +13590,23 @@ public:
             bool has_sha256 = false;
 
             for (u32 i = 0; i < digest_count; ++i) {
-                if (offset + 2 > log_size) { parse_success = false; break; }
+                if (offset + 2 > log_size) { 
+                    parse_success = false;
+                    break;
+                }
                 const u16 alg_id = read_u16(log_buffer + offset);
                 offset += 2;
 
                 bool found = false;
                 const u16 size = alg_to_size.get(alg_id, &found);
-                if (!found) { parse_success = false; break; }
-                if (offset + size > log_size) { parse_success = false; break; }
+                if (!found) { 
+                    parse_success = false;
+                    break;
+                }
+                if (offset + size > log_size) { 
+                    parse_success = false; 
+                    break;
+                }
 
                 if (alg_id == 0x000B) {
                     has_sha256 = true;
@@ -13619,9 +13644,11 @@ public:
                     tracked_event ev{};
                     ev.event_type = event_type;
                     ev.digest_size = temp_digests[i].size;
-                    memset(ev.digest, 0, 32);
                     memcpy(ev.digest, temp_digests[i].digest, temp_digests[i].size > 32 ? 32 : temp_digests[i].size);
-                    pcr_events[pcr_index].push(ev);
+                    if (!pcr_events[pcr_index].push(ev)) {
+                        free_resources();
+                        return false;
+                    }
                 }
             }
         }
