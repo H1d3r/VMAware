@@ -3570,7 +3570,7 @@ public:
                         score += 1000;
                     }
 
-                    /* Same L3 Cache Domain alignment(essential for AMD CCDs and Intel LLC slices) */
+                    /* Same L3 Cache Domain alignment (essential for AMD CCDs and Intel LLC slices) */
                     if (share_l3[logical][counter_logical]) {
                         score += 500;
                     }
@@ -5895,7 +5895,7 @@ public:
         bool check_nested_hypervisors = false;
         if (util::hyper_x() == HYPERV_HOST) {
             debug("TIMER: Hyper-V detected, running nested checks");
-            threshold = 50.0;
+            threshold = 75.0;
             check_nested_hypervisors = true;
         }
 
