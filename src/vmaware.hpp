@@ -13242,6 +13242,18 @@ public:
 
         using tbsip_context_close_t = TBS_RESULT(__stdcall*)(TBS_HCONTEXT);
 
+        auto read_u16 = [](const u8* const ptr) noexcept -> u16 {
+            u16 val;
+            memcpy(&val, ptr, sizeof(val));
+            return val;
+        };
+
+        auto read_u32 = [](const u8* const ptr) noexcept -> u32 {
+            u32 val;
+            memcpy(&val, ptr, sizeof(val));
+            return val;
+        };
+
         HMODULE bcrypt_dll = nullptr;
         HMODULE tbs_dll = nullptr;
         TBS_HCONTEXT h_tbs_context = nullptr;
@@ -13381,6 +13393,7 @@ public:
             p_bcrypt_destroy_hash(h_hash);
             _freea(hash_object);
             p_bcrypt_close_algorithm_provider(h_alg, 0);
+
             return (status == 0);
         };
 
@@ -13419,6 +13432,7 @@ public:
                 (static_cast<u32>(resp[offset + 1]) << 16) |
                 (static_cast<u32>(resp[offset + 2]) << 8) |
                 resp[offset + 3];
+
             offset += 4;
             if (sel_count != 1) return false;
 
@@ -13432,6 +13446,7 @@ public:
                 (static_cast<u32>(resp[offset + 1]) << 16) |
                 (static_cast<u32>(resp[offset + 2]) << 8) |
                 resp[offset + 3];
+
             offset += 4;
             if (digest_count != 1) return false;
 
@@ -13440,12 +13455,14 @@ public:
             offset += 2;
 
             if (offset + digest_size > resp_size) return false;
+
             if (out_digest) {
                 memcpy(out_digest, resp + offset, digest_size > 32 ? 32 : digest_size);
             }
             if (out_digest_size) {
                 *out_digest_size = digest_size;
             }
+
             return true;
         };
 
@@ -13485,39 +13502,64 @@ public:
 
         size_t offset = 0;
 
+        bool header_parsed = false;
         if (offset + sizeof(tcg_pcr_event_header) <= log_size) {
-            const auto* const first_header = reinterpret_cast<const tcg_pcr_event_header*>(log_buffer + offset);
+            const u32 first_event_type = read_u32(log_buffer + offset + 4);
+            const u32 first_event_size = read_u32(log_buffer + offset + 28);
             offset += sizeof(tcg_pcr_event_header);
 
-            if (offset + first_header->event_size <= log_size) {
+            if (offset + first_event_size <= log_size) {
                 const u8* const first_event_data = log_buffer + offset;
-                offset += first_header->event_size;
+                offset += first_event_size;
 
-                if (first_header->event_type == 0x03 && first_header->event_size >= 24) {
+                if (first_event_type == 0x03 && first_event_size >= 24) {
                     if (memcmp(first_event_data, "Spec ID Event03", 15) == 0) {
-                        const u8 num_algs = *reinterpret_cast<const u8*>(first_event_data + 23);
+                        const u8 num_algs = first_event_data[23];
                         u32 alg_offset = 24;
+                        bool has_sha256 = false;
+
                         for (u32 i = 0; i < num_algs; ++i) {
-                            if (alg_offset + 4 > first_header->event_size) break;
-                            const u16 alg_id = *reinterpret_cast<const u16*>(first_event_data + alg_offset);
-                            const u16 digest_size = *reinterpret_cast<const u16*>(first_event_data + alg_offset + 2);
+                            if (alg_offset + 4 > first_event_size) {
+                                break;
+                            }
+                            const u16 alg_id = read_u16(first_event_data + alg_offset);
+                            const u16 digest_size = read_u16(first_event_data + alg_offset + 2);
                             alg_to_size.set(alg_id, digest_size);
+
+                            if (alg_id == 0x000B && digest_size == 32) {
+                                has_sha256 = true;
+                            }
                             alg_offset += 4;
+                        }
+
+                        if (has_sha256) {
+                            header_parsed = true;
                         }
                     }
                 }
             }
         }
 
+        if (!header_parsed) {
+            free_resources();
+            return false;
+        }
+
         /* Process log packets sequentially */
         while (offset < log_size) {
-            if (offset + 8 > log_size) break;
-            const u32 pcr_index = *reinterpret_cast<const u32*>(log_buffer + offset);
-            const u32 event_type = *reinterpret_cast<const u32*>(log_buffer + offset + 4);
+            if (offset + 8 > log_size) {
+                free_resources();
+                return false;
+            }
+            const u32 pcr_index = read_u32(log_buffer + offset);
+            const u32 event_type = read_u32(log_buffer + offset + 4);
             offset += 8;
 
-            if (offset + 4 > log_size) break;
-            const u32 digest_count = *reinterpret_cast<const u32*>(log_buffer + offset);
+            if (offset + 4 > log_size) {
+                free_resources();
+                return false;
+            }
+            const u32 digest_count = read_u32(log_buffer + offset);
             offset += 4;
 
             struct temp_digest {
@@ -13529,16 +13571,21 @@ public:
             temp_digest temp_digests[16]{};
             u32 temp_digest_count = 0;
             bool parse_success = true;
+            bool has_sha256 = false;
 
             for (u32 i = 0; i < digest_count; ++i) {
                 if (offset + 2 > log_size) { parse_success = false; break; }
-                const u16 alg_id = *reinterpret_cast<const u16*>(log_buffer + offset);
+                const u16 alg_id = read_u16(log_buffer + offset);
                 offset += 2;
 
                 bool found = false;
                 const u16 size = alg_to_size.get(alg_id, &found);
                 if (!found) { parse_success = false; break; }
                 if (offset + size > log_size) { parse_success = false; break; }
+
+                if (alg_id == 0x000B) {
+                    has_sha256 = true;
+                }
 
                 if (temp_digest_count < 16) {
                     temp_digests[temp_digest_count].alg_id = alg_id;
@@ -13549,13 +13596,22 @@ public:
                 offset += size;
             }
 
-            if (!parse_success) break;
+            if (!parse_success || !has_sha256) {
+                free_resources();
+                return false;
+            }
 
-            if (offset + 4 > log_size) break;
-            const u32 event_size = *reinterpret_cast<const u32*>(log_buffer + offset);
+            if (offset + 4 > log_size) {
+                free_resources();
+                return false;
+            }
+            const u32 event_size = read_u32(log_buffer + offset);
             offset += 4;
 
-            if (offset + event_size > log_size) break;
+            if (offset + event_size > log_size) {
+                free_resources();
+                return false;
+            }
             offset += event_size;
 
             for (u32 i = 0; i < temp_digest_count; ++i) {
@@ -13610,9 +13666,9 @@ public:
         return passthrough_detected;
     }
 
+
     /*
      * ADD NEW TECHNIQUE FUNCTION HERE
-     *
      */
     #if (CLANG)
         #pragma clang diagnostic pop
@@ -14830,7 +14886,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::EIP_OVERFLOW, {100, VM::eip_overflow}},
             {VM::HYPERVISOR_HOOK, {100, VM::hypervisor_hook}},
             {VM::SINGLE_STEP, {100, VM::single_step}},
-            {VM::TPM_PASSTHROUGH, {100, VM::tpm_passthrough}},
+            {VM::TPM_PASSTHROUGH, {45, VM::tpm_passthrough}},
             {VM::NVRAM, {100, VM::nvram}},
             {VM::CPU_HEURISTIC, {90, VM::cpu_heuristic}},
             {VM::ACPI_SIGNATURE, {100, VM::acpi_signature}},
