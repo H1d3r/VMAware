@@ -45,7 +45,7 @@
     #include "windows_tui.hpp"
     #include <windows.h>
     #include <shellapi.h>
-    #if (__VMAWARE_DEBUG__)
+    #ifdef __VMAWARE_DEBUG__
         #define _CRTDBG_MAP_ALLOC
         #include <crtdbg.h>
     #endif
@@ -180,7 +180,7 @@ Containerd
     std::exit(0);
 }
 
-#if (CLI_WINDOWS && __VMAWARE_DEBUG__)
+#if (CLI_WINDOWS && defined __VMAWARE_DEBUG__)
     static void enable_crt_leak_check()
     {
         int flags = _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG);
@@ -194,7 +194,7 @@ Containerd
 
 int main(int argc, char* argv[]) {
 #if (CLI_WINDOWS && !CLI_ARM)
-    #if (__VMAWARE_DEBUG__) 
+    #ifdef __VMAWARE_DEBUG__
         enable_crt_leak_check();
     #endif
     bool rich_requested = false;
