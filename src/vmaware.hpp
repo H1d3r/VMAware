@@ -601,7 +601,6 @@ public:
         DRIVERS,
         HANDLES,
         VIRTUAL_PROCESSORS,
-        HYPERVISOR_QUERY,
         AUDIO,
         DISPLAY,
         DLL,
@@ -10235,62 +10234,6 @@ public:
         return false;
     }
 
-
-    /**
-     * @brief Check if a call to NtQuerySystemInformation with the 0x9f leaf fills a _SYSTEM_HYPERVISOR_DETAIL_INFORMATION structure
-     * @category Windows, x86_64
-     * @implements VM::HYPERVISOR_QUERY
-     */
-    [[nodiscard]] static bool hypervisor_query() {
-    #if (x86_64)
-        if (util::hyper_x() == HYPERV_HOST) {
-            return false;
-        }
-
-        struct HV_DETAILS {
-            ULONG Data[4];
-        };
-        struct SYSTEM_HYPERVISOR_DETAIL_INFORMATION {
-            HV_DETAILS HvVendorAndMaxFunction;
-            HV_DETAILS HypervisorInterface;
-            HV_DETAILS HypervisorVersion;
-            HV_DETAILS HvFeatures;
-            HV_DETAILS HwFeatures;
-            HV_DETAILS EnlightenmentInfo;
-            HV_DETAILS ImplementationLimits;
-        };
-
-        using PHV_DETAILS = HV_DETAILS*;
-        using PSYSTEM_HYPERVISOR_DETAIL_INFORMATION = SYSTEM_HYPERVISOR_DETAIL_INFORMATION*;
-        using nt_query_system_information_fn = NTSTATUS(__stdcall*)(int SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength);
-
-        const HMODULE ntdll = memory::get_ntdll();
-        if (!ntdll) return false;        
-
-        constexpr const char* function_names[] = { "NtQuerySystemInformation" };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
-        const nt_query_system_information_fn nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(functions[0]);
-        if (nt_query_system_information) {
-            SYSTEM_HYPERVISOR_DETAIL_INFORMATION hypervisor_information{};
-
-            /* Request class 0x9F (SystemHypervisorDetailInformation), this asks the kernel to fill the structure with information about the hypervisor layer it is running on top of */
-            const NTSTATUS status = nt_query_system_information(0x9F, &hypervisor_information, sizeof(hypervisor_information), nullptr);
-
-            if (status != 0) {
-                return false;
-            }
-
-            /* If Data[0] is non-zero, it means the kernel has successfully communicated with a hypervisor */
-            if (hypervisor_information.HvVendorAndMaxFunction.Data[0] != 0) {
-                return true;
-            }
-        }
-    #endif
-        return false;
-    }
-
     
     /**
      * @brief Check for particular object directory which is present in Sandboxie virtual environment but not in usual host systems
@@ -14348,7 +14291,6 @@ public:
             case HANDLES: return "HANDLES";
             case QEMU_FW_CFG: return "QEMU_FW_CFG";
             case VIRTUAL_PROCESSORS: return "VIRTUAL_PROCESSORS";
-            case HYPERVISOR_QUERY: return "HYPERVISOR_QUERY";
             case AMD_SEV_MSR: return "AMD_SEV_MSR";
             case VIRTUAL_REGISTRY: return "VIRTUAL_REGISTRY";
             case FIRMWARE: return "FIRMWARE";
@@ -14833,7 +14775,6 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::DBVM, {150, VM::dbvm}},
             {VM::UD, {100, VM::ud}},
             {VM::DRIVERS, {100, VM::drivers}},
-            {VM::HYPERVISOR_QUERY, {100, VM::hypervisor_query}},
             {VM::HANDLES, {100, VM::device_handles}},
             {VM::KERNEL_OBJECTS, {100, VM::kernel_objects}},
             {VM::DLL, {50, VM::dll}},
