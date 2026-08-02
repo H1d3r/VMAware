@@ -229,22 +229,22 @@
 #endif
 
 #if defined(_MSVC_LANG)
-    #define VMA_CPLUSPLUS _MSVC_LANG
+    #define VMAWARE_CPLUSPLUS _MSVC_LANG
 #else
-    #define VMA_CPLUSPLUS __cplusplus
+    #define VMAWARE_CPLUSPLUS __cplusplus
 #endif
 
-#if VMA_CPLUSPLUS >= 202302L
+#if VMAWARE_CPLUSPLUS >= 202302L
     #define VMA_CPP 23
-#elif VMA_CPLUSPLUS >= 202002L
+#elif VMAWARE_CPLUSPLUS >= 202002L
     #define VMA_CPP 20
-#elif VMA_CPLUSPLUS >= 201703L
+#elif VMAWARE_CPLUSPLUS >= 201703L
     #define VMA_CPP 17
-#elif VMA_CPLUSPLUS >= 201402L
+#elif VMAWARE_CPLUSPLUS >= 201402L
     #define VMA_CPP 14
-#elif VMA_CPLUSPLUS >= 201103L
+#elif VMAWARE_CPLUSPLUS >= 201103L
     #define VMA_CPP 11
-#elif VMA_CPLUSPLUS >= 199711L
+#elif VMAWARE_CPLUSPLUS >= 199711L
     #define VMA_CPP 98 /* C++98 or C++03 */
 #else
     #error "Unsupported C++ standard (pre-C++98 or unknown)."
@@ -291,9 +291,9 @@
 #endif
 
 #if (!APPLE && (VMA_CPP >= 20) && (!CLANG || __clang_major__ >= 16))
-    #define SOURCE_LOCATION_SUPPORTED 1
+    #define VMAWARE_SOURCE_LOCATION_SUPPORTED 1
 #else
-    #define SOURCE_LOCATION_SUPPORTED 0
+    #define VMAWARE_SOURCE_LOCATION_SUPPORTED 0
 #endif
 
 #if defined(__clang__)
@@ -311,6 +311,58 @@
     #warning "Unknown OS detected, tests will be severely limited"
 #endif
 
+#if (VMA_CPP >= 14)
+    #define VMAWARE_DEPRECATED(msg) [[deprecated(msg)]]
+#elif (MSVC)
+    #define VMAWARE_DEPRECATED(msg) __declspec(deprecated(msg))
+#elif (GCC || CLANG)
+    #define VMAWARE_DEPRECATED(msg) __attribute__((deprecated))
+#else
+    #define VMAWARE_DEPRECATED(msg)
+#endif
+
+#if (VMA_CPP >= 17)
+    #define VMAWARE_CONSTEXPR constexpr
+#else
+    #define VMAWARE_CONSTEXPR
+#endif
+
+#if (MSVC)
+    #define VMAWARE_FORCE_INLINE __forceinline
+#elif (CLANG || GCC)
+    #define VMAWARE_FORCE_INLINE inline __attribute__((always_inline))
+#else
+    #define VMAWARE_FORCE_INLINE inline
+#endif
+
+#if (MSVC)
+    #define VMAWARE_RESTRICT __restrict
+#elif (CLANG || GCC)
+    #define VMAWARE_RESTRICT __restrict__
+#else
+    #define VMAWARE_RESTRICT
+#endif
+
+#if (CLANG)
+    #define VMAWARE_ASSUME(cond) __builtin_assume(cond)
+#elif (MSVC)
+    #define VMAWARE_ASSUME(cond) __assume(cond)
+#elif (GCC)
+    #define VMAWARE_ASSUME(cond) do { if (!(cond)) __builtin_unreachable(); } while(0)
+#else
+    #define VMAWARE_ASSUME(cond) do { (void)(cond); } while(0)
+#endif
+
+#if (GCC || CLANG)
+    #define VMAWARE_LIKELY(x)   (__builtin_expect(!!(x), 1))
+    #define VMAWARE_UNLIKELY(x) (__builtin_expect(!!(x), 0))
+#else
+    #define VMAWARE_LIKELY(x)   (x)
+    #define VMAWARE_UNLIKELY(x) (x)
+#endif
+
+#define VMAWARE_UNUSED(x) ((void)(x))
+
 #if (CLANG)
     /* This happens because Windows API structures or aliases are typedef'd inside a local scope (like inside a function) but never actually used */
     #pragma clang diagnostic push
@@ -324,7 +376,7 @@
     #include <bit>
     #include <cstddef>
 #include <ranges>
-    #if (SOURCE_LOCATION_SUPPORTED)
+    #if (VMAWARE_SOURCE_LOCATION_SUPPORTED)
         #include <source_location>
     #endif
 #endif
@@ -424,40 +476,6 @@
 #else
     #define debug(...)
 #endif
-
-#if (VMA_CPP >= 14)
-    #define VMAWARE_DEPRECATED(msg) [[deprecated(msg)]]
-#elif (MSVC)
-    #define VMAWARE_DEPRECATED(msg) __declspec(deprecated(msg))
-#elif (GCC || CLANG)
-    #define VMAWARE_DEPRECATED(msg) __attribute__((deprecated))
-#else
-    #define VMAWARE_DEPRECATED(msg)
-#endif
-
-#if (VMA_CPP >= 17)
-    #define VMAWARE_CONSTEXPR constexpr
-#else
-    #define VMAWARE_CONSTEXPR
-#endif
-
-#if (MSVC)
-    #define VMAWARE_FORCE_INLINE __forceinline
-#elif (CLANG || GCC)
-    #define VMAWARE_FORCE_INLINE inline __attribute__((always_inline))
-#else
-    #define VMAWARE_FORCE_INLINE inline
-#endif
-
-#if (MSVC)
-    #define VMAWARE_RESTRICT __restrict
-#elif (CLANG || GCC)
-    #define VMAWARE_RESTRICT __restrict__
-#else
-    #define VMAWARE_RESTRICT
-#endif
-
-#define VMAWARE_UNUSED(x) ((void)(x))
 
 #if (WINDOWS)
     #if (CLANG || GCC)
@@ -854,6 +872,14 @@ public:
     static_assert(settings_begin == DEFAULT, "settings_begin must align with the transition point.");
     static_assert(settings_end == enum_end, "settings_end must align with the end of the flags.");
 
+    static_assert(static_cast<u8>(brand_enum::NULL_BRAND) > 0, "brand_enum must contain at least one element.");
+    static_assert(threshold_score > 0, "threshold_score must be a positive non-zero value.");
+    static_assert(high_threshold_score >= threshold_score, "high_threshold_score cannot be less than base threshold.");
+    static_assert(MAX_CUSTOM_TECHNIQUES > 0, "MAX_CUSTOM_TECHNIQUES must allow storage for at least one routine.");
+    static_assert(WINDOWS_START < WINDOWS_END, "WINDOWS range bounds are logically inverted.");
+    static_assert(LINUX_START < LINUX_END, "LINUX range bounds are logically inverted.");
+    static_assert(MACOS_START < MACOS_END, "MACOS range bounds are logically inverted.");
+
     /* Specifically for util::hyper_x() and memo::hyperv */
     enum hyperx_state : u8 {
         HYPERV_UNKNOWN = 0,
@@ -898,6 +924,10 @@ public:
             unsigned* VMAWARE_RESTRICT c, 
             unsigned* VMAWARE_RESTRICT d
         ) noexcept {
+            VMAWARE_ASSUME(a != nullptr);
+            VMAWARE_ASSUME(b != nullptr);
+            VMAWARE_ASSUME(c != nullptr);
+            VMAWARE_ASSUME(d != nullptr);
         #if (x86)
             #if (MSVC)
                 int regs[4];
@@ -1026,7 +1056,7 @@ public:
         }
 
         [[nodiscard]] static const char* get_brand() noexcept {
-            if (memo::cpu_brand::is_cached()) {
+            if (VMAWARE_LIKELY(memo::cpu_brand::is_cached())) {
                 return memo::cpu_brand::fetch();
             }
 
@@ -3021,6 +3051,8 @@ public:
     };
 
     static VMAWARE_CONSTEXPR void str_copy(char* VMAWARE_RESTRICT dest, const char* VMAWARE_RESTRICT src, const size_t max_len) noexcept {
+        VMAWARE_ASSUME(dest != nullptr);
+        VMAWARE_ASSUME(src != nullptr);
         size_t i = 0;
         while (src[i] != '\0' && i < max_len - 1) {
             dest[i] = src[i];
@@ -3048,19 +3080,24 @@ public:
 
         static VMAWARE_CONSTEXPR void cache_store(u16 flag, bool result, u8 points, const brand_enum brand = brand_enum::NULL_BRAND) noexcept {
             if (flag <= enum_size) {
+                VMAWARE_ASSUME(flag <= enum_size);
                 cache_table[flag] = { result, points, true, brand };
             }
         }
 
         static constexpr bool is_cached(u16 flag) noexcept {
-            return (flag <= enum_size) && cache_table[flag].has_value;
+            return VMAWARE_LIKELY(flag <= enum_size) && cache_table[flag].has_value;
         }
 
         static VMAWARE_CONSTEXPR data_t cache_fetch(u16 flag) noexcept {
-            if (flag <= enum_size && cache_table[flag].has_value) {
+            if (VMAWARE_UNLIKELY(flag > enum_size)) {
+                return { false, 0, false, brand_enum::NULL_BRAND };
+            }
+            if (VMAWARE_LIKELY(cache_table[flag].has_value)) {
                 const auto& entry = cache_table[flag];
                 return { entry.result, entry.points, true, entry.brand_name };
             }
+            return { false, 0, false, brand_enum::NULL_BRAND };
             return { false, 0, false, brand_enum::NULL_BRAND };
         }
 
@@ -3822,16 +3859,16 @@ public:
             };
 
             /* Validate DOS header */
-            if (!valid_range(0, sizeof(IMAGE_DOS_HEADER))) return;
+            if (VMAWARE_UNLIKELY(!valid_range(0, sizeof(IMAGE_DOS_HEADER)))) return;
             const auto* dosHeader = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-            if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) return;
+            if (VMAWARE_UNLIKELY(dosHeader->e_magic != IMAGE_DOS_SIGNATURE)) return;
 
             /* E_lfanew -> NT headers */
-            if (dosHeader->e_lfanew < 0) return;
+            if (VMAWARE_UNLIKELY(dosHeader->e_lfanew < 0)) return;
             const size_t e_lfanew = static_cast<size_t>(dosHeader->e_lfanew);
-            if (!valid_range(e_lfanew, sizeof(IMAGE_NT_HEADERS))) return;
+            if (VMAWARE_UNLIKELY(!valid_range(e_lfanew, sizeof(IMAGE_NT_HEADERS)))) return;
             const auto* ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + e_lfanew);
-            if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) return;
+            if (VMAWARE_UNLIKELY(ntHeaders->Signature != IMAGE_NT_SIGNATURE)) return;
 
             const size_t sizeOfImage = static_cast<size_t>(ntHeaders->OptionalHeader.SizeOfImage);
             if (sizeOfImage != 0 && sizeOfImage > module_size) {
@@ -3883,7 +3920,7 @@ public:
 
                 /* Check cache first */
                 const auto cache_it = module_cache.find(s_name);
-                if (cache_it != module_cache.end()) {
+                if (VMAWARE_LIKELY(cache_it != module_cache.end())) {
                     functions[i] = cache_it->second;
                     continue;
                 }
@@ -3927,7 +3964,7 @@ public:
 
         [[nodiscard]] static HMODULE get_ntdll() noexcept {
             static HMODULE cached_ntdll = nullptr;
-            if (cached_ntdll != nullptr) {
+            if (VMAWARE_LIKELY(cached_ntdll != nullptr)) {
                 return cached_ntdll;
             }
 
@@ -4341,7 +4378,7 @@ public:
                 };
 
                 std::unique_ptr<FILE, file_deleter> const pipe(popen(cmd, "r"), file_deleter()); /* NOLINT(bugprone-command-processor) */
-                if (!pipe) {
+                if (VMAWARE_UNLIKELY(!pipe)) {
                     return util::make_unique<std::string>();
                 }
 
@@ -4810,6 +4847,7 @@ public:
 
             /* Software fallback CRC32-C (Castagnoli) of a block of memory */
             static u32 crc32c_sw(u32 crc, const void* VMAWARE_RESTRICT data, size_t len) noexcept {
+                VMAWARE_ASSUME(data != nullptr);
                 const u8* ptr = reinterpret_cast<const u8*>(data);
                 for (size_t i = 0; i < len; ++i) {
                     crc ^= ptr[i];
@@ -14228,21 +14266,21 @@ public:
      */
     static bool check(
         const enum_flags flag_bit
-    #if (SOURCE_LOCATION_SUPPORTED)
+    #if (VMAWARE_SOURCE_LOCATION_SUPPORTED)
         , [[maybe_unused]] const std::source_location& loc = std::source_location::current()
     #endif
     ) {
-    #if (SOURCE_LOCATION_SUPPORTED)
+    #if (VMAWARE_SOURCE_LOCATION_SUPPORTED)
         VMAWARE_UNUSED(loc);
     #endif
-        if (util::is_unsupported(flag_bit)) {
+        if (VMAWARE_UNLIKELY(util::is_unsupported(flag_bit))) {
             memo::cache_store(flag_bit, false, 0);
             return false;
         }
 
         auto throw_error = [&](const char* text) -> void {
             std::string msg = text;
-        #if (SOURCE_LOCATION_SUPPORTED)
+        #if (VMAWARE_SOURCE_LOCATION_SUPPORTED)
             msg += ", error in ";
             msg += loc.function_name();
             msg += " at ";
@@ -14432,17 +14470,17 @@ public:
     static void add_custom(
         const u8 percent,
         bool(*detection_func)()
-        #if (SOURCE_LOCATION_SUPPORTED)
+        #if (VMAWARE_SOURCE_LOCATION_SUPPORTED)
         , const std::source_location& loc = std::source_location::current()
         #endif
     ) {
-        #if (SOURCE_LOCATION_SUPPORTED)
+        #if (VMAWARE_SOURCE_LOCATION_SUPPORTED)
             VMAWARE_UNUSED(loc);
         #endif
 
         auto throw_error = [&](const char* text) -> void {
             std::string msg = text;
-        #if (SOURCE_LOCATION_SUPPORTED)
+        #if (VMAWARE_SOURCE_LOCATION_SUPPORTED)
             msg += ", error in ";
             msg += loc.function_name();
             msg += " at ";
@@ -15123,5 +15161,20 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
 }();
 
 static_assert(VM::core::technique_table.size() == VM::enum_size + 1, "technique_table must map to every enum value.");
+
+#undef WINDOWS
+#undef LINUX
+#undef APPLE
+#undef MSVC
+#undef x86_64
+#undef x86_32
+#undef x86
+#undef ARM64
+#undef ARM32
+#undef ARM
+#undef SOURCE_LOCATION_SUPPORTED
+#undef GCC
+#undef CLANG
+#undef debug
 
 #endif /* VMAWARE_HEADER */
