@@ -3366,42 +3366,48 @@ public:
              *  Golden Rules (must happen ALWAYS; if they don't happen the check should be aborted):
              *  1. The check needs AT LEAST two different physical cores, so if one single core is detected, returns
              *  2. The counter thread should always be in the middle available physical CPU when there's more than 2 cores, and in the core 2 (1-indexed) when there's 2 cores
+             *  3. The counter thread and the measurement thread can't never be in the same physical core. This means that SMT siblings should always be avoided.
              *
              *  Silver Rules (in order of priority):
-             *  1. SMT Sibling Isolation: Disqualify any logical core sharing the same physical core as the counter thread to prevent execution port and pipeline contention.
-             *  2. Prioritize higher-performance pipelines (P-cores) over efficiency-oriented pipelines (E-cores) for the measurement thread (+800). P-cores feature private L2 caches (no cluster controller congestion).
-             *  3. Prioritize candidates within the same NUMA node (+1000) and same L3 cache slice/CCD domain (+500) to ensure minimal latency (preventing cross-CCD Infinity Fabric or cross-socket routing delays).
-             *  4. Deduct points (-800) for candidate cores that share an L2 cache with the counter thread but reside on different physical cores (targeting and resolving Intel E-core cluster L2 controller bottlenecks).
-             *  5. Prioritize cores with matching efficiency classes (+100) to align power and frequency (DVFS) domains.
-             *  6. Apply a minor index-distance penalty to select the closest physical neighbor on the silicon layout/ring bus stop.
-             *  7. Penalize edge logical cores (-50) because those are where most OS interrupt and background DPC scheduler noise occur.
+             *  1. Prioritize higher-performance pipelines (P-cores) over efficiency-oriented pipelines (E-cores) for the measurement thread (+800). P-cores feature private L2 caches (no cluster controller congestion).
+             *  2. Prioritize candidates within the same NUMA node (+1000) and same L3 cache slice/CCD domain (+500) to ensure minimal latency (preventing cross-CCD Infinity Fabric or cross-socket routing delays).
+             *  3. Deduct points (-800) for candidate cores that share an L2 cache with the counter thread but reside on different physical cores (targeting and resolving Intel E-core cluster L2 controller bottlenecks).
+             *  4. Prioritize cores with matching efficiency classes (+100) to align power and frequency (DVFS) domains.
+             *  5. Apply a minor index-distance penalty to select the closest physical neighbor on the silicon layout/ring bus stop (best-effort only because logical indexing does not always prove physical proximity).
+             *  6. Penalize edge logical cores (-50) because those are where most OS interrupt and background DPC scheduler noise occur.
             */
-            [[nodiscard]] static DWORD_PTR get_mask(const bool measurement) {
+            [[nodiscard]] static GROUP_AFFINITY get_mask(const bool measurement) {
                 const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
+                const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
 
+                GROUP_AFFINITY active_group_aff{};
                 DWORD_PTR proc_mask = 0, sys_mask = 0;
-                if (!GetProcessAffinityMask(current_process, &proc_mask, &sys_mask) || !proc_mask) {
-                    return 0ull;
-                }
 
-                DWORD idxs[64]{};
-                DWORD n = 0;
-                for (DWORD i = 0; i < 64; ++i) {
-                    if (proc_mask & (1ull << i)) {
-                        idxs[n++] = i;
+                /* Base our available CPU pool on the process-wide affinity mask instead of the thread's currently restricted affinity mask. Threads are frequently restricted to a single core by runtime schedulers or thread-pools, while the process retains access to all cores. */
+                if (GetProcessAffinityMask(current_process, &proc_mask, &sys_mask) && proc_mask) {
+                    active_group_aff.Mask = proc_mask;
+
+                    /* Query the executing thread's current group to ensure both threads run on the same processor group/physical socket to avoid severe interconnect latency */
+                    GROUP_AFFINITY thread_aff{};
+                    if (GetThreadGroupAffinity(current_thread, &thread_aff)) {
+                        active_group_aff.Group = thread_aff.Group;
+                    }
+                    else {
+                        active_group_aff.Group = 0;
                     }
                 }
-
-                if (n < 2) {
-                    return 0ull;
+                else {
+                    return {};
                 }
 
-                // first null buffer then use size
+                const WORD target_group = active_group_aff.Group;
+                const KAFFINITY target_mask = active_group_aff.Mask;
+
                 DWORD len = 0;
                 SetLastError(ERROR_SUCCESS);
                 GetLogicalProcessorInformationEx(RelationAll, nullptr, &len);
                 if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || !len) {
-                    return 0ull;
+                    return {};
                 }
 
                 std::vector<BYTE> topo(len);
@@ -3409,28 +3415,42 @@ public:
                     RelationAll,
                     reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(topo.data()),
                     &len)) {
-                    return 0ull;
+                    return {};
                 }
 
-                constexpr DWORD INVALID_CPU = 0xFFFFFFFFu;
+                struct GroupCpu {
+                    DWORD LogicalId = 0xFFFFFFFFu; /* 0..63 within target group */
+                    DWORD CoreId = 0xFFFFFFFFu;
+                    DWORD NumaNode = 0xFFFFFFFFu;
+                    DWORD L2CacheId = 0xFFFFFFFFu;
+                    DWORD L3CacheId = 0xFFFFFFFFu;
+                    BYTE EfficiencyClass = 0;
+                };
 
-                DWORD logical_to_core[64];
-                DWORD logical_to_numa[64];
-                BYTE logical_to_efficiency[64];
-                bool share_l2[64][64]{};
-                bool share_l3[64][64]{};
+                GroupCpu group_cpus[64]{};
+                DWORD active_cpu_count = 0;
+                DWORD idxs[64]{};
 
-                std::fill_n(logical_to_core, 64, INVALID_CPU);
-                std::fill_n(logical_to_numa, 64, INVALID_CPU);
-                std::fill_n(logical_to_efficiency, 64, static_cast<BYTE>(0));
-                std::fill_n(&share_l2[0][0], 64 * 64, false);
-                std::fill_n(&share_l3[0][0], 64 * 64, false);
+                for (DWORD i = 0; i < 64; ++i) {
+                    if (target_mask & (1ull << i)) {
+                        group_cpus[i].LogicalId = i;
+                        idxs[active_cpu_count++] = i;
+                    }
+                }
+
+                if (active_cpu_count < 2) {
+                    return {};
+                }
 
                 DWORD core_count = 0;
-
+                DWORD cache_count = 0;
                 size_t offset = 0;
+
                 while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) <= len) {
                     auto* ptr = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(topo.data() + offset);
+                    if (!ptr->Size) {
+                        return {};
+                    }
 
                     switch (ptr->Relationship) {
                     case RelationProcessorCore: {
@@ -3438,11 +3458,15 @@ public:
                         const BYTE efficiency = ptr->Processor.EfficiencyClass;
 
                         for (DWORD g = 0; g < ptr->Processor.GroupCount; ++g) {
-                            const KAFFINITY mask = ptr->Processor.GroupMask[g].Mask;
-                            for (DWORD bit = 0; bit < 64; ++bit) {
-                                if (mask & (1ull << bit)) {
-                                    logical_to_core[bit] = core_id;
-                                    logical_to_efficiency[bit] = efficiency;
+                            if (ptr->Processor.GroupMask[g].Group == target_group) {
+                                const KAFFINITY mask = ptr->Processor.GroupMask[g].Mask;
+                                for (DWORD bit = 0; bit < 64; ++bit) {
+                                    if (mask & (1ull << bit)) {
+                                        if (group_cpus[bit].LogicalId != 0xFFFFFFFFu) {
+                                            group_cpus[bit].CoreId = core_id;
+                                            group_cpus[bit].EfficiencyClass = efficiency;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3451,35 +3475,39 @@ public:
 
                     case RelationNumaNode: {
                         const DWORD node_id = ptr->NumaNode.NodeNumber;
-                        const KAFFINITY mask = ptr->NumaNode.GroupMask.Mask;
-                        for (DWORD bit = 0; bit < 64; ++bit) {
-                            if (mask & (1ull << bit)) {
-                                logical_to_numa[bit] = node_id;
+                        if (ptr->NumaNode.GroupMask.Group == target_group) {
+                            const KAFFINITY mask = ptr->NumaNode.GroupMask.Mask;
+                            for (DWORD bit = 0; bit < 64; ++bit) {
+                                if (mask & (1ull << bit)) {
+                                    if (group_cpus[bit].LogicalId != 0xFFFFFFFFu) {
+                                        group_cpus[bit].NumaNode = node_id;
+                                    }
+                                }
                             }
                         }
                         break;
                     }
 
                     case RelationCache: {
-                        const KAFFINITY mask = ptr->Cache.GroupMasks[0].Mask;
-                        std::vector<DWORD> cached_cpus;
-                        cached_cpus.reserve(64);
-                        for (DWORD bit = 0; bit < 64; ++bit) {
-                            if (mask & (1ull << bit)) {
-                                cached_cpus.push_back(bit);
-                            }
-                        }
-                        if (ptr->Cache.Level == 2) {
-                            for (size_t i = 0; i < cached_cpus.size(); ++i) {
-                                for (size_t j = 0; j < cached_cpus.size(); ++j) {
-                                    share_l2[cached_cpus[i]][cached_cpus[j]] = true;
-                                }
-                            }
-                        }
-                        else if (ptr->Cache.Level == 3) {
-                            for (size_t i = 0; i < cached_cpus.size(); ++i) {
-                                for (size_t j = 0; j < cached_cpus.size(); ++j) {
-                                    share_l3[cached_cpus[i]][cached_cpus[j]] = true;
+                        const WORD group_count_cache = ptr->Cache.GroupCount;
+                        const DWORD cache_id = cache_count++;
+
+                        for (WORD g = 0; g < group_count_cache; ++g) {
+                            /* Read and check all GroupMasks entries, supporting multi-group caches */
+                            const GROUP_AFFINITY& g_aff = ptr->Cache.GroupMasks[g];
+                            if (g_aff.Group == target_group) {
+                                const KAFFINITY mask = g_aff.Mask;
+                                for (DWORD bit = 0; bit < 64; ++bit) {
+                                    if (mask & (1ull << bit)) {
+                                        if (group_cpus[bit].LogicalId != 0xFFFFFFFFu) {
+                                            if (ptr->Cache.Level == 2) {
+                                                group_cpus[bit].L2CacheId = cache_id;
+                                            }
+                                            else if (ptr->Cache.Level == 3) {
+                                                group_cpus[bit].L3CacheId = cache_id;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3490,42 +3518,37 @@ public:
                         break;
                     }
 
-                    if (!ptr->Size) {
-                        return 0ull;
-                    }
                     offset += ptr->Size;
                 }
 
-                /* abort if only one physical core exists in the allowed affinity set */
-                {
-                    bool seen_core[64]{};
-                    DWORD physical_cores = 0;
+                /* Golden Rule 1: At least two physical cores must exist in the allowed process affinity */
+                bool seen_core[256]{};
+                DWORD physical_cores = 0;
 
-                    for (DWORD i = 0; i < n; ++i) {
-                        const DWORD log = idxs[i];
-                        const DWORD core = logical_to_core[log];
-                        if (core == INVALID_CPU) {
-                            return 0ull;
-                        }
-                        if (!seen_core[core]) {
-                            seen_core[core] = true;
-                            ++physical_cores;
-                        }
+                for (DWORD i = 0; i < active_cpu_count; ++i) {
+                    const DWORD log = idxs[i];
+                    const DWORD core = group_cpus[log].CoreId;
+                    if (core == 0xFFFFFFFFu) {
+                        return {};
                     }
-
-                    if (physical_cores < 2) {
-                        return 0ull;
+                    if (core < 256 && !seen_core[core]) {
+                        seen_core[core] = true;
+                        ++physical_cores;
                     }
                 }
 
-                /* counter: middle available logical CPU when >2, otherwise second available logical CPU */
+                if (physical_cores < 2) {
+                    return {};
+                }
+
+                /* Golden Rule 2: Counter thread always in the middle available physical CPU (or 2nd core if exactly 2) */
                 DWORD unique_cores[64]{};
                 DWORD unique_cores_count = 0;
                 DWORD core_to_logical[64]{};
 
-                for (DWORD i = 0; i < n; ++i) {
+                for (DWORD i = 0; i < active_cpu_count; ++i) {
                     const DWORD log = idxs[i];
-                    const DWORD core = logical_to_core[log];
+                    const DWORD core = group_cpus[log].CoreId;
 
                     bool already_seen = false;
                     for (DWORD c = 0; c < unique_cores_count; ++c) {
@@ -3542,86 +3565,89 @@ public:
                 }
 
                 if (unique_cores_count < 2) {
-                    return 0ull;
+                    return {};
                 }
 
                 const DWORD counter_pos0 = (unique_cores_count == 2) ? 1u : (unique_cores_count / 2u);
                 if (counter_pos0 >= unique_cores_count) {
-                    return 0ull;
+                    return {};
                 }
 
                 const DWORD counter_logical = core_to_logical[counter_pos0];
-                const DWORD counter_core = logical_to_core[counter_logical];
-                const DWORD counter_numa = logical_to_numa[counter_logical];
-                const BYTE counter_efficiency = logical_to_efficiency[counter_logical];
+                const auto& counter_cpu = group_cpus[counter_logical];
 
-                if (counter_core == INVALID_CPU || counter_numa == INVALID_CPU) {
-                    return 0ull;
+                if (counter_cpu.CoreId == 0xFFFFFFFFu || counter_cpu.NumaNode == 0xFFFFFFFFu) {
+                    return {};
                 }
 
                 if (!measurement) {
-                    return 1ull << counter_logical;
+                    GROUP_AFFINITY aff{};
+                    aff.Group = target_group;
+                    aff.Mask = (1ull << counter_logical);
+                    return aff;
                 }
 
-                /* Find the highest performance core type available in the allocated process affinity set */
+                /* Silver Rule 2: Find performance-dominant type within the process affinity subset */
                 BYTE max_efficiency = 0;
-                for (DWORD i = 0; i < n; ++i) {
+                for (DWORD i = 0; i < active_cpu_count; ++i) {
                     const DWORD logical = idxs[i];
-                    if (logical_to_efficiency[logical] > max_efficiency) {
-                        max_efficiency = logical_to_efficiency[logical];
+                    if (group_cpus[logical].EfficiencyClass > max_efficiency) {
+                        max_efficiency = group_cpus[logical].EfficiencyClass;
                     }
                 }
 
                 auto is_edge = [&](DWORD logical) noexcept -> bool {
-                    return logical == idxs[0] || logical == idxs[n - 1];
+                    return logical == idxs[0] || logical == idxs[active_cpu_count - 1];
                 };
 
-                DWORD best_logical = INVALID_CPU;
+                DWORD best_logical = 0xFFFFFFFFu;
                 int best_score = (std::numeric_limits<int>::min)();
 
-                for (DWORD i = 0; i < n; ++i) {
+                for (DWORD i = 0; i < active_cpu_count; ++i) {
                     const DWORD logical = idxs[i];
                     if (logical == counter_logical) {
                         continue;
                     }
 
-                    /* disqualify same physical core */
-                    if (logical_to_core[logical] == counter_core) {
+                    const auto& cand_cpu = group_cpus[logical];
+
+                    /* Silver Rule 1: SMT Sibling Isolation */
+                    if (cand_cpu.CoreId == counter_cpu.CoreId) {
                         continue;
                     }
 
                     int score = 0;
 
-                    /* Same NUMA Node alignment */
-                    if (logical_to_numa[logical] != INVALID_CPU && logical_to_numa[logical] == counter_numa) {
+                    /* Silver Rule 3: Same NUMA Node alignment */
+                    if (cand_cpu.NumaNode != 0xFFFFFFFFu && cand_cpu.NumaNode == counter_cpu.NumaNode) {
                         score += 1000;
                     }
 
-                    /* Same L3 Cache Domain alignment (essential for AMD CCDs and Intel LLC slices) */
-                    if (share_l3[logical][counter_logical]) {
+                    /* Silver Rule 3: Same L3 Cache Domain alignment */
+                    if (cand_cpu.L3CacheId != 0xFFFFFFFFu && cand_cpu.L3CacheId == counter_cpu.L3CacheId) {
                         score += 500;
                     }
 
-                    /* Performance Core (P-Core) Priority - prioritizes dedicated L2 pipelines & highest clock rates */
-                    if (logical_to_efficiency[logical] == max_efficiency) {
+                    /* Silver Rule 2: Performance Core (P-Core) Priority */
+                    if (cand_cpu.EfficiencyClass == max_efficiency) {
                         score += 800;
                     }
 
-                    /* Shared L2 Cache Cluster Penalty - avoids sharing E-core cluster L2 controller pipelines */
-                    if (share_l2[logical][counter_logical]) {
+                    /* Silver Rule 4: Shared L2 Cache Cluster Penalty (avoids shared E-core controllers) */
+                    if (cand_cpu.L2CacheId != 0xFFFFFFFFu && cand_cpu.L2CacheId == counter_cpu.L2CacheId) {
                         score -= 800;
                     }
 
-                    /* Same Core Type alignment - aligns DVFS frequency/voltage domains */
-                    if (logical_to_efficiency[logical] == counter_efficiency) {
+                    /* Silver Rule 5: Same Core Type alignment. The counter can actually be in a E-Core and the trigger in a P-Core safely, that's why I put a lower score */
+                    if (cand_cpu.EfficiencyClass == counter_cpu.EfficiencyClass) {
                         score += 100;
                     }
 
-                    /* Physical Proximity Penalty - prefers closest silicon/ring neighbors */
+                    /* Silver Rule 6: Physical Proximity Penalty */
                     const int dist = static_cast<int>(logical) - static_cast<int>(counter_logical);
                     score -= std::abs(dist);
 
-                    /* Edge Core Protection - avoids OS interrupt and background DPC scheduler noise */
+                    /* Silver Rule 7: Edge Core Protection */
                     if (is_edge(logical)) {
                         score -= 50;
                     }
@@ -3632,12 +3658,16 @@ public:
                     }
                 }
 
-                if (best_logical == INVALID_CPU) {
-                    return 0ull;
+                if (best_logical == 0xFFFFFFFFu) {
+                    return {};
                 }
 
                 debug("TIMER: Measurement thread -> CPU ", best_logical, " | Counter thread -> CPU ", counter_logical);
-                return 1ull << best_logical;
+
+                GROUP_AFFINITY aff{};
+                aff.Group = target_group;
+                aff.Mask = (1ull << best_logical);
+                return aff;
             }
         };
 
@@ -5947,7 +5977,6 @@ public:
             threshold = 75.0;
             check_nested_hypervisors = true;
         }
-
         #if (x86_32)
             VMAWARE_UNUSED(check_nested_hypervisors);
         #endif
@@ -5963,21 +5992,22 @@ public:
         bool hypervisor_detected = false;
         static HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
         const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-        const DWORD_PTR trigger_affinity = timer::scheduler::get_mask(true);
-        static DWORD_PTR counter_affinity = timer::scheduler::get_mask(false);
-      
-        if (!trigger_affinity || !counter_affinity) {
+        const GROUP_AFFINITY trigger_affinity = timer::scheduler::get_mask(true);
+        static GROUP_AFFINITY counter_affinity = timer::scheduler::get_mask(false);
+
+        if (!trigger_affinity.Mask || !counter_affinity.Mask) {
             return false;
         }
 
         /* Our software clock */
         auto counter_thread = []() noexcept -> void {
-            SetThreadAffinityMask(current_thread, counter_affinity);
+            SetThreadGroupAffinity(current_thread, &counter_affinity, nullptr);
             SetThreadPriority(current_thread, THREAD_PRIORITY_HIGHEST); /* decrease chance of being rescheduled */
             SetThreadPriorityBoost(current_thread, TRUE); /* disable dynamic boosts */
 
             timer::timer_tick_t local_counter = state.counter;
 
+            /* better than calling incq in inline asm, as this forces standard increment cache behavior */
             #define TICK8() \
                 local_counter++; state.counter = local_counter; \
                 local_counter++; state.counter = local_counter; \
@@ -6018,7 +6048,9 @@ public:
         }
 
         debug("TIMER: CPU supports SERIALIZE: ", serialize_available);
-        const DWORD_PTR old_affinity = SetThreadAffinityMask(current_thread, trigger_affinity);
+        GROUP_AFFINITY old_affinity{};
+        SetThreadGroupAffinity(current_thread, &trigger_affinity, &old_affinity);
+
         const DWORD old_process_priority = GetPriorityClass(current_process);
         const int old_thread_priority = GetThreadPriority(current_thread);
         SetPriorityClass(current_process, ABOVE_NORMAL_PRIORITY_CLASS); /* ABOVE_NORMAL_PRIORITY_CLASS + THREAD_PRIORITY_HIGHEST = 12 base priority */
@@ -6029,8 +6061,9 @@ public:
         const size_t batch_size = timer::config::generate_batch_size(ct_seed);
 
         std::vector<timer::timer_tick_t> vm_samples(batch_size), ref_samples(batch_size); /* pre page-fault MMU, we won't warm-up cpuid samples for the P-states intentionally */
-        VirtualLock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t)); /* lock the memory for the samples to prevent page faults if permissions are enough */
-        VirtualLock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+        /* lock the memory for the samples to prevent soft #PF during timing if permissions are enough */
+        const bool vm_samples_locked = VirtualLock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t)); 
+        const bool ref_samples_locked = VirtualLock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
 
     #if (x86_64) /* WHP stuff not available for x86_32 */
         using whv_create_partition_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE*);
@@ -6155,7 +6188,7 @@ public:
             }
             else {
                 /* It uses a 16-bit address offset of 0x3000 (little-endian 00 30). Since VMAware's dsSeg.Base is 0, the physical address (GPA) it attempts to access is DS.Base + 0x3000 = 0x3000 */
-                u8 code[] = { 0xA0, 0x00, 0x30 }; /* Because the CS descriptor specifies a 16-bit default size, the processor decodes 0xA0 as MOV AL, [0x3000] */
+                const u8 code[] = { 0xA0, 0x00, 0x30 }; /* Because the CS descriptor specifies a 16-bit default size, the processor decodes 0xA0 as MOV AL, [0x3000] */
                 memcpy(reinterpret_cast<u8*>(mem) + 0x1000, code, sizeof(code));
 
                 WHV_X64_SEGMENT_REGISTER cs_seg{};
@@ -6210,19 +6243,19 @@ public:
         }
     #endif  
 
-        std::thread t1(counter_thread);
-        state.start_test.store(true, std::memory_order_release);
-        SleepEx(0, FALSE); 
-
         /* Independent multi-trial state initialization */
         constexpr int trials = 5;
-        const size_t local_max_attempts = batch_size * trials;
+        constexpr size_t local_max_attempts = 1000 * trials;
         timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
         timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
     #if (x86_64)
         timer::timer_tick_t best_npf_l = (std::numeric_limits<timer::timer_tick_t>::max)();
         timer::timer_tick_t best_add_l = (std::numeric_limits<timer::timer_tick_t>::max)();
     #endif
+
+        std::thread t1(counter_thread);
+        state.start_test.store(true, std::memory_order_release);
+        SleepEx(0, FALSE); /* end of setup phase, try to get fresh quantum and give time to counter thread */
 
         /* Cache and CPU scheduler warm-up won't affect anything in the measurement loop, so ramp up frequency/P-states to a high non-AVX Turbo/P-state without vmexits */
         timer::engine::warmup_cpu(serialize_available);
@@ -6232,8 +6265,8 @@ public:
             size_t invalid = 0;
 
             /*
-             * state is a static local variable. Accessing state.counter directly requires the compiler to resolve its address using RIP-relative addressing or base-plus-displacement addressing on every single iteration
-             * Depending on the compiler's O level and the presence of PIC/PIE, this can introduce small addressing calculations inside the loop, so by assigning the address to a local pointer outside the loop,
+             * state is a static local variable, so accessing state.counter directly requires the compiler to resolve its address using RIP-relative addressing or base-plus-displacement addressing on every single iteration
+             * depending on the compiler's O level and the presence of PIC/PIE, this can introduce small addressing calculations inside the loop, so by assigning the address to a local pointer outside the loop,
              * we encourage the compiler to load this absolute pointer into a CPU register BEFORE the loop starts so at the end it translates to a simple mov
             */
             volatile timer::timer_tick_t* const counter_ptr = &state.counter;
@@ -6350,15 +6383,18 @@ public:
             /* If Hyper-V is enabled, check if there's another hypervisor sitting on top of Hyper-V with an unconditional vmexit */
         #if (x86_64)
             if (check_nested_hypervisors) {
-                constexpr int samples = 100;
-                std::vector<timer::timer_tick_t> npf_samples(samples);
-                std::vector<timer::timer_tick_t> add_samples(samples);
+                constexpr int sample_amount = 100;
+                std::vector<timer::timer_tick_t> npf_samples(sample_amount);
+                std::vector<timer::timer_tick_t> add_samples(sample_amount);
+
+                const bool npf_locked = 
+                    VirtualLock(npf_samples.data(), sample_amount * sizeof(timer::timer_tick_t)) &&
+                    VirtualLock(add_samples.data(), sample_amount * sizeof(timer::timer_tick_t));
 
                 size_t npf_valid = 0;
-
                 volatile timer::timer_tick_t* const nested_counter_ptr = &state.counter;
 
-                for (size_t i = 0; i < samples; ++i) {
+                for (size_t i = 0; i < sample_amount; ++i) {
                     timer::timer_tick_t r_pre, r_post, v_pre, v_post, sync;
 
                     sync = *nested_counter_ptr;
@@ -6428,6 +6464,11 @@ public:
                     if (npf_l < best_npf_l) best_npf_l = npf_l;
                     if (add_l < best_add_l) best_add_l = add_l;
                 }
+
+                if (npf_locked) {
+                    VirtualUnlock(npf_samples.data(), sample_amount * sizeof(timer::timer_tick_t));
+                    VirtualUnlock(add_samples.data(), sample_amount * sizeof(timer::timer_tick_t));
+                }
             }
         #endif
 
@@ -6481,9 +6522,10 @@ public:
         if (check_nested_hypervisors) {
             const double npf_ratio = best_add_l ? (double)best_npf_l / (double)best_add_l : 0;
             debug("TIMER: Memory > VMM -> ", best_npf_l, " | nVMM -> ", best_add_l, " | Ratio -> ", npf_ratio);
-            if (npf_ratio >= 3.75) hypervisor_detected = true;
+            if (npf_ratio >= 4.00) hypervisor_detected = true;
         }
 
+        /* Cleanup stuff until end of function */
         if (mem && nt_free_virtual_memory) {
             SIZE_T free_size = 0;
             nt_free_virtual_memory(current_process, &mem, &free_size, MEM_RELEASE);
@@ -6499,9 +6541,13 @@ public:
         SetThreadPriorityBoost(current_thread, FALSE);
         SetThreadPriority(current_thread, old_thread_priority);
         SetPriorityClass(current_process, old_process_priority);
-        SetThreadAffinityMask(current_thread, old_affinity);
-        VirtualUnlock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t));
-        VirtualUnlock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+        SetThreadGroupAffinity(current_thread, &old_affinity, nullptr);
+        if (vm_samples_locked) {
+            VirtualUnlock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+        }
+        if (ref_samples_locked) {
+            VirtualUnlock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+        }
 
         return hypervisor_detected;
     #endif
