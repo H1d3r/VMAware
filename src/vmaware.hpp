@@ -8093,7 +8093,7 @@ public:
             /* 6) APIC/MADT table validation */
             if (memcmp(header.signature, "APIC", 4) == 0) {
                 size_t offset = 44; /* MADT subtables start at offset 44 (0x2C) */
-                size_t qemu_override_count = 0;
+                u8 qemu_override_mask = 0;
 
                 while (offset + 2 <= buffer_len) {
                     const u8 subtable_type = buffer[offset];
@@ -8105,19 +8105,44 @@ public:
 
                     /* Subtable type 0x02 is Interrupt Source Override */
                     if (subtable_type == 0x02 && subtable_len == 10) {
+                        const u8 bus = buffer[offset + 2];
                         const u8 source = buffer[offset + 3];
+                        u32 global_system_interrupt = 0;
                         u16 flags = 0;
+
+                        memcpy(&global_system_interrupt, buffer + offset + 4, sizeof(u32));
                         memcpy(&flags, buffer + offset + 8, sizeof(u16));
 
-                        /* QEMU default configuration overrides IRQs 5, 9, 10, 11 to Active High, Level Triggered (Flags: 0x000D) */
-                        if ((source == 5 || source == 9 || source == 10 || source == 11) && flags == 0x000D) {
-                            qemu_override_count++;
+                        u8 source_mask = 0;
+                        switch (source) {
+                            case 5:  source_mask = 1u << 0; break;
+                            case 9:  source_mask = 1u << 1; break;
+                            case 10: source_mask = 1u << 2; break;
+                            case 11: source_mask = 1u << 3; break;
+                            default: break;
+                        }
+
+                        /*
+                         * QEMU's default PCI IRQ mask emits identity-mapped ISOs for
+                         * IRQs 5, 9, 10, and 11 with active-high, level-triggered
+                         * semantics. For the ISA bus, conforming polarity (0) and
+                         * explicit active-high polarity (1) are equivalent, so both
+                         * flags 0x000C and 0x000D represent the same interrupt.
+                         */
+                        const u16 polarity = flags & 0x0003;
+                        const u16 trigger_mode = flags & 0x000C;
+                        const bool valid_flags = (flags & 0xFFF0) == 0;
+                        const bool active_high = polarity == 0 || polarity == 1;
+                        const bool level_triggered = trigger_mode == 0x000C;
+
+                        if (source_mask != 0 && bus == 0 && global_system_interrupt == source && valid_flags && active_high && level_triggered) {
+                            qemu_override_mask |= source_mask;
                         }
                     }
                     offset += subtable_len;
                 }
 
-                if (qemu_override_count >= 4) {
+                if (qemu_override_mask == 0x0F) {
                     debug("FIRMWARE: APIC table contains QEMU-specific Interrupt Source Overrides");
                     return core::add(brand_enum::QEMU);
                 }
