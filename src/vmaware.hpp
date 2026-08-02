@@ -6167,7 +6167,7 @@ public:
                 names[11] = WHvX64RegisterGs;
 
                 memset(values, 0, sizeof(values));
-                /* a
+                /* 
                  * In CR0, Bit 0 (PE - Protection Enable) is set to 0 and Bit 31 (PG - Paging) too, this makes VMAware's guest VP L2 run in real-address mode
                  * The other set bits (CD, NW, and ET) match the standard architectural power-on reset state of x86 processors
                  */
@@ -9086,7 +9086,7 @@ public:
      */
     [[nodiscard]] static bool thread_count() {
     #if (x86 && !APPLE)
-        debug("THREADCOUNT: ", "threads = ", memo::threadcount::fetch());
+        debug("THREAD_COUNT: ", "threads = ", memo::thread_count::fetch());
 
         const struct cpu::stepping_struct steps = cpu::fetch_steppings();
 
@@ -9094,7 +9094,7 @@ public:
             return false;
         }
 
-        return (memo::threadcount::fetch() <= 2);
+        return (memo::thread_count::fetch() <= 2);
     #else 
         return false;
     #endif
