@@ -5460,7 +5460,7 @@ public:
                 return false;
             }
 
-            std::vector<std::byte> buf(static_cast<size_t>(len));
+            std::vector<unsigned char> buf(static_cast<size_t>(len));
             if (!GetLogicalProcessorInformationEx(
                 RelationProcessorCore,
                 reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data()),
