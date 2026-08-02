@@ -14912,7 +14912,6 @@ VM::u8 VM::detected_count_num = 0;
 
 std::vector<VM::enum_flags> VM::disabled_techniques = []() {
     std::vector<VM::enum_flags> c;
-    c.push_back(VM::SVM_EXCEPTIONS);
     return c;
 }();
 
@@ -14932,7 +14931,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
         #if (WINDOWS)
             {VM::TRAP, {100, VM::trap}},
             {VM::KVM_INTERCEPTION, {150, VM::kvm_interception}},
-            {VM::SVM_EXCEPTIONS, {150, VM::svm_exceptions}},
+            {VM::SVM_EXCEPTIONS, {35, VM::svm_exceptions}},
             {VM::MEASURED_BOOT, {100, VM::measured_boot}},
             {VM::INTERRUPT_SHADOW, {100, VM::interrupt_shadow}},
             {VM::EIP_OVERFLOW, {100, VM::eip_overflow}},
