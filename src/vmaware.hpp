@@ -5976,13 +5976,35 @@ public:
             SetThreadPriority(current_thread, THREAD_PRIORITY_HIGHEST); /* decrease chance of being rescheduled */
             SetThreadPriorityBoost(current_thread, TRUE); /* disable dynamic boosts */
 
+            timer::timer_tick_t local_counter = state.counter;
+
+            #define TICK8() \
+                local_counter++; state.counter = local_counter; \
+                local_counter++; state.counter = local_counter; \
+                local_counter++; state.counter = local_counter; \
+                local_counter++; state.counter = local_counter; \
+                local_counter++; state.counter = local_counter; \
+                local_counter++; state.counter = local_counter; \
+                local_counter++; state.counter = local_counter; \
+                local_counter++; state.counter = local_counter;
+
+            #define TICK64() \
+                TICK8(); TICK8(); TICK8(); TICK8(); \
+                TICK8(); TICK8(); TICK8(); TICK8();
+
+            #define TICK512() \
+                TICK64(); TICK64(); TICK64(); TICK64(); \
+                TICK64(); TICK64(); TICK64(); TICK64();
+
             while (!state.start_test.load(std::memory_order_acquire)) {}
 
             while (!state.test_done.load(std::memory_order_relaxed)) {
-                const timer::timer_tick_t current = state.counter; /* to silence warnings about incrementing volatile stuff */
-                state.counter = current + 1; /* better than doing incq in inline assembly, standard increment forces the correct cache behavior we want */
-                std::atomic_signal_fence(std::memory_order_seq_cst);
+                TICK512(); TICK512(); TICK512(); TICK512();
+                TICK512(); TICK512(); TICK512(); TICK512();
             }
+            #undef TICK512
+            #undef TICK64
+            #undef TICK8
         };
 
         bool serialize_available = cpu::is_intel();
