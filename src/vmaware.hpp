@@ -3202,7 +3202,8 @@ public:
             static u32 thread_count_cache;
 
             static u32 fetch() noexcept {
-                if (thread_count_cache != 0) {
+                if (VMAWARE_LIKELY(thread_count_cache != 0)) {
+                    VMAWARE_ASSUME(thread_count_cache != 0);
                     return thread_count_cache;
                 }
                 thread_count_cache = std::thread::hardware_concurrency();
@@ -4025,11 +4026,12 @@ public:
         #endif
     #endif
 
-            if (!peb) { /* not x86 or tampered with */
+            if (VMAWARE_UNLIKELY(!peb)) { /* not x86 or tampered with */
                 const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
                 if (ntdll) cached_ntdll = ntdll;
                 return ntdll;
             }
+            VMAWARE_ASSUME(peb != nullptr);
 
             PPEB_LDR_DATA ldr = peb->Ldr;
             if (!ldr) {
@@ -4254,9 +4256,10 @@ public:
         };
 
         static std::string narrow_wide(const wchar_t* wstr) {
-            if (!wstr) {
+            if (VMAWARE_UNLIKELY(!wstr)) {
                 return {};
             }
+            VMAWARE_ASSUME(wstr != nullptr);
 
             std::string result;
             const wchar_t* p = wstr;
@@ -14058,7 +14061,7 @@ public:
             }
 
             /* For custom VM techniques, won't be used most of the time */
-            if (!core::custom_table.empty()) {
+            if (VMAWARE_UNLIKELY(!core::custom_table.empty())) {
                 for (const auto& technique : core::custom_table) {
 
                     /* If cached, return that result */
@@ -14491,9 +14494,10 @@ public:
             throw std::invalid_argument(msg);
         };
 
-        if (percent > 100) {
+        if (VMAWARE_UNLIKELY(percent > 100)) {
             throw_error("Percentage parameter must be between 0 and 100");
         }
+        VMAWARE_ASSUME(percent <= 100);
 
         const size_t current_index = core::custom_table.size();
 
