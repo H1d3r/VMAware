@@ -6541,7 +6541,7 @@ public:
                 debug("TIMER: Detected #VMEXIT latency"); 
                 hypervisor_detected = true;
             }
-            else if (best_cpuid_l >= 2500 || best_ref_l >= 2500) { /* If latency is abnormally high, it means something was spamming interrupts */
+            else if (best_cpuid_l >= 10000 || best_ref_l >= 10000) { /* If latency is abnormally high, it means something was spamming interrupts */
                 debug("TIMER: Detected artificial IPI delivery to timing threads");
                 hypervisor_detected = true;
             }
@@ -9931,7 +9931,7 @@ public:
      * @link https://unprotect.it/snippet/checking-specific-folder-name/196/
      * @implements VM::CUCKOO
      */
-    [[nodiscard]] static bool cuckoo_artifacts() {
+    [[nodiscard]] static bool cuckoo() {
         const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
@@ -15012,7 +15012,7 @@ VM::u16 VM::technique_count = VM::base_technique_count;
 std::vector<VM::core::custom_technique> VM::core::custom_table = {};
 size_t VM::core::custom_table_size = 0;
 
-/* The 0~100 points are debatable, but we think it's fine how it is. Feel free to disagree */
+/* The points are debatable, but we think it's fine how it is. Feel free to disagree */
 std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = []() {
     std::array<VM::core::technique, VM::enum_size + 1> table{};
     /* FORMAT: { VM::<ID>, { certainty%, function pointer } }, */
@@ -15050,7 +15050,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::VPC_INVALID, {75, VM::vpc_invalid}},
             {VM::VMWARE_STR, {35, VM::vmware_str}},
             {VM::GAMARUE, {10, VM::gamarue}},
-            {VM::CUCKOO, {30, VM::cuckoo_artifacts}},
+            {VM::CUCKOO, {30, VM::cuckoo}},
         #endif
 
         #if (LINUX || WINDOWS)
