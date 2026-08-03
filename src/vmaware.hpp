@@ -628,8 +628,7 @@ public:
         VPC_INVALID,
         VMWARE_STR,
         GAMARUE,
-        CUCKOO_DIR,
-        CUCKOO_PIPE,
+        CUCKOO,
         TRAP,
         UD,
         INTERRUPT_SHADOW,
@@ -9926,13 +9925,13 @@ public:
 
 
     /**
-     * @brief Check for cuckoo directory using crt and WIN API directory functions
+     * @brief Check for Cuckoo Sandbox artifacts (directory and communication pipe)
      * @category Windows
-     * @author 一半人生
+     * @author 一半人生, Thomas Roccia (fr0gger)
      * @link https://unprotect.it/snippet/checking-specific-folder-name/196/
-     * @implements VM::CUCKOO_DIR
+     * @implements VM::CUCKOO
      */
-    [[nodiscard]] static bool cuckoo_dir() {
+    [[nodiscard]] static bool cuckoo_artifacts() {
         const HMODULE ntdll = memory::get_ntdll();
         if (!ntdll) return false;
 
@@ -9946,7 +9945,6 @@ public:
         using rtl_init_unicode_string_t = void(__stdcall*)(PUNICODE_STRING DestinationString, PCWSTR SourceString);
         using ntclose_t = NTSTATUS(__stdcall*)(HANDLE Handle);
 
-
         const auto nt_open_file = reinterpret_cast<nt_openfile_t>(functions[0]);
         const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_t>(functions[1]);
         const auto nt_close = reinterpret_cast<ntclose_t>(functions[2]);
@@ -9955,83 +9953,50 @@ public:
             return false;
         }
 
-        constexpr const wchar_t* native_path = L"\\??\\C:\\Cuckoo";
-        UNICODE_STRING path;
-        rtl_init_unicode_string(&path, native_path);
+        struct target_artifact {
+            const wchar_t* path;
+            ACCESS_MASK desired_access;
+            ULONG share_access;
+            ULONG open_options;
+        };
 
-        OBJECT_ATTRIBUTES object_attributes;
-        ZeroMemory(&object_attributes, sizeof(object_attributes));
-        object_attributes.Length = sizeof(object_attributes);
-        object_attributes.ObjectName = &path;
-        object_attributes.Attributes = OBJ_CASE_INSENSITIVE;
+        const target_artifact targets[] = {
+            /* Cuckoo Directory */
+            {
+                L"\\??\\C:\\Cuckoo",
+                FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                FILE_OPEN | FILE_SYNCHRONOUS_IO_NONALERT | FILE_DIRECTORY_FILE
+            },
+            /* Cuckoo Pipe */
+            {
+                L"\\??\\pipe\\cuckoo",
+                FILE_READ_DATA | FILE_READ_ATTRIBUTES,
+                0,
+                FILE_OPEN | FILE_SYNCHRONOUS_IO_NONALERT
+            }
+        };
 
-        IO_STATUS_BLOCK iosb;
-        HANDLE hFile = nullptr;
+        for (const auto& target : targets) {
+            UNICODE_STRING path;
+            rtl_init_unicode_string(&path, target.path);
 
-        constexpr ACCESS_MASK desired_access = FILE_READ_ATTRIBUTES; 
-        constexpr ULONG share_access = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-        constexpr ULONG open_options = FILE_OPEN | FILE_SYNCHRONOUS_IO_NONALERT | FILE_DIRECTORY_FILE;
+            OBJECT_ATTRIBUTES object_attributes;
+            ZeroMemory(&object_attributes, sizeof(object_attributes));
+            object_attributes.Length = sizeof(object_attributes);
+            object_attributes.ObjectName = &path;
+            object_attributes.Attributes = OBJ_CASE_INSENSITIVE;
 
-        const NTSTATUS st = nt_open_file(&hFile, desired_access, &object_attributes, &iosb, share_access, open_options);
-        if (NT_SUCCESS(st)) {
-            if (hFile) nt_close(hFile);
-            return core::add(brand_enum::CUCKOO);
-        }
+            IO_STATUS_BLOCK iosb;
+            HANDLE handle = nullptr;
 
-        return false;
-    }
-                
-                
-    /**
-     * @brief Check for Cuckoo specific piping mechanism
-     * @category Windows
-     * @author Thomas Roccia (fr0gger)
-     * @link https://unprotect.it/snippet/checking-specific-folder-name/196/
-     * @implements VM::CUCKOO_PIPE
-     */
-    [[nodiscard]] static bool cuckoo_pipe() {
-        using ntopenfile_t = NTSTATUS(__stdcall*)(PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
-            POBJECT_ATTRIBUTES ObjectAttributes, PIO_STATUS_BLOCK IoStatusBlock,
-            ULONG ShareAccess, ULONG OpenOptions);
-        using rtl_init_unicode_string_t = void(__stdcall*)(PUNICODE_STRING DestinationString, PCWSTR SourceString);
-        using ntclose_t = NTSTATUS(__stdcall*)(HANDLE Handle);
-
-        const HMODULE ntdll = memory::get_ntdll();
-        if (!ntdll) return false;
-
-        constexpr const char* function_names[] = { "NtOpenFile", "RtlInitUnicodeString", "NtClose" };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
-        const auto nt_open_file = reinterpret_cast<ntopenfile_t>(functions[0]);
-        const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_t>(functions[1]);
-        const auto nt_close = reinterpret_cast<ntclose_t>(functions[2]);
-
-        if (!nt_open_file || !rtl_init_unicode_string || !nt_close) {
-            return false;
-        }
-
-        constexpr const wchar_t* pipe_path = L"\\??\\pipe\\cuckoo";
-        UNICODE_STRING pipe;
-        rtl_init_unicode_string(&pipe, pipe_path);
-
-        OBJECT_ATTRIBUTES object_attributes;
-        ZeroMemory(&object_attributes, sizeof(object_attributes));
-        object_attributes.Length = sizeof(object_attributes);
-        object_attributes.ObjectName = &pipe;
-        object_attributes.Attributes = OBJ_CASE_INSENSITIVE;
-
-        IO_STATUS_BLOCK iosb;
-        HANDLE h_pipe = nullptr;
-
-        constexpr ACCESS_MASK desired_access = FILE_READ_DATA | FILE_READ_ATTRIBUTES;
-        constexpr ULONG share_access = 0;
-        constexpr ULONG open_options = FILE_OPEN | FILE_SYNCHRONOUS_IO_NONALERT;
-
-        const NTSTATUS st = nt_open_file(&h_pipe, desired_access, &object_attributes, &iosb, share_access, open_options);
-        if (NT_SUCCESS(st)) {
-            if (h_pipe) nt_close(h_pipe);
-            return core::add(brand_enum::CUCKOO);
+            const NTSTATUS st = nt_open_file(&handle, target.desired_access, &object_attributes, &iosb, target.share_access, target.open_options);
+            if (NT_SUCCESS(st)) {
+                if (handle) {
+                    nt_close(handle);
+                }
+                return core::add(brand_enum::CUCKOO);
+            }
         }
 
         return false;
@@ -14569,8 +14534,7 @@ public:
             case VMWARE_STR: return "VMWARE_STR";
             case MUTEX: return "MUTEX";
             case THREAD_MISMATCH: return "THREAD_MISMATCH";
-            case CUCKOO_DIR: return "CUCKOO_DIR";
-            case CUCKOO_PIPE: return "CUCKOO_PIPE";
+            case CUCKOO: return "CUCKOO";
             case AZURE: return "AZURE";
             case DISPLAY: return "DISPLAY";
             case BLUESTACKS_FOLDERS: return "BLUESTACKS_FOLDERS";
@@ -15086,8 +15050,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::VPC_INVALID, {75, VM::vpc_invalid}},
             {VM::VMWARE_STR, {35, VM::vmware_str}},
             {VM::GAMARUE, {10, VM::gamarue}},
-            {VM::CUCKOO_DIR, {30, VM::cuckoo_dir}},
-            {VM::CUCKOO_PIPE, {30, VM::cuckoo_pipe}},
+            {VM::CUCKOO, {30, VM::cuckoo_artifacts}},
         #endif
 
         #if (LINUX || WINDOWS)

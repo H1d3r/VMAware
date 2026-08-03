@@ -561,8 +561,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::VMWARE_STR, "STR instruction");
     checker(VM::MUTEX, "mutex strings");
     checker(VM::THREAD_MISMATCH, "thread count mismatch");
-    checker(VM::CUCKOO_DIR, "Cuckoo directory");
-    checker(VM::CUCKOO_PIPE, "Cuckoo pipe");
+    checker(VM::CUCKOO, "Cuckoo");
     checker(VM::AZURE, "Azure Hyper-V");
     checker(VM::DISPLAY, "display");
     checker(VM::BLUESTACKS_FOLDERS, "BlueStacks folders");
