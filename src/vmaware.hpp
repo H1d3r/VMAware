@@ -15055,14 +15055,14 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
     const VM::core::technique_entry entries[] = {
         // START OF TECHNIQUE TABLE
         #if (WINDOWS)
-            {VM::TRAP, {100, VM::trap}},
+            {VM::TRAP, {150, VM::trap}},
             {VM::KVM_INTERCEPTION, {150, VM::kvm_interception}},
             {VM::SVM_EXCEPTIONS, {35, VM::svm_exceptions}},
-            {VM::MEASURED_BOOT, {100, VM::measured_boot}},
-            {VM::INTERRUPT_SHADOW, {100, VM::interrupt_shadow}},
-            {VM::EIP_OVERFLOW, {100, VM::eip_overflow}},
-            {VM::HYPERVISOR_HOOK, {100, VM::hypervisor_hook}},
-            {VM::SINGLE_STEP, {100, VM::single_step}},
+            {VM::MEASURED_BOOT, {150, VM::measured_boot}},
+            {VM::INTERRUPT_SHADOW, {150, VM::interrupt_shadow}},
+            {VM::EIP_OVERFLOW, {150, VM::eip_overflow}},
+            {VM::HYPERVISOR_HOOK, {150, VM::hypervisor_hook}},
+            {VM::SINGLE_STEP, {150, VM::single_step}},
             {VM::TPM_PASSTHROUGH, {45, VM::tpm_passthrough}},
             {VM::NVRAM, {100, VM::nvram}},
             {VM::CPU_HEURISTIC, {90, VM::cpu_heuristic}},
@@ -15072,7 +15072,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::GPU_CAPABILITIES, {20, VM::gpu_capabilities}},
             {VM::MSR, {100, VM::msr}},
             {VM::VIRTUAL_PROCESSORS, {100, VM::virtual_processors}},
-            {VM::WINE, {100, VM::wine}},
+            {VM::WINE, {150, VM::wine}},
             {VM::DBVM, {150, VM::dbvm}},
             {VM::UD, {100, VM::ud}},
             {VM::DRIVERS, {100, VM::drivers}},
@@ -15095,8 +15095,8 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::DEVICES, {95, VM::pci_devices}},
             {VM::SYSTEM_REGISTERS, {50, VM::system_registers}},
             {VM::AZURE, {30, VM::azure}},
-            {VM::BOOT_LOGO, {100, VM::boot_logo}},
-            {VM::DISK_SERIAL, {100, VM::disk_serial_number}},
+            {VM::BOOT_LOGO, {90, VM::boot_logo}},
+            {VM::DISK_SERIAL, {150, VM::disk_serial_number}},
         #endif
 
         #if (LINUX)
@@ -15148,8 +15148,8 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
         {VM::VMID, {100, VM::vmid}},
         {VM::CPU_BRAND, {95, VM::cpu_brand}},
         {VM::CPUID_SIGNATURE, {95, VM::cpuid_signature}},
-        {VM::HYPERVISOR_STR, {100, VM::hypervisor_str}},
-        {VM::HYPERVISOR_BIT, {100, VM::hypervisor_bit}},
+        {VM::HYPERVISOR_STR, {150, VM::hypervisor_str}},
+        {VM::HYPERVISOR_BIT, {150, VM::hypervisor_bit}},
         {VM::BOCHS_CPU, {100, VM::bochs_cpu}},
         {VM::KGT_SIGNATURE, {80, VM::intel_kgt_signature}}
         /* END OF TECHNIQUE TABLE */
