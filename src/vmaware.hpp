@@ -12916,8 +12916,7 @@ public:
         if (!handler_ptr) return false;
 
         /*
-         * Recovery jump target for veh
-         *
+         * Recovery jump target for VEH
          * dynamically allocate a 32-bit compatible stack (must reside below 4GB)
          */
         PVOID stack32_base = nullptr;
@@ -12945,9 +12944,14 @@ public:
 
         if (alloc_status >= 0) {
             if (boundary_base == reinterpret_cast<PVOID>(0xFFFF0000ULL)) {
-                /* Inject cpuid at the strict end of the compat-mode space, volatile to prevent C6011 or Clang's static analyzer from flagging dereferences of the hardcoded memory address */
-                volatile uintptr_t raw_execution_target = 0xFFFFFFFEULL;
-                u8* execution_target = reinterpret_cast<u8*>(raw_execution_target);
+                /* Inject cpuid at the strict end of the compat-mode space */
+                u8* execution_target = reinterpret_cast<u8*>(boundary_base) + 0xFFFEULL;
+
+                /* Break Clang static analyzer's tracking of execution_target as a compile-time constant */
+            #if (GCC || CLANG)
+                asm volatile("" : "+r"(execution_target));
+            #endif
+
                 execution_target[0] = 0x0F;
                 execution_target[1] = 0xA2;
 
