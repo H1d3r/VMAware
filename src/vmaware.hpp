@@ -425,13 +425,15 @@
     #include <devguid.h>
     #include <bcrypt.h>
     #include <winhvplatform.h>
+    #include <wintrust.h>
+    #include <softpub.h>
+    #include <wincrypt.h>
 
     #pragma comment(lib, "setupapi.lib")
     #pragma comment(lib, "powrprof.lib")
     #pragma comment(lib, "advapi32.lib")
     #pragma comment(lib, "gdi32.lib")
     #pragma comment(lib, "user32.lib")
-
 #elif (LINUX)
     #if (x86)
         #include <cpuid.h>
@@ -4613,10 +4615,316 @@ public:
                 if (eax != 0x31237648) /* Hv#1 interface */
                     return false;
 
-                cpu::cpuid(eax, ebx, ecx, edx, cpu::leaf::hv_nested); /* hypervisor level of the current guest */
+                cpu::cpuid(eax, ebx, ecx, edx, cpu::leaf::hv_nested); /* Hypervisor level of the current guest */
                 const u32 guest_level = (eax >> 10) & 0xF;
 
                 return guest_level != 0;
+            };
+
+            /* Check if the HAL path HalpInitializeErrSrc->HalpInitializeMce->HalpMceInit->HalpHvInitMcaPcrContext is initializing machine-check/WHEA state in a hypervisor-aware context */
+            auto is_halh_present = []() noexcept -> bool {
+                const HMODULE ntdll = memory::get_ntdll();
+                if (!ntdll) return true;
+
+                constexpr const char* function_names[] = {
+                    "NtQuerySystemInformation"
+                };
+                void* functions[ARRAYSIZE(function_names)] = {};
+                memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
+                using nt_query_sysinfo_fn = NTSTATUS(__stdcall*)(ULONG, PVOID, ULONG, PULONG);
+                nt_query_sysinfo_fn nt_query_system_information = reinterpret_cast<nt_query_sysinfo_fn>(functions[0]);
+                if (!nt_query_system_information) return false;
+
+                struct entry_struct { ULONG Tag; ULONG PA; ULONG PF; SIZE_T PU; ULONG NPA; ULONG NPF; SIZE_T NPU; };
+                struct info_struct { ULONG Count; entry_struct TagInfo[1]; };
+
+                ULONG size = 1024 * 1024;
+                HANDLE heap = GetProcessHeap();
+                PVOID buffer = HeapAlloc(heap, 0, size);
+                if (!buffer) return true;
+
+                ULONG needed = 0;
+                while (nt_query_system_information(0x16, buffer, size, &needed) == 0xC0000004L) {
+                    size = needed + 4096;
+                    if (PVOID new_buffer = HeapReAlloc(heap, 0, buffer, size)) {
+                        buffer = new_buffer;
+                    }
+                    else {
+                        HeapFree(heap, 0, buffer);
+                        return true;
+                    }
+                }
+
+                bool found = false;
+                const auto* info = static_cast<info_struct*>(buffer);
+                if (info) {
+                    for (ULONG i = 0; i < info->Count; ++i) {
+                        if (info->TagInfo[i].Tag == 0x486C6148) { /* HalH */
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+
+                HeapFree(heap, 0, buffer);
+                return found;
+            };
+
+            /* Check if the Windows Hypervisor Platform interface is responsive and confirms a running hypervisor */
+            auto is_hyperv_interface_present = []() noexcept -> bool {
+                enum WHV_CAPABILITY_CODE {
+                    WHvCapabilityCodeHypervisorPresent = 0x00000000,
+                };
+
+                HMODULE h_whp = LoadLibraryW(L"WinHvPlatform.dll");
+                if (!h_whp) {
+                    return false;
+                }
+
+                const char* names[] = { "WHvGetCapability" };
+                void* funcs[1] = { nullptr };
+
+                memory::get_function_address(h_whp, names, funcs, 1);
+
+                bool is_present = false;
+                if (funcs[0]) {
+                    using whv_get_capability_fn = HRESULT(__stdcall*)(
+                        WHV_CAPABILITY_CODE CapabilityCode,
+                        void* CapabilityBuffer,
+                        UINT32 CapabilityBufferSize,
+                        UINT32* WrittenBufferSize
+                    );
+
+                    const auto whv_get_capability = reinterpret_cast<whv_get_capability_fn>(funcs[0]);
+                    BOOL present_val = FALSE;
+                    UINT32 written = 0;
+                    HRESULT hr = whv_get_capability(
+                        WHvCapabilityCodeHypervisorPresent,
+                        &present_val,
+                        sizeof(present_val),
+                        &written
+                    );
+                    if (SUCCEEDED(hr)) {
+                        is_present = (present_val == 1);
+                    }
+                }
+
+                FreeLibrary(h_whp);
+                return is_present;
+            };
+
+            /* Check if the virtualization infrastructure driver is present */
+            auto is_hyperv_service_present = []() noexcept -> bool {
+                const HMODULE ntdll_hmodule = memory::get_ntdll();
+                if (!ntdll_hmodule) return false;
+
+                constexpr const char* nt_names[] = { "NtQuerySystemInformation" };
+                void* nt_funcs[1] = {};
+                memory::get_function_address(ntdll_hmodule, nt_names, nt_funcs, 1);
+
+                using nt_query_sysinfo_fn = NTSTATUS(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
+                const auto nt_query_system_information =
+                    reinterpret_cast<nt_query_sysinfo_fn>(nt_funcs[0]);
+                if (!nt_query_system_information) return false;
+
+                typedef struct _RTL_PROCESS_MODULE_INFORMATION {
+                    HANDLE  Section;
+                    PVOID   MappedBase;
+                    PVOID   ImageBase;
+                    ULONG   ImageSize;
+                    ULONG   Flags;
+                    USHORT  LoadOrderIndex;
+                    USHORT  InitOrderIndex;
+                    USHORT  LoadCount;
+                    USHORT  OffsetToFileName;
+                    UCHAR   FullPathName[256];
+                } RTL_PROCESS_MODULE_INFORMATION, * PRTL_PROCESS_MODULE_INFORMATION;
+
+                typedef struct _RTL_PROCESS_MODULES {
+                    ULONG NumberOfModules;
+                    RTL_PROCESS_MODULE_INFORMATION Modules[1];
+                } RTL_PROCESS_MODULES, * PRTL_PROCESS_MODULES;
+
+                /* small helpers */
+                auto to_wide = [](const char* s, wchar_t* out, size_t out_cch) noexcept -> bool {
+                    if (!s || !*s || !out || !out_cch) return false;
+                    const int n = MultiByteToWideChar(CP_ACP, 0, s, -1, out, static_cast<int>(out_cch));
+                    return n > 0;
+                };
+
+                auto basename = [](wchar_t* path) noexcept -> wchar_t* {
+                    if (!path) return path;
+                    wchar_t* p = wcsrchr(path, L'\\');
+                    wchar_t* q = wcsrchr(path, L'/');
+                    if (!p || (q && q > p)) p = q;
+                    return p ? (p + 1) : path;
+                };
+
+                auto normalize_path = [](wchar_t* path) noexcept -> bool {
+                    if (!path || !*path) return false;
+
+                    if (wcsncmp(path, L"\\??\\", 4) == 0) {
+                        const size_t tail_cch = wcslen(path + 4);
+                        memmove(path, path + 4, (tail_cch + 1) * sizeof(wchar_t));
+                        return true;
+                    }
+
+                    if (wcsncmp(path, L"\\SystemRoot\\", 12) == 0) {
+                        wchar_t win_dir[MAX_PATH]{};
+                        if (!GetWindowsDirectoryW(win_dir, ARRAYSIZE(win_dir))) return false;
+
+                        const size_t win_dir_cch = wcslen(win_dir);
+
+                        BOOL is_wow64 = FALSE;
+                        IsWow64Process(GetCurrentProcess(), &is_wow64);
+
+                        wchar_t tmp[MAX_PATH]{};
+                        memcpy(tmp, win_dir, win_dir_cch * sizeof(wchar_t));
+
+                        if (is_wow64 && _wcsnicmp(path + 11, L"\\system32\\", 10) == 0) {
+                            const size_t tail_cch = wcslen(path + 11 + 10);
+                            if ((win_dir_cch + 11 + tail_cch + 1) >= MAX_PATH) return false;
+
+                            memcpy(tmp + win_dir_cch, L"\\sysnative\\", 11 * sizeof(wchar_t));
+                            memcpy(tmp + win_dir_cch + 11, path + 11 + 10, (tail_cch + 1) * sizeof(wchar_t));
+                        }
+                        else {
+                            const size_t tail_cch = wcslen(path + 11);
+                            if ((win_dir_cch + tail_cch + 1) >= MAX_PATH) return false;
+
+                            memcpy(tmp + win_dir_cch, path + 11, (tail_cch + 1) * sizeof(wchar_t));
+                        }
+
+                        memcpy(path, tmp, (wcslen(tmp) + 1) * sizeof(wchar_t));
+                        return true;
+                    }
+
+                    return true;
+                };
+
+                auto file_has_ascii = [](const wchar_t* path, const char* needle) noexcept -> bool {
+                    if (!path || !needle || !*needle) return false;
+
+                    HANDLE file_handle = CreateFileW(
+                        path,
+                        GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        nullptr,
+                        OPEN_EXISTING,
+                        FILE_ATTRIBUTE_NORMAL,
+                        nullptr);
+
+                    if (file_handle == INVALID_HANDLE_VALUE) return false;
+
+                    LARGE_INTEGER file_size{};
+                    /* Cap maximum size read to 10MB */
+                    if (!GetFileSizeEx(file_handle, &file_size) || file_size.QuadPart <= 0 ||
+                        file_size.QuadPart > 10 * 1024 * 1024) {
+                        CloseHandle(file_handle);
+                        return false;
+                    }
+
+                    const size_t haystack_size = static_cast<size_t>(file_size.QuadPart);
+                    std::vector<BYTE> buffer(haystack_size);
+                    DWORD bytes_read = 0;
+
+                    if (!ReadFile(file_handle, buffer.data(), static_cast<DWORD>(haystack_size), &bytes_read, nullptr) ||
+                        bytes_read != static_cast<DWORD>(haystack_size)) {
+                        CloseHandle(file_handle);
+                        return false;
+                    }
+
+                    CloseHandle(file_handle);
+
+                    const size_t needle_size = strlen(needle);
+                    if (haystack_size < needle_size) return false;
+
+                    const size_t max_search = haystack_size - needle_size;
+                    for (size_t i = 0; i <= max_search; ++i) {
+                        bool match = true;
+                        for (size_t j = 0; j < needle_size; ++j) {
+                            char c1 = static_cast<char>(buffer[i + j]);
+                            char c2 = needle[j];
+
+                            if (c1 >= 'A' && c1 <= 'Z') c1 += 32;
+                            if (c2 >= 'A' && c2 <= 'Z') c2 += 32;
+
+                            if (c1 != c2) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (match) return true;
+                    }
+
+                    return false;
+                };
+
+                HMODULE wintrust_hmodule = LoadLibraryW(L"wintrust.dll");
+                if (!wintrust_hmodule) return false;
+
+                constexpr const char* wintrust_names[] = { "WinVerifyTrust" };
+                void* wintrust_funcs[ARRAYSIZE(wintrust_names)] = {};
+                memory::get_function_address(wintrust_hmodule, wintrust_names, wintrust_funcs, ARRAYSIZE(wintrust_names));
+
+                using win_verify_trust_fn = LONG(__stdcall*)(HWND, GUID*, LPVOID);
+                const auto win_verify_trust = reinterpret_cast<win_verify_trust_fn>(wintrust_funcs[0]);
+
+                if (!win_verify_trust) return false;
+
+                auto is_signature_valid = [&](const wchar_t* file_path) noexcept -> bool {
+                    WINTRUST_FILE_INFO file_info{};
+                    file_info.cbStruct = sizeof(file_info);
+                    file_info.pcwszFilePath = file_path;
+
+                    WINTRUST_DATA trust_data{};
+                    trust_data.cbStruct = sizeof(trust_data);
+                    trust_data.dwUIChoice = WTD_UI_NONE;
+                    trust_data.fdwRevocationChecks = WTD_REVOKE_NONE;
+                    trust_data.dwUnionChoice = WTD_CHOICE_FILE;
+                    trust_data.pFile = &file_info;
+                    trust_data.dwStateAction = WTD_STATEACTION_VERIFY;
+                    trust_data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL;
+
+                    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+                    const LONG trust_status = win_verify_trust(nullptr, &action, &trust_data);
+
+                    trust_data.dwStateAction = WTD_STATEACTION_CLOSE;
+                    win_verify_trust(nullptr, &action, &trust_data);
+
+                    return (trust_status == ERROR_SUCCESS);
+                };
+
+                /* enumerate loaded modules */
+                ULONG needed = 0;
+                NTSTATUS status = nt_query_system_information(11, nullptr, 0, &needed);
+                if (status != (NTSTATUS)0xC0000004L || !needed) return false;
+
+                std::vector<BYTE> buffer(needed);
+                status = nt_query_system_information(11, buffer.data(), static_cast<ULONG>(buffer.size()), &needed);
+                if (!NT_SUCCESS(status)) return false;
+
+                auto modules = reinterpret_cast<PRTL_PROCESS_MODULES>(buffer.data());
+                for (ULONG i = 0; i < modules->NumberOfModules; ++i) {
+                    wchar_t module_path[MAX_PATH]{};
+                    if (!to_wide(reinterpret_cast<const char*>(modules->Modules[i].FullPathName), module_path, ARRAYSIZE(module_path))) {
+                        continue;
+                    }
+
+                    if (!normalize_path(module_path)) continue;
+
+                    if (_wcsicmp(basename(module_path), L"Vid.sys") == 0) {
+                        if (!is_signature_valid(module_path)) return false;
+                        debug("HYPER-X: Driver signature is valid");
+                        if (!file_has_ascii(module_path, "vid.pdb")) return false;
+                        debug("HYPER-X: Driver debugging symbols are valid");
+                        if (!file_has_ascii(module_path, "vidpartition")) return false;
+                        return true;
+                    }
+                }
+
+                return false;
             };
 
             const char* enlightenment_str = cpu::cpu_manufacturer(cpu::leaf::hv_enlightenment);
@@ -4673,10 +4981,24 @@ public:
                     memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
 
                     /* If running under Hyper-V in AMD64 (doesnt matter the VTL/partition level), the returned IDT base is emulated at KiOp_SGDTSIDT to prevent kernel address leakage */
-                    const bool is_hyper_v_host = (idt_base == 0xfffff80000001000) && (enlightenment_str && strcmp(brand_str, "Microsoft Hv") == 0);
+                    bool is_hyper_v_host = (idt_base == 0xfffff80000001000) && (enlightenment_str && strcmp(brand_str, "Microsoft Hv") == 0);
                 #else
-                    const bool is_hyper_v_host = (enlightenment_str && strcmp(brand_str, "Microsoft Hv") == 0);
+                    bool is_hyper_v_host = (enlightenment_str && strcmp(brand_str, "Microsoft Hv") == 0);
                 #endif
+
+                    if (util::is_windows_11()) {
+                        const bool hal = is_halh_present();
+                        const bool vid = is_hyperv_service_present();
+                        const bool whp = is_hyperv_interface_present();
+
+                        debug("HYPER-X: Hypervisor Hardware Abstraction Layer: ", hal);
+                        debug("HYPER-X: Virtual Infrastructure Driver: ", vid);
+                        debug("HYPER-X: Windows Hypervisor Platform: ", whp);
+
+                        is_hyper_v_host &= hal;
+                        is_hyper_v_host &= vid;
+                        is_hyper_v_host &= whp;
+                    }
 
                     if (is_hyper_v_host) {
                         debug("HYPER-X: Detected Hyper-V host machine");
@@ -4697,6 +5019,24 @@ public:
         }
 
     #if (WINDOWS)
+        [[nodiscard]] static bool is_windows_11() noexcept {
+            const HMODULE ntdll = memory::get_ntdll();
+            if (!ntdll) return false;
+
+            const char* function_names[] = { "RtlGetVersion" };
+            void* functions[ARRAYSIZE(function_names)] = {};
+            memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
+            using rtl_get_version_fn = NTSTATUS(__stdcall*)(PRTL_OSVERSIONINFOW);
+            const auto rtl_get_version = reinterpret_cast<rtl_get_version_fn>(functions[0]);
+            if (!rtl_get_version) return false;
+
+            RTL_OSVERSIONINFOW vi{};
+            vi.dwOSVersionInfoSize = sizeof(vi);
+
+            return rtl_get_version(&vi) == 0 && vi.dwBuildNumber >= 22000;
+        }
+
         static bool get_manufacturer_model(const char** out_manufacturer, const char** out_model) noexcept {
             if (out_manufacturer) *out_manufacturer = "";
             if (out_model) *out_model = "";
@@ -9257,7 +9597,7 @@ public:
                 !strncmp(name, "sg", 2) ||
                 !strncmp(name, "hd", 2) ||
                 !strncmp(name, "vd", 2)
-                ) {
+               ) {
                 const char sys_block_str[] = "/sys/block/";
                 const char device_serial_str[] = "/device/serial";
 
