@@ -652,7 +652,7 @@ public:
         DEVICES,
         AZURE,
         BOOT_LOGO,
-        DISK_SERIAL,
+        DISK,
 
         /* Linux */
         SMBIOS_VM_BIT,
@@ -816,7 +816,7 @@ public:
 
     /* For platform compatibility ranges */
     static constexpr u8 WINDOWS_START = VM::GPU_CAPABILITIES;
-    static constexpr u8 WINDOWS_END = VM::DISK_SERIAL;
+    static constexpr u8 WINDOWS_END = VM::DISK;
     static constexpr u8 LINUX_START = VM::SYSTEM_REGISTERS;
     static constexpr u8 LINUX_END = VM::THREAD_COUNT;
     static constexpr u8 MACOS_START = VM::THREAD_COUNT;
@@ -8867,11 +8867,11 @@ public:
 
     
     /**
-    * @brief Check for serial numbers of virtual disks
+    * @brief Check for presence of virtual disks
     * @category Windows
-    * @implements VM::DISK_SERIAL
+    * @implements VM::DISK
     */
-    [[nodiscard]] static bool disk_serial_number() {
+    [[nodiscard]] static bool disk() {
         bool result = false;
 
         /*
@@ -8888,7 +8888,7 @@ public:
 
             return str[2] == '0' && str[3] == '0' && str[4] == '0' && str[5] == '0';
         };
-        
+
         /*
          * Helper to detect VirtualBox instances
          * VirtualBox uses a specific serial format "VB" followed by hex segments
@@ -8898,44 +8898,50 @@ public:
             if (len != 19) {
                 return false;
             }
-            
+
             if ((str[0] & 0xDF) != 'V' || (str[1] & 0xDF) != 'B') {
                 return false;
             }
             if (str[10] != '-') {
                 return false;
             }
-            
+
             auto is_hex = [](char c) noexcept -> bool {
                 const char lower = static_cast<char>(c | 0x20);
-                return (c >= '0' && c <= '9') 
-                || (lower >= 'a' && lower <= 'f');
+                return (c >= '0' && c <= '9') || (lower >= 'a' && lower <= 'f');
             };
-            
+
             for (size_t i = 2; i < 10; ++i) {
                 if (!is_hex(str[i])) {
                     return false;
                 }
             }
-            
+
             for (size_t i = 11; i < 19; ++i) {
                 if (!is_hex(str[i])) {
                     return false;
                 }
             }
-            
+
             return true;
         };
-        
-        #if (WINDOWS)
+
+    #if (WINDOWS)
+
+        #ifndef StorageAdapterProtocolSpecificProperty
+            #define StorageAdapterProtocolSpecificProperty static_cast<STORAGE_PROPERTY_ID>(49)
+        #endif
+        #ifndef StorageDeviceProtocolSpecificProperty
+            #define StorageDeviceProtocolSpecificProperty static_cast<STORAGE_PROPERTY_ID>(50)
+        #endif
 
         auto strnlen = [](const char* s, size_t max) noexcept -> size_t {
             const void* p = memchr(s, 0, max);
             if (!p) return max;
             return static_cast<size_t>(static_cast<const char*>(p) - s);
-        };  
+        };
 
-        constexpr u8 MAX_PHYSICAL_DRIVES = 4;
+        constexpr u16 MAX_PHYSICAL_DRIVES = 256;
         constexpr size_t MAX_DESCRIPTOR_SIZE = 64 * 1024;
         u8 successful_opens = 0;
 
@@ -8973,11 +8979,109 @@ public:
             return result;
         }
 
-        /*
-         * Iterate through the first few physical drives (PhysicalDrive0 to PhysicalDrive3)
-         * most systems boot from 0, and VMs rarely emulate more than 1 or 2 drives by default
-         */
-        for (u8 drive = 0; drive < MAX_PHYSICAL_DRIVES; ++drive) {
+        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
+
+        /* NVMe heuristic checks */     
+        auto check_nvme_heuristics = [&](HANDLE dev) noexcept -> bool {
+        #pragma pack(push, 1)
+            struct ProtocolQuery {
+                STORAGE_PROPERTY_QUERY query;
+                struct {
+                    DWORD ProtocolType;
+                    DWORD DataType;
+                    DWORD ProtocolDataRequestValue;
+                    DWORD ProtocolDataRequestSubValue;
+                    DWORD ProtocolDataOffset;
+                    DWORD ProtocolDataLength;
+                    DWORD FixedProtocolReturnData;
+                    DWORD Reserved[3];
+                } protocol_data;
+            } qpacket{};
+        #pragma pack(pop)
+
+            auto query_protocol = [&](STORAGE_PROPERTY_ID prop_id, DWORD data_type, DWORD req_val, DWORD req_sub_val, void* out_buf, DWORD out_size) noexcept -> bool {
+                qpacket.query.PropertyId = prop_id;
+                qpacket.query.QueryType = PropertyStandardQuery;
+                qpacket.protocol_data.ProtocolType = ProtocolTypeNvme;
+                qpacket.protocol_data.DataType = data_type;
+                qpacket.protocol_data.ProtocolDataRequestValue = req_val;
+                qpacket.protocol_data.ProtocolDataRequestSubValue = req_sub_val;
+                qpacket.protocol_data.ProtocolDataOffset = sizeof(qpacket.protocol_data);
+                qpacket.protocol_data.ProtocolDataLength = out_size;
+
+                const size_t header_size = sizeof(ProtocolQuery);
+                const size_t total_size = header_size + out_size;
+
+                PVOID allocation_base = nullptr;
+                SIZE_T region_size = total_size;
+                NTSTATUS query_st = nt_allocate_virtual_memory(current_process, &allocation_base, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                if (!NT_SUCCESS(query_st) || allocation_base == nullptr) {
+                    return false;
+                }
+
+                RtlZeroMemory(allocation_base, total_size);
+                *reinterpret_cast<ProtocolQuery*>(allocation_base) = qpacket;
+
+                IO_STATUS_BLOCK query_iosb{};
+                query_st = nt_device_io_control_file(dev, nullptr, nullptr, nullptr, &query_iosb,
+                    IOCTL_STORAGE_QUERY_PROPERTY,
+                    allocation_base, static_cast<ULONG>(total_size),
+                    allocation_base, static_cast<ULONG>(total_size));
+
+                bool success = false;
+                if (NT_SUCCESS(query_st)) {
+                    BYTE* payload = reinterpret_cast<BYTE*>(allocation_base) + header_size;
+                    memcpy(out_buf, payload, out_size);
+                    success = true;
+                }
+
+                SIZE_T free_size = 0;
+                nt_free_virtual_memory(current_process, &allocation_base, &free_size, MEM_RELEASE);
+                return success;
+            };
+
+            /* Verify dynamic virtualization & mamespace support without device self-test support */
+            BYTE identify_ctrl[4096];
+            RtlZeroMemory(identify_ctrl, sizeof(identify_ctrl));
+            if (query_protocol(StorageAdapterProtocolSpecificProperty, 1, 0x01, 0, identify_ctrl, sizeof(identify_ctrl))) {
+                const uint16_t oacs = *reinterpret_cast<const uint16_t*>(&identify_ctrl[256]);
+                const bool supports_virtualization_mgmt = (oacs & (1 << 8)) != 0;
+                const bool supports_namespace_mgmt = (oacs & (1 << 3)) != 0;
+                const bool lacks_self_test = (oacs & (1 << 4)) == 0;
+
+                if (supports_virtualization_mgmt && supports_namespace_mgmt && lacks_self_test) {
+                    debug("NVME_HEURISTIC: Virtual OACS signature detected");
+                    return true;
+                }
+            }
+
+            /* Verify if the drive supports exactly 8 formats containing metadata, enabled logical sectors  */
+            BYTE identify_ns[4096];
+            RtlZeroMemory(identify_ns, sizeof(identify_ns));
+            if (query_protocol(StorageDeviceProtocolSpecificProperty, 1, 0x00, 1, identify_ns, sizeof(identify_ns))) {
+                const uint8_t nlbaf = identify_ns[25]; /* Number of LBA Formats (0 - based) */
+                if (nlbaf == 7) { /* 8 available formats */
+                    bool has_metadata_option = false;
+                    for (int i = 0; i < 8; ++i) {
+                        const size_t entry_offset = 128 + (static_cast<size_t>(i) * 4); /* LBA Format Table starts at offset 128 */
+                        const uint16_t ms = *reinterpret_cast<const uint16_t*>(&identify_ns[entry_offset]);
+                        if (ms != 0) {
+                            has_metadata_option = true;
+                            break;
+                        }
+                    }
+                    if (has_metadata_option) {
+                        debug("NVME_HEURISTIC: Synthetic LBA structure with metadata option detected");
+                        return core::add(brand_enum::QEMU);
+                    }
+                }
+            }
+
+            return false;
+        };
+
+        /* Iterate through all physical drives, we put 256 as the physical limit */
+        for (u16 drive = 0; drive < MAX_PHYSICAL_DRIVES; ++drive) {
             wchar_t path[32];
             swprintf_s(path, L"\\??\\PhysicalDrive%u", drive);
 
@@ -9005,6 +9109,12 @@ public:
             }
             ++successful_opens;
 
+            /* Run NVMe heuristics first */
+            if (check_nvme_heuristics(device)) {
+                nt_close(device);
+                return true;
+            }
+
             /*
              * Stack buffer attempt
              * we first try to read the storage properties into a small stack buffer to avoid heap
@@ -9025,7 +9135,6 @@ public:
 
             BYTE* allocated_buffer = nullptr;
             SIZE_T allocated_size = 0;
-            const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
 
             /*
              * If the stack buffer was too small (NtDeviceIoControlFile failed), we fall back
@@ -9148,7 +9257,7 @@ public:
                 !strncmp(name, "sg", 2) ||
                 !strncmp(name, "hd", 2) ||
                 !strncmp(name, "vd", 2)
-            ) {
+                ) {
                 const char sys_block_str[] = "/sys/block/";
                 const char device_serial_str[] = "/device/serial";
 
@@ -9162,7 +9271,7 @@ public:
                 }
 
                 char serial[1024] = {};
-                const ssize_t rsize = read(fd, serial, sizeof(serial)-1);
+                const ssize_t rsize = read(fd, serial, sizeof(serial) - 1);
                 close(fd);
                 if (rsize < 0) {
                     continue;
@@ -14556,7 +14665,7 @@ public:
             case PODMAN_FILE: return "PODMAN_FILE";
             case WSL_PROC: return "WSL_PROC";
             case DRIVERS: return "DRIVERS";
-            case DISK_SERIAL: return "DISK_SERIAL";
+            case DISK: return "DISK";
             case GPU_CAPABILITIES: return "GPU_CAPABILITIES";
             case HANDLES: return "HANDLES";
             case QEMU_FW_CFG: return "QEMU_FW_CFG";
@@ -15063,7 +15172,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::SYSTEM_REGISTERS, {50, VM::system_registers}},
             {VM::AZURE, {30, VM::azure}},
             {VM::BOOT_LOGO, {90, VM::boot_logo}},
-            {VM::DISK_SERIAL, {150, VM::disk_serial_number}},
+            {VM::DISK, {150, VM::disk}},
         #endif
 
         #if (LINUX)

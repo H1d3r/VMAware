@@ -579,8 +579,8 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::PODMAN_FILE, "podman file");
     checker(VM::WSL_PROC, "WSL string in /proc");
     checker(VM::DRIVERS, "drivers");
-    checker(VM::DISK_SERIAL, "disk serial number");
-    checker(VM::GPU_CAPABILITIES, "virtual GPU");
+    checker(VM::DISK, "virtual disks");
+    checker(VM::GPU_CAPABILITIES, "virtual GPUs");
     checker(VM::POWER_CAPABILITIES, "power capabilities");
     checker(VM::QEMU_FW_CFG, "QEMU fw_cfg device");
     checker(VM::VIRTUAL_PROCESSORS, "virtual processors");
