@@ -361,6 +361,34 @@
     #define VMAWARE_UNLIKELY(x) (x)
 #endif
 
+#if (GCC || CLANG)
+    #define VMAWARE_PREFETCH(ptr, hint) \
+            __builtin_prefetch(const_cast<const void*>(reinterpret_cast<const volatile void*>(ptr)), 0, 3)
+#elif (MSVC)
+    #if (x86)
+        #define VMAWARE_PREFETCH(ptr, hint) \
+            _mm_prefetch(reinterpret_cast<const char*>(const_cast<void*>(reinterpret_cast<const volatile void*>(ptr))), hint)
+    #else
+        #define VMAWARE_PREFETCH(ptr, hint)
+    #endif
+#else
+    #define VMAWARE_PREFETCH(ptr, hint)
+#endif
+
+#if (x86)
+    #if (MSVC) || defined(__vectorcall)
+        #define VMAWARE_VECTORCALL __vectorcall
+    #elif (GCC || CLANG)
+        #if (x86)
+            #define VMAWARE_VECTORCALL __attribute__((vectorcall))
+        #else
+            #define VMAWARE_VECTORCALL
+        #endif
+    #else
+        #define VMAWARE_VECTORCALL
+    #endif
+#endif
+
 #define VMAWARE_UNUSED(x) ((void)(x))
 
 #if (CLANG)
@@ -4716,16 +4744,15 @@ public:
 
             /* Check if the virtualization infrastructure driver is present */
             auto is_hyperv_service_present = []() noexcept -> bool {
-                const HMODULE ntdll_hmodule = memory::get_ntdll();
-                if (!ntdll_hmodule) return false;
+                const HMODULE ntdll = memory::get_ntdll();
+                if (!ntdll) return false;
 
                 constexpr const char* nt_names[] = { "NtQuerySystemInformation" };
                 void* nt_funcs[1] = {};
-                memory::get_function_address(ntdll_hmodule, nt_names, nt_funcs, 1);
+                memory::get_function_address(ntdll, nt_names, nt_funcs, 1);
 
-                using nt_query_sysinfo_fn = NTSTATUS(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
-                const auto nt_query_system_information =
-                    reinterpret_cast<nt_query_sysinfo_fn>(nt_funcs[0]);
+                using nt_query_sysinfo_fn = NTSTATUS(__stdcall*)(ULONG, PVOID, ULONG, PULONG);
+                const auto nt_query_system_information = reinterpret_cast<nt_query_sysinfo_fn>(nt_funcs[0]);
                 if (!nt_query_system_information) return false;
 
                 typedef struct _RTL_PROCESS_MODULE_INFORMATION {
@@ -5240,6 +5267,7 @@ public:
                 u64 crc64 = crc;
 
                 for (; i < qwords; ++i) {
+                    VMAWARE_PREFETCH(&qptr[i + 8], _MM_HINT_T0);
                     crc64 = _mm_crc32_u64(crc64, qptr[i]);
                 }
                 crc = static_cast<u32>(crc64);
@@ -6671,6 +6699,7 @@ public:
                      * the amount of instructions (8 in case of LFENCE) are enough for the Cross-Core/Cross-CCD MESI RFO cache bounce in the data race so that the counter thread sees an increment
                      */
                     sync = *counter_ptr;
+                    VMAWARE_PREFETCH(counter_ptr, _MM_HINT_T0);
                     while (*counter_ptr == sync); /* fastest busy-waiting strategy, PAUSE can conditionally exit, calling APIs like SwitchToThread() would be even worse */
 
                     r_pre = *counter_ptr;
@@ -6682,6 +6711,7 @@ public:
                     sync = *counter_ptr;
                     while (*counter_ptr == sync); /* sync to our counter tick again by spam hitting L3 */
                     sync = *counter_ptr;
+                    VMAWARE_PREFETCH(counter_ptr, _MM_HINT_T0);
                     while (*counter_ptr == sync); /* and again */
 
                     v_pre = *counter_ptr;
@@ -6722,6 +6752,7 @@ public:
                     sync = *counter_ptr;
                     while (*counter_ptr == sync);
                     sync = *counter_ptr;
+                    VMAWARE_PREFETCH(counter_ptr, _MM_HINT_T0);
                     while (*counter_ptr == sync);
 
                     r_pre = *counter_ptr;
@@ -6734,6 +6765,7 @@ public:
                     sync = *counter_ptr;
                     while (*counter_ptr == sync);
                     sync = *counter_ptr;
+                    VMAWARE_PREFETCH(counter_ptr, _MM_HINT_T0);
                     while (*counter_ptr == sync);
 
                     v_pre = *counter_ptr;
@@ -8367,6 +8399,7 @@ public:
                 size_t remaining_bytes = buffer_len;
 
                 while (remaining_bytes >= pattern_len) {
+                    VMAWARE_PREFETCH(search_ptr + 64, _MM_HINT_T0);
                     const void* match = memchr(search_ptr, first_byte, remaining_bytes);
                     if (!match) return false;
                     const u8* match_ptr = static_cast<const u8*>(match);
@@ -8995,6 +9028,7 @@ public:
                             buf[needed_wchars + 1] = L'\0';
 
                             for (wchar_t* p = buf.data(); *p; p += wcslen(p) + 1) {
+                                VMAWARE_PREFETCH(p + 32, _MM_HINT_T0);
                                 scan_text_ids(p);
                             }
                         }
@@ -11128,6 +11162,8 @@ public:
             const wchar_t* buf_end = ptr + (total_wchars ? total_wchars : 0);
 
             for (const wchar_t* p = ptr; p < buf_end && *p; p += (wcslen(p) + 1)) {
+                VMAWARE_PREFETCH(p + 32, _MM_HINT_T0);
+
                 if (wcsstr(p, L"ACPI(DRAC)")) {
                     debug("ACPI_SIGNATURE: QEMU virtual DRAM Controller (DRAC) ACPI node detected");
                     SetupDiDestroyDeviceInfoList(handle_dev_info);
@@ -12093,14 +12129,11 @@ public:
 
         /* Need to do a lambda wrapper to isolate SEH from the parent function's stack unwinding */
         struct aes_executor {
-            #if (CLANG || GCC)
-                __attribute__((__target__("aes")))
-            #endif
-            static bool check_aes_integrity(const unsigned char* pt, const unsigned char* k, unsigned char* o, const bool support) {
+                #if (CLANG || GCC)
+                    __attribute__((__target__("aes")))
+                #endif
+                static bool VMAWARE_VECTORCALL check_aes_integrity(__m128i block, __m128i key_vec, unsigned char* o, const bool support) {
                 __try {
-                    __m128i block = _mm_loadu_si128(reinterpret_cast<const __m128i*>(pt));
-                    __m128i key_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(k));
-
                     __m128i tmp = _mm_xor_si128(block, key_vec);
                     tmp = _mm_aesenc_si128(tmp, key_vec);
 
@@ -12114,7 +12147,8 @@ public:
                 __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
                     ? EXCEPTION_EXECUTE_HANDLER
                     : EXCEPTION_CONTINUE_SEARCH
-                ) {
+                    ) 
+                {
                     if (support) {
                         debug("CPU_HEURISTIC: Hypervisor reports AES, but it is not handled correctly");
                         return true;
@@ -12124,7 +12158,10 @@ public:
             }
         };
 
-        if (aes_executor::check_aes_integrity(plaintext, key, out, aes_support)) return true;
+        __m128i block_val = _mm_loadu_si128(reinterpret_cast<const __m128i*>(plaintext));
+        __m128i key_val = _mm_loadu_si128(reinterpret_cast<const __m128i*>(key));
+
+        if (aes_executor::check_aes_integrity(block_val, key_val, out, aes_support)) return true;
 
         /* Detect spoofed AVX state */
     #if defined(__GNUC__) || defined(__clang__)
@@ -12815,7 +12852,7 @@ public:
         constexpr u32 random_msr = 0xDEADBEEFu;
 
         auto try_read = [](u32 msr_index) noexcept -> bool {
-        #if (MSVC)
+        #if (MSVC && !CLANG)
             unsigned __int64 value = 0;
             __try {
                 value = __readmsr(static_cast<unsigned long>(msr_index));
@@ -12858,7 +12895,7 @@ public:
         };
 
         auto try_write = [](u32 msr_index, unsigned __int64 value) noexcept -> bool {
-        #if (MSVC)
+        #if (MSVC && !CLANG)
             __try {
                 __writemsr(static_cast<unsigned long>(msr_index), value);
                 return true;
@@ -13057,6 +13094,7 @@ public:
                     }
 
                     for (size_t j = 0; j < size - 1; ++j) {
+                        VMAWARE_PREFETCH(&ptr[j + 64], _MM_HINT_T0);
                         if (ptr[j] == 0xCC && ptr[j + 1] == 0xCC) {
                             /*
                              * By returning ptr[j + 1], executing it will safely run 0xC3 (after overwrite)
@@ -13584,11 +13622,11 @@ public:
                 return false;
             }
 
-            const u8* pBuffer = log_data.data();
+            const u8* p_buffer = log_data.data();
             const size_t total_size = log_data.size();
 
             /* Validate Spec ID Event header (legacy format) */
-            const TCG_PCR_EVENT_HEADER first_hdr = read_hdr(pBuffer);
+            const TCG_PCR_EVENT_HEADER first_hdr = read_hdr(p_buffer);
             if (first_hdr.pcrIndex != 0 || first_hdr.eventType != 0x00000003 /* EV_NO_ACTION */) {
                 return false;
             }
@@ -13598,7 +13636,7 @@ public:
                 return false;
             }
 
-            const u8* spec_id_payload = pBuffer + first_event_data_offset;
+            const u8* spec_id_payload = p_buffer + first_event_data_offset;
             const u32 spec_id_size = first_hdr.eventSize;
 
             if (spec_id_size < 28 || memcmp(spec_id_payload, "Spec ID Event03", 15) != 0) {
@@ -13638,24 +13676,25 @@ public:
                     break;
                 }
 
-                const u8* event_ptr = pBuffer + current_offset;
+                const u8* event_ptr = p_buffer + current_offset;
+                VMAWARE_PREFETCH(event_ptr + 128, _MM_HINT_T0);
 
-                const u32 pcrIndex = read_u32(event_ptr);
-                const u32 eventType = read_u32(event_ptr + 4);
-                const u32 digestCount = read_u32(event_ptr + 8);
+                const u32 pcr_index = read_u32(event_ptr);
+                const u32 event_type = read_u32(event_ptr + 4);
+                const u32 digest_count = read_u32(event_ptr + 8);
 
                 size_t local_offset = 12;
 
                 bool parse_error = false;
-                for (u32 i = 0; i < digestCount; ++i) {
+                for (u32 i = 0; i < digest_count; ++i) {
                     if (total_size - (current_offset + local_offset) < 2) {
                         parse_error = true;
                         break;
                     }
-                    const u16 algId = read_u16(event_ptr + local_offset);
+                    const u16 algorithm_id = read_u16(event_ptr + local_offset);
                     local_offset += 2;
 
-                    const u16 digest_size = get_digest_size(algId);
+                    const u16 digest_size = get_digest_size(algorithm_id);
                     if (digest_size == 0) {
                         parse_error = true;
                         break;
@@ -13675,17 +13714,17 @@ public:
                 if (total_size - (current_offset + local_offset) < 4) {
                     break;
                 }
-                const u32 eventSize = read_u32(event_ptr + local_offset);
+                const u32 event_size = read_u32(event_ptr + local_offset);
                 local_offset += 4;
 
-                if (total_size - (current_offset + local_offset) < eventSize) {
+                if (total_size - (current_offset + local_offset) < event_size) {
                     break;
                 }
 
                 const u8* payload = event_ptr + local_offset;
 
-                if (pcrIndex == 0 && eventType == 0x80000008) {
-                    if (eventSize >= 16) {
+                if (pcr_index == 0 && event_type == 0x80000008) {
+                    if (event_size >= 16) {
                         const u64 base_addr = read_u64(payload);
                         const u64 blob_len = read_u64(payload + 8);
 
@@ -13697,14 +13736,14 @@ public:
                     }
                 }
 
-                current_offset += local_offset + eventSize;
+                current_offset += local_offset + event_size;
             }
 
             return false;
         };
 
-        const HMODULE hTbs = LoadLibraryW(L"tbs.dll");
-        if (hTbs == nullptr) {
+        const HMODULE tbs = LoadLibraryW(L"tbs.dll");
+        if (tbs == nullptr) {
             return false;
         }
 
@@ -13716,23 +13755,23 @@ public:
         };
         void* functions[ARRAYSIZE(function_names)] = {};
 
-        memory::get_function_address(hTbs, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(tbs, function_names, functions, ARRAYSIZE(function_names));
 
-        tbsi_get_tcg_log_ex_fn pTbsi_Get_TCG_Log_Ex = reinterpret_cast<tbsi_get_tcg_log_ex_fn>(functions[0]);
-        tbsi_context_create_fn pTbsi_Context_Create = reinterpret_cast<tbsi_context_create_fn>(functions[1]);
-        tbsip_context_close_fn pTbsip_Context_Close = reinterpret_cast<tbsip_context_close_fn>(functions[2]);
-        tbsi_get_tcg_log_fn    pTbsi_Get_TCG_Log = reinterpret_cast<tbsi_get_tcg_log_fn>(functions[3]);
+        tbsi_get_tcg_log_ex_fn tbsi_get_tcg_log_ex = reinterpret_cast<tbsi_get_tcg_log_ex_fn>(functions[0]);
+        tbsi_context_create_fn tbsi_context_create = reinterpret_cast<tbsi_context_create_fn>(functions[1]);
+        tbsip_context_close_fn tbsip_context_close = reinterpret_cast<tbsip_context_close_fn>(functions[2]);
+        tbsi_get_tcg_log_fn    tbsi_get_tcg_log = reinterpret_cast<tbsi_get_tcg_log_fn>(functions[3]);
 
         bool vm_detected = false;
 
-        if (pTbsi_Get_TCG_Log_Ex) {
-            for (UINT32 logType : { 0, 2 }) {
-                UINT32 logSize = 0;
-                TBS_RESULT res = pTbsi_Get_TCG_Log_Ex(logType, nullptr, &logSize);
-                if ((res == 0 || res == static_cast<TBS_RESULT>(TBS_E_INSUFFICIENT_BUFFER)) && logSize > 0) {
-                    std::vector<u8> buffer(logSize);
-                    if (pTbsi_Get_TCG_Log_Ex(logType, buffer.data(), &logSize) == 0) {
-                        buffer.resize(logSize);
+        if (tbsi_get_tcg_log_ex) {
+            for (UINT32 log_type : { 0, 2 }) {
+                UINT32 log_size = 0;
+                TBS_RESULT res = tbsi_get_tcg_log_ex(log_type, nullptr, &log_size);
+                if ((res == 0 || res == static_cast<TBS_RESULT>(TBS_E_INSUFFICIENT_BUFFER)) && log_size > 0) {
+                    std::vector<u8> buffer(log_size);
+                    if (tbsi_get_tcg_log_ex(log_type, buffer.data(), &log_size) == 0) {
+                        buffer.resize(log_size);
                         if (parse_log(buffer)) {
                             vm_detected = true;
                             break;
@@ -13741,26 +13780,26 @@ public:
                 }
             }
         }
-        else if (pTbsi_Context_Create && pTbsip_Context_Close && pTbsi_Get_TCG_Log) {
+        else if (tbsi_context_create && tbsip_context_close && tbsi_get_tcg_log) {
             VMAWARE_TBS_CONTEXT_PARAMS params{ 1 };
-            TBS_HCONTEXT hContext = nullptr;
-            if (pTbsi_Context_Create(&params, &hContext) == 0) {
-                UINT32 logSize = 0;
-                TBS_RESULT res = pTbsi_Get_TCG_Log(hContext, nullptr, &logSize);
-                if ((res == 0 || res == static_cast<TBS_RESULT>(TBS_E_INSUFFICIENT_BUFFER)) && logSize > 0) {
-                    std::vector<u8> buffer(logSize);
-                    if (pTbsi_Get_TCG_Log(hContext, buffer.data(), &logSize) == 0) {
-                        buffer.resize(logSize);
+            TBS_HCONTEXT context_handle = nullptr;
+            if (tbsi_context_create(&params, &context_handle) == 0) {
+                UINT32 log_size = 0;
+                TBS_RESULT res = tbsi_get_tcg_log(context_handle, nullptr, &log_size);
+                if ((res == 0 || res == static_cast<TBS_RESULT>(TBS_E_INSUFFICIENT_BUFFER)) && log_size > 0) {
+                    std::vector<u8> buffer(log_size);
+                    if (tbsi_get_tcg_log(context_handle, buffer.data(), &log_size) == 0) {
+                        buffer.resize(log_size);
                         if (parse_log(buffer)) {
                             vm_detected = true;
                         }
                     }
                 }
-                pTbsip_Context_Close(hContext);
+                tbsip_context_close(context_handle);
             }
         }
 
-        FreeLibrary(hTbs);
+        FreeLibrary(tbs);
         return vm_detected;
     }
 
