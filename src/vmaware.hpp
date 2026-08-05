@@ -4221,7 +4221,7 @@ public:
 
         /* Wrapper for std::make_unique because it's not available for C++11 */
         template<typename T, typename... Args>
-        [[nodiscard]] static std::unique_ptr<T> make_unique(const Args&&... args) {
+        [[nodiscard]] static std::unique_ptr<T> make_unique(Args&&... args) {
         #if (VMA_CPP < 14)
             return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
         #else
