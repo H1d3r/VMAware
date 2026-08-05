@@ -1138,6 +1138,7 @@ public:
                     cache = &leaf_40000100;
                     break;
                 default:
+                    /* VMAWARE_ASSUME(0); */
                     return "";
             }
 
@@ -3852,6 +3853,8 @@ public:
 
         /* Retrieves the addresses of specified functions from a loaded module using the export directory, manual implementation of GetProcAddress */
         static void get_function_address(const HMODULE hModule, const char* const VMAWARE_RESTRICT names[], void** const VMAWARE_RESTRICT functions, const size_t count) {
+            VMAWARE_ASSUME(names != nullptr);
+            VMAWARE_ASSUME(functions != nullptr);
             using func_map = std::unordered_map<std::string, void*>;
             static std::unordered_map<HMODULE, func_map> function_cache;
 
@@ -4140,6 +4143,7 @@ public:
     #if (LINUX)
         /* Fetch file data */
         [[nodiscard]] static std::string read_file(const char* raw_path) {
+            VMAWARE_ASSUME(raw_path != nullptr);
             std::string path;
             const std::string raw_path_str = raw_path;
 
@@ -4182,17 +4186,19 @@ public:
         #endif
         }
 
-        static bool is_directory(const char* path) {
+        [[nodiscard]] static bool is_directory(const char* path) {
+            VMAWARE_ASSUME(path != nullptr);
             struct stat info{};
             if (stat(path, &info) != 0) {
                 return false;
             }
             return (info.st_mode & S_IFDIR); /* check if directory */
-        };
+        }
     #endif
 
         /* Fetch the file but in binary form */
         [[nodiscard]] static std::vector<u8> read_file_binary(const char* file_path) {
+            VMAWARE_ASSUME(file_path != nullptr);
             std::ifstream file(file_path, std::ios::binary);
 
             if (!file) {
@@ -4215,7 +4221,7 @@ public:
 
         /* Wrapper for std::make_unique because it's not available for C++11 */
         template<typename T, typename... Args>
-        [[nodiscard]] static std::unique_ptr<T> make_unique(Args&&... args) {
+        [[nodiscard]] static std::unique_ptr<T> make_unique(const Args&&... args) {
         #if (VMA_CPP < 14)
             return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
         #else
@@ -4252,6 +4258,7 @@ public:
         }
 
         [[nodiscard]] static bool find(const std::string& base_str, const char* keyword) noexcept {
+            VMAWARE_ASSUME(keyword != nullptr);
             return (base_str.find(keyword) != std::string::npos);
         };
 
@@ -4309,10 +4316,6 @@ public:
             oss << narrow_wide(arg);
         }
 
-        static void append_to_stream(std::ostringstream& oss, wchar_t* arg) {
-            oss << narrow_wide(arg);
-        }
-
         static void append_to_stream(std::ostringstream& oss, const std::wstring& ws) {
             oss << narrow_wide(ws.c_str());
         }
@@ -4327,11 +4330,11 @@ public:
             }
         }
 
-        static void append_to_stream(std::ostringstream& oss, char c) {
+        static void append_to_stream(std::ostringstream& oss, const char c) {
             oss << c;
         }
 
-        static void append_to_stream(std::ostringstream& oss, bool b) {
+        static void append_to_stream(std::ostringstream& oss, const bool b) {
             oss << (b ? "true" : "false");
         }
 
@@ -4401,6 +4404,7 @@ public:
             return util::make_unique<std::string>();
         #else
             #if (LINUX || APPLE)
+                VMAWARE_ASSUME(cmd != nullptr);
                 struct file_deleter {
                     void operator()(FILE* f) const noexcept {
                         if (f) {
@@ -4435,6 +4439,7 @@ public:
 
         [[nodiscard]] static bool is_proc_running(const char* executable) {
         #if (LINUX)
+            VMAWARE_ASSUME(executable != nullptr);
             #if (VMA_CPP >= 17)
                 for (const auto& entry : std::filesystem::directory_iterator("/proc")) {
                     if (!entry.is_directory()) {
@@ -5215,20 +5220,22 @@ public:
             }
 
             /* Software fallback CRC32-C (Castagnoli) of a block of memory */
-            static u32 crc32c_sw(u32 crc, const void* VMAWARE_RESTRICT data, size_t len) noexcept {
-                VMAWARE_ASSUME(data != nullptr);
+            static u32 crc32c_sw(u32 crc, const void* VMAWARE_RESTRICT data, const size_t len) noexcept {
+                if (len > 0) VMAWARE_ASSUME(data != nullptr); 
                 const u8* ptr = reinterpret_cast<const u8*>(data);
+
                 for (size_t i = 0; i < len; ++i) {
                     crc ^= ptr[i];
                     for (int j = 0; j < 8; ++j) {
                         crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
                     }
                 }
+
                 return crc;
             }
 
             /* Software fallback CRC32-C for a single byte */
-            static VMAWARE_CONSTEXPR u32 crc32c_byte_sw(u32 crc, char data) noexcept {
+            static VMAWARE_CONSTEXPR u32 crc32c_byte_sw(u32 crc, const char data) noexcept {
                 crc ^= static_cast<u8>(data);
                 for (int i = 0; i < 8; ++i) {
                     crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
@@ -5240,7 +5247,7 @@ public:
        #if (x86 && (GCC || CLANG))
             __attribute__((__target__("sse4.2")))
         #endif
-            static u32 crc32c_byte(u32 crc, char data) noexcept {
+            static u32 crc32c_byte(u32 crc, const char data) noexcept {
                 #if (x86)
                 if (has_sse42()) {
                     return _mm_crc32_u8(crc, static_cast<u8>(data));
@@ -5252,7 +5259,7 @@ public:
         #if (x86 && (GCC || CLANG))
             __attribute__((__target__("sse4.2")))
         #endif
-            static u32 crc32c(u32 crc, const void* data, size_t len) noexcept {
+            static u32 crc32c(u32 crc, const void* data, const size_t len) noexcept {
                 if (!has_sse42()) {
                     return crc32c_sw(crc, data, len);
                 }
@@ -5271,7 +5278,7 @@ public:
                     crc64 = _mm_crc32_u64(crc64, qptr[i]);
                 }
                 crc = static_cast<u32>(crc64);
-                i <<= 3; /* convert QWord count to bytes */
+                i <<= 3; /* Convert QWord count to bytes */
             #else
                 const size_t dwords = len >> 2;
                 const u32* dptr = reinterpret_cast<const u32*>(data);
@@ -5279,7 +5286,7 @@ public:
                 for (; i < dwords; ++i) {
                     crc = _mm_crc32_u32(crc, dptr[i]);
                 }
-                i <<= 2; /* convert DWord count to bytes */
+                i <<= 2; /* Convert DWord count to bytes */
             #endif
 
                 /* Hash any remaining trailing bytes */
@@ -5616,6 +5623,7 @@ public:
         }
         
         static std::string brand_multiple(const brand_list_t& list) {
+            /* VMAWARE_ASSUME(!list.empty()); */
             std::string buffer = {};
             buffer += brands::brand_enum_to_string(list[0].first);
 
@@ -5640,6 +5648,7 @@ public:
         }
 
         static enum brand_enum brand_single(const brand_list_t& list) noexcept {
+            /* VMAWARE_ASSUME(!list.empty()); */
             const brand_element_t brand = list.front();
             return brand.first;
         }
@@ -12683,21 +12692,23 @@ public:
         const motherboard_vendor vendor = detect_motherboard();
 
         switch (vendor) {
-        case motherboard_vendor::Intel:
-            if (claimed_amd && !claimed_intel) {
-                debug("CPU_HEURISTIC: CPU reports AMD but chipset looks Intel");
-                spoofed = true;
-            }
-            break;
-        case motherboard_vendor::AMD:
-            if (claimed_intel && !claimed_amd) {
-                debug("CPU_HEURISTIC: CPU reports Intel but chipset looks AMD");
-                spoofed = true;
-            }
-            break;
-        case motherboard_vendor::Unknown:
-            debug("CPU_HEURISTIC: Could not determine chipset vendor");
-            break;
+            case motherboard_vendor::Intel:
+                if (claimed_amd && !claimed_intel) {
+                    debug("CPU_HEURISTIC: CPU reports AMD but chipset looks Intel");
+                    spoofed = true;
+                }
+                break;
+            case motherboard_vendor::AMD:
+                if (claimed_intel && !claimed_amd) {
+                    debug("CPU_HEURISTIC: CPU reports Intel but chipset looks AMD");
+                    spoofed = true;
+                }
+                break;
+            case motherboard_vendor::Unknown:
+                debug("CPU_HEURISTIC: Could not determine chipset vendor");
+                break;
+            default:
+                VMAWARE_ASSUME(0);
         }
     #endif
         return spoofed;
@@ -14406,24 +14417,25 @@ public:
         static brand_enum last_detected_brand;
         static u8 last_detected_score;
 
-        /* 1. one brand, custom score */
-        static bool add(const brand_enum p_brand, u8 score) noexcept {
+        /* 1. One brand, custom score */
+        static bool add(const brand_enum p_brand, const u8 score) noexcept {
             return add_score(p_brand, brand_enum::NULL_BRAND, score);
         }
 
-        /* 2. one brand, default score */
+        /* 2. One brand, default score */
         static bool add(const brand_enum p_brand) noexcept {
             return add_score(p_brand, brand_enum::NULL_BRAND, 0);
         }
 
-        /* 3. two brands, default score */
+        /* 3. Two brands, default score */
         static bool add(const brand_enum p_brand, const brand_enum extra_brand) noexcept {
             return add_score(p_brand, extra_brand, 0);
         }
 
-        static bool add_score(const brand_enum p_brand, const brand_enum extra_brand, u8 score) noexcept {
+        static bool add_score(const brand_enum p_brand, const brand_enum extra_brand, const u8 score) noexcept {
             last_detected_brand = p_brand;
-            last_detected_score = score; /* store for the engine to read */
+            last_detected_score = score; /* Store for the engine to read */
+            VMAWARE_ASSUME(p_brand <= brand_enum::NULL_BRAND); /* If we maintain the invariant that the parameters are always valid brand_enum values */
 
             const u8 p_idx = static_cast<u8>(p_brand);
             if (p_idx < MAX_BRANDS) {
@@ -14493,11 +14505,9 @@ public:
 
             const u16 threshold_points = core::is_enabled(flags, HIGH_THRESHOLD) ? high_threshold_score : threshold_score;
 
-            const size_t tech_limit = technique_table.size();
+            const size_t tech_limit = technique_table.size(); /* (enum_size + 1) */
             for (size_t i = technique_begin; i < technique_end; ++i) {
-                if (i >= tech_limit) {
-                    continue;
-                }
+                VMAWARE_ASSUME(i < tech_limit);
 
                 const enum_flags technique_macro = static_cast<enum_flags>(i);
                 const technique& technique_data = technique_table[i];
@@ -14820,6 +14830,7 @@ public:
             return false;
         }
 
+        /* VMAWARE_ASSUME(flag_bit < core::technique_table.size()); */
         const core::technique& pair = core::technique_table.at(flag_bit);
 
         if (auto run_fn = pair.run) {
@@ -14839,7 +14850,7 @@ public:
         }
 
         throw_error("Flag is not known or not implemented");
-        return false; /* useless but avoids compiler warnings */
+        return false; /* Useless but avoids compiler warnings */
     }
 
 
@@ -14850,7 +14861,7 @@ public:
      * @link https://github.com/NotRequiem/VMAware/blob/main/docs/documentation.md#vmbrand
      */
     template <typename ...Args>
-    static std::string brand(Args ...args) {
+    static std::string brand(const Args ...args) {
         const flagset flags = core::arg_handler(args...);
         return brand(flags);
     }
@@ -14882,7 +14893,7 @@ public:
      * @link https://github.com/NotRequiem/VMAware/blob/main/docs/documentation.md#vmdetect
      */
     template <typename ...Args>
-    static bool detect(Args ...args) {
+    static bool detect(const Args ...args) {
         /* Fetch all the flags in a std::bitset */
         const flagset flags = core::arg_handler(args...);
         return detect(flags);
@@ -14927,7 +14938,7 @@ public:
      * @link https://github.com/NotRequiem/VMAware/blob/main/docs/documentation.md#vmpercentage
      */
     template <typename ...Args>
-    static u8 percentage(Args ...args) {
+    static u8 percentage(const Args ...args) {
         /* Fetch all the flags in a std::bitset */
         const flagset flags = core::arg_handler(args...);
         return percentage(flags);
@@ -15023,7 +15034,7 @@ public:
      * @return flagset
      */
     template <typename ...Args>
-    static enum_flags DISABLE(Args ...args) {
+    static enum_flags DISABLE(const Args ...args) {
         /*
          * Basically core::arg_handler but in reverse,
          * it'll clear the bits of the provided flags
@@ -15140,7 +15151,7 @@ public:
      * @return VM::enum_vector
      */
     template <typename ...Args>
-    static std::vector<enum_flags> detected_enums(Args ...args) {
+    static std::vector<enum_flags> detected_enums(const Args ...args) {
         const flagset flags = core::arg_handler(args...);
         return detected_enums(flags);
     }
@@ -15180,7 +15191,7 @@ public:
      * @return std::uint8_t
      */
     template <typename ...Args>
-    static u8 detected_count(Args ...args) {
+    static u8 detected_count(const Args ...args) {
         const flagset flags = core::arg_handler(args...);
         return detected_count(flags);
     }
@@ -15204,7 +15215,7 @@ public:
      * @return std::string
      */
     template <typename ...Args>
-    static std::string type(Args ...args) {
+    static std::string type(const Args ...args) {
         const flagset flags = core::arg_handler(args...);
         return type(flags);
     }
@@ -15312,7 +15323,7 @@ public:
       * @return std::string
       */
     template <typename ...Args>
-    static std::string conclusion(Args ...args) {
+    static std::string conclusion(const Args ...args) {
         const flagset flags = core::arg_handler(args...);
         return conclusion(flags);
     }
@@ -15677,7 +15688,6 @@ static_assert(VM::core::technique_table.size() == VM::enum_size + 1, "technique_
 #undef ARM64
 #undef ARM32
 #undef ARM
-#undef SOURCE_LOCATION_SUPPORTED
 #undef GCC
 #undef CLANG
 #undef debug
