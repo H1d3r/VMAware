@@ -4645,7 +4645,7 @@ public:
                 if (!buffer) return true;
 
                 ULONG needed = 0;
-                while (nt_query_system_information(0x16, buffer, size, &needed) == 0xC0000004L) {
+                while (nt_query_system_information(0x16, buffer, size, &needed) == static_cast<NTSTATUS>(0xC0000004L)) {
                     size = needed + 4096;
                     if (PVOID new_buffer = HeapReAlloc(heap, 0, buffer, size)) {
                         buffer = new_buffer;
@@ -6456,6 +6456,7 @@ public:
         using whv_delete_partition_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE);
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
         using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
+        using nt_query_system_time_fn = NTSTATUS(__stdcall*)(PLARGE_INTEGER);
 
         whv_create_partition_fn whv_create_partition = nullptr;
         whv_set_partition_property_fn whv_set_partition_property = nullptr;
@@ -6467,6 +6468,7 @@ public:
         whv_delete_partition_fn whv_delete_partition = nullptr;
         nt_allocate_virtual_memory_fn nt_allocate_virtual_memory = nullptr;
         nt_free_virtual_memory_fn nt_free_virtual_memory = nullptr;
+        nt_query_system_time_fn nt_query_system_time = nullptr;
 
         HMODULE winhv_dll = nullptr;
         HMODULE ntdll_dll = nullptr;
@@ -6492,14 +6494,15 @@ public:
                     "WHvMapGpaRange",
                     "WHvSetVirtualProcessorRegisters",
                     "WHvRunVirtualProcessor",
-                    "WHvDeletePartition"
+                    "WHvDeletePartition"  
                 };
                 void* whv_functions[ARRAYSIZE(whv_function_names)] = {};
                 memory::get_function_address(winhv_dll, whv_function_names, whv_functions, ARRAYSIZE(whv_function_names));
 
                 constexpr const char* nt_function_names[] = {
                     "NtAllocateVirtualMemory",
-                    "NtFreeVirtualMemory"
+                    "NtFreeVirtualMemory",
+                    "NtQuerySystemTime"
                 };
                 void* nt_functions[ARRAYSIZE(nt_function_names)] = {};
                 memory::get_function_address(ntdll_dll, nt_function_names, nt_functions, ARRAYSIZE(nt_function_names));
@@ -6515,10 +6518,12 @@ public:
 
                 nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(nt_functions[0]);
                 nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(nt_functions[1]);
+                nt_query_system_time = reinterpret_cast<nt_query_system_time_fn>(nt_functions[2]);
 
                 if (!whv_create_partition || !whv_set_partition_property || !whv_setup_partition ||
                     !whv_create_virtual_processor || !whv_map_gpa_range || !whv_set_virtual_processor_registers ||
-                    !whv_run_virtual_processor || !whv_delete_partition || !nt_allocate_virtual_memory || !nt_free_virtual_memory) 
+                    !whv_run_virtual_processor || !whv_delete_partition || !nt_allocate_virtual_memory ||
+                    !nt_free_virtual_memory || !nt_query_system_time)
                 {
                     if (winhv_dll) FreeLibrary(winhv_dll);
                     winhv_dll = nullptr;
@@ -6760,6 +6765,20 @@ public:
                 }
             }
 
+            if (valid > 0) {
+                /* Discard the unused default-initialized zero-elements */
+                std::vector<timer::timer_tick_t> active_vm_samples(vm_samples.begin(), vm_samples.begin() + valid);
+                std::vector<timer::timer_tick_t> active_ref_samples(ref_samples.begin(), ref_samples.begin() + valid);
+
+                /* Check for lowest dense cluster with no interrupt spikes, filter noise we can't directly detect (SMIs, NMIs, etc) */
+                const timer::timer_tick_t cpuid_l = timer::engine::calculate_latency(active_vm_samples);
+                const timer::timer_tick_t ref_l = timer::engine::calculate_latency(active_ref_samples);
+
+                /* Record the cleanest/lowest latency observed across the independent trials */
+                if (cpuid_l < best_cpuid_l) best_cpuid_l = cpuid_l;
+                if (ref_l < best_ref_l) best_ref_l = ref_l;
+            }
+
             /* If Hyper-V is enabled, check if there's another hypervisor sitting on top of Hyper-V with an unconditional vmexit */
         #if (x86_64)
             if (check_nested_hypervisors) {
@@ -6772,6 +6791,7 @@ public:
                     VirtualLock(add_samples.data(), sample_amount * sizeof(timer::timer_tick_t));
 
                 size_t npf_valid = 0;
+                LARGE_INTEGER system_time;
                 volatile timer::timer_tick_t* const nested_counter_ptr = &state.counter;
 
                 for (size_t i = 0; i < sample_amount; ++i) {
@@ -6785,16 +6805,9 @@ public:
                     r_pre = *nested_counter_ptr;
                     std::atomic_signal_fence(std::memory_order_acq_rel);
                     {
-                        volatile u32 init_a = 1;
-                        volatile u32 init_b = 2;
-                        u32 a = init_a;
-                        u32 b = init_b;
-                        for (u32 j = 0; j < 1500; j++) { /* add is the most stable instruction across all CPU architectures and models, normally 1-cycle latency */
-                            a += b; b += a; a += b; b += a; a += b; /* fibonacci dependency so ratio stays constant */
-                            b += a; a += b; b += a; a += b; b += a;
+                        for (int i = 0; i < 2256; i++) {
+                            nt_query_system_time(&system_time); /* one of the fastest syscalls */
                         }
-                        volatile u32 sink = a + b; /* Prevent dead-code elimination using a local volatile sink */
-                        VMAWARE_UNUSED(sink);
                     }
                     std::atomic_signal_fence(std::memory_order_acq_rel);
                     r_post = *nested_counter_ptr;
@@ -6832,15 +6845,12 @@ public:
                 }
 
                 if (npf_valid > 0) {
-                    /* Discard the unused default-initialized zero-elements */
                     std::vector<timer::timer_tick_t> active_npf_samples(npf_samples.begin(), npf_samples.begin() + npf_valid);
                     std::vector<timer::timer_tick_t> active_add_samples(add_samples.begin(), add_samples.begin() + npf_valid);
 
-                    /* Check for lowest dense cluster with no interrupt spikes, filter noise we can't directly detect (SMIs, NMIs, etc) */
                     const timer::timer_tick_t npf_l = timer::engine::calculate_latency(active_npf_samples);
                     const timer::timer_tick_t add_l = timer::engine::calculate_latency(active_add_samples);
 
-                    /* Record the cleanest/lowest latency observed across the independent trials */
                     if (npf_l < best_npf_l) best_npf_l = npf_l;
                     if (add_l < best_add_l) best_add_l = add_l;
                 }
@@ -6851,18 +6861,6 @@ public:
                 }
             }
         #endif
-
-            if (valid > 0) {
-                /* Same as above */
-                std::vector<timer::timer_tick_t> active_vm_samples(vm_samples.begin(), vm_samples.begin() + valid);
-                std::vector<timer::timer_tick_t> active_ref_samples(ref_samples.begin(), ref_samples.begin() + valid);
-
-                const timer::timer_tick_t cpuid_l = timer::engine::calculate_latency(active_vm_samples);
-                const timer::timer_tick_t ref_l = timer::engine::calculate_latency(active_ref_samples);
-
-                if (cpuid_l < best_cpuid_l) best_cpuid_l = cpuid_l;
-                if (ref_l < best_ref_l) best_ref_l = ref_l;
-            }
         }
 
         state.test_done.store(true, std::memory_order_release);
