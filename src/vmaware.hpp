@@ -4,7 +4,7 @@
  * ██║   ██║██╔████╔██║███████║██║ █╗ ██║███████║██████╔╝█████╗
  * ╚██╗ ██╔╝██║╚██╔╝██║██╔══██║██║███╗██║██╔══██║██╔══██╗██╔══╝
  *  ╚████╔╝ ██║ ╚═╝ ██║██║  ██║╚███╔███╔╝██║  ██║██║  ██║███████╗
- *   ╚═══╝  ╚═╝     ╚═╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝ Experimental post-2.8.0 (July 2026)
+ *   ╚═══╝  ╚═╝     ╚═╝╚═╝  ╚═╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝ Experimental post-2.8.0 (August 2026)
  *
  *  C++ VM detection library
  *
@@ -6805,7 +6805,7 @@ public:
                     r_pre = *nested_counter_ptr;
                     std::atomic_signal_fence(std::memory_order_acq_rel);
                     {
-                        for (int i = 0; i < 2256; i++) {
+                        for (size_t j = 0; j < 2256; j++) {
                             nt_query_system_time(&system_time); /* one of the fastest syscalls */
                         }
                     }
@@ -12857,8 +12857,56 @@ public:
         #endif
         };
 
+        auto try_write = [](u32 msr_index, unsigned __int64 value) noexcept -> bool {
+        #if (MSVC)
+            __try {
+                __writemsr(static_cast<unsigned long>(msr_index), value);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                return false;
+            }
+        #elif (GCC || CLANG)
+            static thread_local bool g_msr_write_faulted = false;
+            g_msr_write_faulted = false;
+
+            auto veh_handler = [](PEXCEPTION_POINTERS info) noexcept -> LONG {
+                if (info->ExceptionRecord->ExceptionCode == EXCEPTION_PRIV_INSTRUCTION) {
+                    g_msr_write_faulted = true;
+                    /* Skip the 'wrmsr' instruction (2 bytes: 0F 30) */
+                #if (x86_64)
+                    info->ContextRecord->Rip += 2;
+                #else
+                    info->ContextRecord->Eip += 2;
+                #endif
+                    return EXCEPTION_CONTINUE_EXECUTION;
+                }
+                return EXCEPTION_CONTINUE_SEARCH;
+            };
+
+            const PVOID handle = AddVectoredExceptionHandler(1, veh_handler);
+
+            u32 low = static_cast<u32>(value & 0xFFFFFFFF);
+            u32 high = static_cast<u32>(value >> 32);
+            asm volatile (
+                "wrmsr"
+                :
+            : "c"(msr_index), "a"(low), "d"(high)
+            );
+
+            RemoveVectoredExceptionHandler(handle);
+
+            return !g_msr_write_faulted;
+        #endif
+        };
+
         if (try_read(random_msr)) {
-            debug("MSR: Detected hypervisor not correctly handling #GP");
+            debug("MSR: Detected hypervisor not correctly handling #GP on read");
+            return true;
+        }
+
+        if (try_write(random_msr, 0ULL)) {
+            debug("MSR: Detected hypervisor not correctly handling #GP on write");
             return true;
         }
 
