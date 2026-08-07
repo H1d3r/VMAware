@@ -277,11 +277,11 @@ int main() {
 
 ## `VM::conclusion()`
 This will return the "conclusion" message of what the overall result is as a `std::string`. By default, there are 2 possible outputs:
-- `Running on baremetal`
+- `Running on bare metal`
 - `Running inside a [brand] VM`
 
 The `[brand]` part might contain a brand or may as well be empty, depending on whether a brand has been found. Additionally, you can extend this by adding the `VM::DYNAMIC` flag, which will now allow much more variadic potential outputs:
-- `Running on baremetal`
+- `Running on bare metal`
 - `Very unlikely a [brand] VM`
 - `Unlikely a [brand] VM`
 - `Potentially a [brand] VM`
@@ -305,8 +305,6 @@ int main() {
 
     // output: 7 techniques were detected
     std::cout << count << " techniques were detected" << "\n"; 
-
-    // note that if it's baremetal, it should be 0.
 
     return 0;
 }
@@ -679,8 +677,8 @@ This is the table of all the brands the lib supports.
 |-----------|--------------|-------------|
 | -h | --help | Prints the help menu |
 | -v | --version | Prints the version and miscellaneous details |
-| -d | --detect | Prints the VM detection result (1 = VM, 0 = baremetal) |
-| -s | --stdout | Returns either 0 or 1 to STDOUT without any text output (0 = VM, 1 = baremetal) |
+| -d | --detect | Prints the VM detection result (1 = VM, 0 = bare metal) |
+| -s | --stdout | Returns either 0 or 1 to STDOUT without any text output (0 = VM, 1 = bare metal) |
 | -b | --brand | Prints the most likely brand |
 | -l | --brand-list | Prints all the possible VM brand strings the CLI supports |
 | -c | --conclusion | Prints the conclusion message string |

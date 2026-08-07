@@ -43,7 +43,7 @@ int main() {
     if (VM::detect()) {
         std::cout << "Virtual machine detected!" << "\n";
     } else {
-        std::cout << "Running on baremetal" << "\n";
+        std::cout << "Running on bare metal" << "\n";
     }
 
     std::cout << "VM name: " << VM::brand() << "\n";
