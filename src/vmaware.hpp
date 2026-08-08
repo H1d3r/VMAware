@@ -4983,35 +4983,7 @@ public:
                 else {
                     /* If we reach here, we do some sanity checks to ensure a hypervisor is not trying to spoof itself as Hyper-V, attempting to bypass some detections */
                     const char* brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
-                #if (x86_64)
-                    u8 idtr_buffer[10] = { 0 };
-
-                    /* Not using SEH here on purpose, and doesn't matter in what CPU core this runs on */
-                    #if (CLANG || GCC)
-                        __asm__ volatile("sidt %0" : "=m"(idtr_buffer));
-                    #elif (MSVC)
-                        #pragma pack(push, 1)
-                        struct {
-                            USHORT Limit;
-                            ULONG_PTR Base;
-                        } idtr = { 0 };
-                        #pragma pack(pop)       
-                        __sidt(&idtr);
-
-                        volatile u8* idtr_ptr = (volatile u8*)&idtr;
-                        for (size_t j = 0; j < sizeof(idtr); ++j) {
-                            idtr_buffer[j] = idtr_ptr[j];
-                        }
-                    #endif
-
-                    ULONG_PTR idt_base = 0;
-                    memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
-
-                    /* If running under Hyper-V in AMD64 (doesnt matter the VTL/partition level), the returned IDT base is emulated at KiOp_SGDTSIDT to prevent kernel address leakage */
-                    bool is_hyper_v_host = (idt_base == 0xfffff80000001000) && (enlightenment_str && strcmp(brand_str, "Microsoft Hv") == 0);
-                #else
                     bool is_hyper_v_host = (enlightenment_str && strcmp(brand_str, "Microsoft Hv") == 0);
-                #endif
 
                     if (util::is_windows_11()) {
                         const bool hal = is_halh_present();
