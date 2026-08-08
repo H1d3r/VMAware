@@ -35,14 +35,14 @@
  *
  *
  * ============================== SECTIONS ==================================
- * - enums for publicly accessible techniques  => line 478
- * - struct for internal cpu operations        => line 754
- * - struct for internal memoization           => line 2853
- * - struct for internal utility functions     => line 3419
- * - struct for internal core components       => line 13125
- * - start of VM detection technique list      => line 5017
- * - start of public VM detection functions    => line 13515
- * - start of externally defined variables     => line 14322
+ * - enums for publicly accessible techniques  => line 643
+ * - struct for internal cpu operations        => line 922
+ * - struct for internal memoization           => line 3089
+ * - struct for internal utility functions     => line 4123
+ * - struct for internal core components       => line 14551
+ * - start of VM detection technique list      => line 5664
+ * - start of public VM detection functions    => line 14946
+ * - start of externally defined variables     => line 15663
  *
  *
  * ============================== EXAMPLE ===================================
@@ -5817,7 +5817,6 @@ public:
         const bool intel = cpu::is_intel();
         const bool amd = cpu::is_amd();
 
-        /* If neither amd or intel, return false */
         if (!(intel || amd)) {
             debug("BOCHS_CPU: neither AMD or Intel detected, returned false");
             return false;
@@ -7041,7 +7040,7 @@ public:
 
 
     /**
-     * @brief Check if the chassis type is valid (it's very often invalid in VMs)
+     * @brief Check if the chassis type is valid
      * @category Linux
      * @implements VM::CTYPE
      */
@@ -7341,7 +7340,6 @@ public:
     /**
 	 * @brief Check for AMD-SEV MSR running on the system
 	 * @category x86, Linux, MacOS
-	 * @author idea from virt-what
      * @warning Permissions required
      * @implements VM::AMD_SEV_MSR
 	 */
@@ -7433,7 +7431,7 @@ public:
      * @warning Permissions required
      * @implements VM::QEMU_USB
      */
-    [[nodiscard]] static bool qemu_USB() {
+    [[nodiscard]] static bool qemu_usb() {
         if (!util::is_admin()) {
             return false;
         }
@@ -7483,7 +7481,8 @@ public:
             if (
                 (entry->d_name[0] == '.' && entry->d_name[1] == '\0') ||
                 (entry->d_name[1] == '.' && entry->d_name[2] == '\0')
-                ) {
+               ) 
+            {
                 continue;
             }
 
@@ -7658,11 +7657,11 @@ public:
      */
     [[nodiscard]] static bool dmi_scan() {
         /*
-        cat: /sys/class/dmi/id/board_serial: Permission denied
-        cat: /sys/class/dmi/id/chassis_serial: Permission denied
-        cat: /sys/class/dmi/id/product_serial: Permission denied
-        cat: /sys/class/dmi/id/product_uuid: Permission denied
-        */
+         *  cat: /sys/class/dmi/id/board_serial:   Permission denied
+         *  cat: /sys/class/dmi/id/chassis_serial: Permission denied
+         *  cat: /sys/class/dmi/id/product_serial: Permission denied
+         *  cat: /sys/class/dmi/id/product_uuid:   Permission denied
+         */
 
         constexpr std::array<const char*, 7> dmi_array{
             "/sys/class/dmi/id/bios_vendor",
@@ -7734,7 +7733,6 @@ public:
 
     /**
      * @brief Check for the VM bit in the SMBIOS data
-     * @author idea from https://github.com/systemd/systemd/blob/main/src/basic/virt.c
      * @category Linux
      * @warning Permissions required
      * @implements VM::SMBIOS_VM_BIT
@@ -7765,7 +7763,6 @@ public:
 
     /**
      * @brief Check for podman file in /run/
-     * @author idea from https://github.com/systemd/systemd/blob/main/src/basic/virt.c
      * @category Linux
      * @implements VM::PODMAN_FILE
      */
@@ -7780,7 +7777,6 @@ public:
 
     /**
      * @brief Check for WSL or microsoft indications in /proc/ subdirectories
-     * @author idea from https://github.com/systemd/systemd/blob/main/src/basic/virt.c
      * @category Linux
      * @implements VM::WSL_PROC
      */
@@ -7814,7 +7810,8 @@ public:
         if (
             (util::find(osrelease, "WSL") || util::find(osrelease, "Microsoft")) &&
             (util::find(version,   "WSL") || util::find(version,   "Microsoft"))
-        ) {
+           ) 
+        {
             return core::add(brand_enum::WSL);
         }
 
@@ -7823,7 +7820,7 @@ public:
 
 
     /**
-     * @brief Detect QEMU fw_cfg interface. This first checks the Device Tree for a fw-cfg node or hypervisor tag, then verifies the presence of the qemu_fw_cfg module and firmware directories in sysfs.
+     * @brief Check QEMU fw_cfg interface
      * @category Linux
      * @implements VM::QEMU_FW_CFG
      */
@@ -7832,7 +7829,7 @@ public:
          * Linux DT method: inspired by https://github.com/ShellCode33/VM-Detection
          * Linux sysfs method: looks for /sys/module/qemu_fw_cfg/ & /sys/firmware/qemu_fw_cfg/
          *
-         * 1) device Tree-based detection
+         * 1) Device Tree-based detection
          */
         if (util::exists("/proc/device-tree/fw-cfg")) {
             return core::add(brand_enum::QEMU);
@@ -8066,7 +8063,6 @@ public:
      * --- SIDT ---
      * @author Matteo Malvica
      * @author Idea to check VPC's range from Tom Liston and Ed Skoudis' paper "On the Cutting Edge: Thwarting Virtual Machine Detection" (Windows)
-     * @link https://www.matteomalvica.com/blog/2018/12/05/detecting-vmware-on-64-bit-systems/ (Linux)
      * 
      */
     [[nodiscard]] static bool system_registers() {
@@ -9985,8 +9981,9 @@ public:
         if (std::unique_ptr<std::string> profiler_res_ptr = util::sys_result("system_profiler SPHardwareDataType")) {
             std::string& output = *profiler_res_ptr;
 
-            std::transform(output.begin(), output.end(), output.begin(),
-                [](u8 c) { return std::tolower(c); });
+            std::transform(output.begin(), output.end(), output.begin(),[](u8 c) {
+                return std::tolower(c); 
+            });
 
             if (util::find(output, keyword)) {
                 return true;
@@ -10251,7 +10248,7 @@ public:
  
 
     /**
-     * @brief Check for official VPC method
+     * @brief Check for presence of VPC
      * @category Windows, x86_32
      * @implements VM::VPC_INVALID
      */
@@ -15801,7 +15798,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::HWMON, {35, VM::hwmon}},
             {VM::LINUX_USER_HOST, {10, VM::linux_user_host}},
             {VM::QEMU_VIRTUAL_DMI, {40, VM::qemu_virtual_dmi}},
-            {VM::QEMU_USB, {20, VM::qemu_USB}},
+            {VM::QEMU_USB, {20, VM::qemu_usb}},
             {VM::HYPERVISOR_DIR, {20, VM::hypervisor_dir}},
             {VM::UML_CPU, {80, VM::uml_cpu}},
             {VM::VBOX_MODULE, {15, VM::vbox_module}},
