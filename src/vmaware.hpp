@@ -4532,64 +4532,64 @@ public:
                 if (brand && strstr(brand, "Virtual CPU")) {
                     return true;
                 }
-            #endif
 
-            #if (WINDOWS && _WIN32_WINNT >= _WIN32_WINNT_WIN10)
-                const HANDLE current_process = reinterpret_cast<HANDLE>(-1);
+                #if (_WIN32_WINNT >= _WIN32_WINNT_WIN10)
+                    const HANDLE current_process = reinterpret_cast<HANDLE>(-1);
 
-                USHORT proc_machine = 0;
-                USHORT native_machine = 0;
+                    USHORT proc_machine = 0;
+                    USHORT native_machine = 0;
 
-                const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
-                if (kernel32) {
-                    using is_wow_64_process_2_fn = BOOL(__stdcall*)(HANDLE, USHORT*, USHORT*);
-                    is_wow_64_process_2_fn is_wow_64_process_2 = reinterpret_cast<is_wow_64_process_2_fn>(GetProcAddress(kernel32, "IsWow64Process2"));
+                    const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+                    if (kernel32) {
+                        using is_wow_64_process_2_fn = BOOL(__stdcall*)(HANDLE, USHORT*, USHORT*);
+                        is_wow_64_process_2_fn is_wow_64_process_2 = reinterpret_cast<is_wow_64_process_2_fn>(GetProcAddress(kernel32, "IsWow64Process2"));
 
-                    if (is_wow_64_process_2) {
-                        if (is_wow_64_process_2(current_process, &proc_machine, &native_machine)) {
-                            if (proc_machine == IMAGE_FILE_MACHINE_I386 ||
-                                (native_machine == IMAGE_FILE_MACHINE_ARM64 && proc_machine == IMAGE_FILE_MACHINE_AMD64)) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-
-                if (native_machine == IMAGE_FILE_MACHINE_ARM64 || native_machine == IMAGE_FILE_MACHINE_ARMNT) {
-                    if (HMODULE ntdll = memory::get_ntdll()) {
-                        constexpr const char* function_names[] = { "NtQueryInformationProcess" };
-                        void* functions[ARRAYSIZE(function_names)] = {};
-                        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
-                        using nt_query_information_process_fn = NTSTATUS(__stdcall*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
-                        auto nt_query_information_process = reinterpret_cast<nt_query_information_process_fn>(functions[0]);
-
-                        if (nt_query_information_process) {
-                            struct PROCESS_MACHINE_INFORMATION {
-                                USHORT ProcessMachine;
-                                USHORT Res0;
-                                DWORD MachineAttributes;
-                            } pmInfo{};
-
-                            ULONG returned_len = 0;
-                            NTSTATUS status = nt_query_information_process(
-                                current_process,
-                                90, /* ProcessMachineInternalInformation */ 
-                                &pmInfo,
-                                sizeof(pmInfo),
-                                &returned_len
-                            );
-
-                            if (status >= 0) { 
-                                if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386 ||
-                                    (native_machine == IMAGE_FILE_MACHINE_ARM64 && pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)) {
+                        if (is_wow_64_process_2) {
+                            if (is_wow_64_process_2(current_process, &proc_machine, &native_machine)) {
+                                if ((native_machine == IMAGE_FILE_MACHINE_ARM64 || native_machine == IMAGE_FILE_MACHINE_ARMNT) &&
+                                    (proc_machine == IMAGE_FILE_MACHINE_I386 || proc_machine == IMAGE_FILE_MACHINE_AMD64)) {
                                     return true;
                                 }
                             }
                         }
                     }
-                }
-            #endif
+
+                    if (native_machine == IMAGE_FILE_MACHINE_ARM64 || native_machine == IMAGE_FILE_MACHINE_ARMNT) {
+                        if (HMODULE ntdll = memory::get_ntdll()) {
+                            constexpr const char* function_names[] = { "NtQueryInformationProcess" };
+                            void* functions[ARRAYSIZE(function_names)] = {};
+                            memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
+                            using nt_query_information_process_fn = NTSTATUS(__stdcall*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+                            auto nt_query_information_process = reinterpret_cast<nt_query_information_process_fn>(functions[0]);
+
+                            if (nt_query_information_process) {
+                                struct PROCESS_MACHINE_INFORMATION {
+                                    USHORT ProcessMachine;
+                                    USHORT Res0;
+                                    DWORD MachineAttributes;
+                                } pmInfo{};
+
+                                ULONG returned_len = 0;
+                                NTSTATUS status = nt_query_information_process(
+                                    current_process,
+                                    90, /* ProcessMachineInternalInformation */
+                                    &pmInfo,
+                                    sizeof(pmInfo),
+                                    &returned_len
+                                );
+
+                                if (status >= 0) {
+                                    if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386 ||
+                                        pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64) {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                #endif
+            #endif  
 
                 if (cpu::is_leaf_supported(cpu::leaf::hypervisor)) {
                     const std::string vendor = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
