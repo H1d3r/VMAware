@@ -8479,6 +8479,7 @@ public:
                     return core::add(brand_enum::QEMU);
                 }
 
+            #if (WINDOWS)
                 /* Alternate QEMU Debug Port: matching "DBUG" method and "DBGB" field definitions together */
                 if (find_pattern("DBUG", 4) && find_pattern("DBGB", 4)) {
                     const char* man = nullptr;
@@ -8515,6 +8516,7 @@ public:
                         return core::add(brand_enum::QEMU);
                     }
                 }
+            #endif
 
                 /* QEMU virtual DRAM Controller named "DRAC" with its corresponding System Board PNPID */
                 if (find_pattern("DRAC", 4) && find_pattern("PNP0C01", 7)) {
