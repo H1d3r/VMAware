@@ -4533,7 +4533,16 @@ public:
                 USHORT proc_machine = 0;
                 USHORT native_machine = 0;
 
-                if (IsWow64Process2(current_process, &proc_machine, &native_machine)) {
+                HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+                constexpr const char* function_names[] = { "IsWow64Process2" };
+                void* functions[ARRAYSIZE(function_names)] = {};
+                memory::get_function_address(k32, function_names, functions, ARRAYSIZE(function_names));
+
+                using is_wow_64_process_fn = BOOL(__stdcall*)(HANDLE, USHORT*, USHORT*);
+                is_wow_64_process_fn is_wow_64_process = reinterpret_cast<is_wow_64_process_fn>(functions[0]);
+                if (!is_wow_64_process) return false;
+
+                if (is_wow_64_process(current_process, &proc_machine, &native_machine)) {
                     if ((native_machine == IMAGE_FILE_MACHINE_ARM64 &&
                         (proc_machine == IMAGE_FILE_MACHINE_AMD64 ||
                             proc_machine == IMAGE_FILE_MACHINE_I386)) ||
@@ -4545,34 +4554,28 @@ public:
 
                 if (native_machine == IMAGE_FILE_MACHINE_ARM64 ||
                     native_machine == IMAGE_FILE_MACHINE_ARMNT) {
-
-                    using get_process_information_fn =
-                        BOOL(__stdcall*)(HANDLE, PROCESS_INFORMATION_CLASS, PVOID, DWORD);
+                    using get_process_information_fn = BOOL(__stdcall*)(HANDLE, PROCESS_INFORMATION_CLASS, PVOID, DWORD);
 
                     if (HMODULE ntdll = memory::get_ntdll()) {
                         constexpr const char* names[] = { "GetProcessInformation" };
                         void* funcs[1] = {};
                         memory::get_function_address(ntdll, names, funcs, 1);
 
-                        if (auto get_proc_info =
-                            reinterpret_cast<get_process_information_fn>(funcs[0])) {
-
+                        if (auto get_proc_info = reinterpret_cast<get_process_information_fn>(funcs[0])) {
                             struct PROCESS_MACHINE_INFORMATION {
                                 USHORT ProcessMachine;
                                 USHORT Res0;
                                 DWORD MachineAttributes;
                             } pmInfo{};
 
-                            constexpr auto process_machine_type_info =
-                                static_cast<PROCESS_INFORMATION_CLASS>(9);
+                            constexpr auto process_machine_type_info = static_cast<PROCESS_INFORMATION_CLASS>(9);
 
                             if (get_proc_info(current_process,
                                 process_machine_type_info,
                                 &pmInfo,
                                 sizeof(pmInfo))) {
                                 if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386 ||
-                                    (native_machine == IMAGE_FILE_MACHINE_ARM64 &&
-                                        pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)) {
+                                   (native_machine == IMAGE_FILE_MACHINE_ARM64 && pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)) {
                                     return true;
                                 }
                             }
