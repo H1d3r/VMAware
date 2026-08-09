@@ -4533,9 +4533,9 @@ public:
                 USHORT proc_machine = 0;
                 USHORT native_machine = 0;
 
-                const HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+                const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
                 using is_wow_64_process_2_fn = BOOL(__stdcall*)(HANDLE, USHORT*, USHORT*);
-                is_wow_64_process_2_fn is_wow_64_process_2 = reinterpret_cast<is_wow_64_process_2_fn>(GetProcAddress(k32, "IsWow64Process2")); 
+                is_wow_64_process_2_fn is_wow_64_process_2 = reinterpret_cast<is_wow_64_process_2_fn>(GetProcAddress(kernel32, "IsWow64Process2")); 
                 if (!is_wow_64_process_2) return false;
 
                 if (is_wow_64_process_2(current_process, &proc_machine, &native_machine)) {
@@ -4551,7 +4551,7 @@ public:
                     using get_process_information_fn = BOOL(__stdcall*)(HANDLE, PROCESS_INFORMATION_CLASS, PVOID, DWORD);
                     constexpr const char* function_names[] = { "GetProcessInformation" };
                     void* functions[ARRAYSIZE(function_names)] = {};
-                    memory::get_function_address(k32, function_names, functions, ARRAYSIZE(function_names));
+                    memory::get_function_address(kernel32, function_names, functions, ARRAYSIZE(function_names));
 
                     if (auto get_process_information = reinterpret_cast<get_process_information_fn>(function_names[0])) {
                         struct PROCESS_MACHINE_INFORMATION {
@@ -10063,13 +10063,13 @@ public:
                 }
                 __except (EXCEPTION_EXECUTE_HANDLER) {
                     debug("WINE: SEH invoked");
-                    return true;
+                    return core::add(brand_enum::WINE);
                 }
             }
             else {
                 debug("WINE: IsNativeVhdBoot export missing from kernel32.dll");
-                return true;
-            }          
+                return core::add(brand_enum::WINE);
+            }
         #endif
 
         if (functions[1] != nullptr) { /* wine_get_unix_file_name is present */
