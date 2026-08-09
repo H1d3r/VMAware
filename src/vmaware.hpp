@@ -4534,43 +4534,53 @@ public:
                 USHORT native_machine = 0;
 
                 const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
-                using is_wow_64_process_2_fn = BOOL(__stdcall*)(HANDLE, USHORT*, USHORT*);
-                is_wow_64_process_2_fn is_wow_64_process_2 = reinterpret_cast<is_wow_64_process_2_fn>(GetProcAddress(kernel32, "IsWow64Process2")); 
-                if (!is_wow_64_process_2) return false;
+                if (kernel32) {
+                    using is_wow_64_process_2_fn = BOOL(__stdcall*)(HANDLE, USHORT*, USHORT*);
+                    is_wow_64_process_2_fn is_wow_64_process_2 = reinterpret_cast<is_wow_64_process_2_fn>(GetProcAddress(kernel32, "IsWow64Process2"));
 
-                if (is_wow_64_process_2(current_process, &proc_machine, &native_machine)) {
-                    if ((native_machine == IMAGE_FILE_MACHINE_ARM64 && (proc_machine == IMAGE_FILE_MACHINE_AMD64 ||
-                         proc_machine == IMAGE_FILE_MACHINE_I386)) || (native_machine == IMAGE_FILE_MACHINE_ARMNT &&
-                         proc_machine == IMAGE_FILE_MACHINE_I386)) 
-                    {
-                        return true;
+                    if (is_wow_64_process_2) {
+                        if (is_wow_64_process_2(current_process, &proc_machine, &native_machine)) {
+                            if (proc_machine == IMAGE_FILE_MACHINE_I386 ||
+                                (native_machine == IMAGE_FILE_MACHINE_ARM64 && proc_machine == IMAGE_FILE_MACHINE_AMD64)) {
+                                return true;
+                            }
+                        }
                     }
                 }
 
                 if (native_machine == IMAGE_FILE_MACHINE_ARM64 || native_machine == IMAGE_FILE_MACHINE_ARMNT) {
-                    using get_process_information_fn = BOOL(__stdcall*)(HANDLE, PROCESS_INFORMATION_CLASS, PVOID, DWORD);
-                    constexpr const char* function_names[] = { "GetProcessInformation" };
-                    void* functions[ARRAYSIZE(function_names)] = {};
-                    memory::get_function_address(kernel32, function_names, functions, ARRAYSIZE(function_names));
+                    if (HMODULE ntdll = memory::get_ntdll()) {
+                        constexpr const char* function_names[] = { "NtQueryInformationProcess" };
+                        void* functions[ARRAYSIZE(function_names)] = {};
+                        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-                    if (auto get_process_information = reinterpret_cast<get_process_information_fn>(function_names[0])) {
-                        struct PROCESS_MACHINE_INFORMATION {
-                            USHORT ProcessMachine;
-                            USHORT Res0;
-                            DWORD MachineAttributes;
-                        } pmInfo{};
-                        constexpr auto process_machine_type_info = static_cast<PROCESS_INFORMATION_CLASS>(9);
+                        using nt_query_information_process_fn = NTSTATUS(__stdcall*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+                        auto nt_query_information_process = reinterpret_cast<nt_query_information_process_fn>(functions[0]);
 
-                        if (get_process_information(current_process,
-                            process_machine_type_info,
-                            &pmInfo,
-                            sizeof(pmInfo))) {
-                            if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386 ||
-                                (native_machine == IMAGE_FILE_MACHINE_ARM64 && pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)) {
-                                return true;
+                        if (nt_query_information_process) {
+                            struct PROCESS_MACHINE_INFORMATION {
+                                USHORT ProcessMachine;
+                                USHORT Res0;
+                                DWORD MachineAttributes;
+                            } pmInfo{};
+
+                            ULONG returned_len = 0;
+                            NTSTATUS status = nt_query_information_process(
+                                current_process,
+                                90, /* ProcessMachineInternalInformation */ 
+                                &pmInfo,
+                                sizeof(pmInfo),
+                                &returned_len
+                            );
+
+                            if (status >= 0) { 
+                                if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386 ||
+                                    (native_machine == IMAGE_FILE_MACHINE_ARM64 && pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)) {
+                                    return true;
+                                }
                             }
                         }
-                    }                   
+                    }
                 }
             #endif
 
@@ -10033,53 +10043,49 @@ public:
      * @implements VM::WINE
      */
     [[nodiscard]] static bool wine() {
-        BOOL is_vhd = 0;
         const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
         if (!kernel32) {
             return false;
         }
 
-        constexpr const char* function_names[] = { "IsNativeVhdBoot", "wine_get_unix_file_name" };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function_address(kernel32, function_names, functions, ARRAYSIZE(function_names));
+        using wine_get_unix_file_name_fn = char* (__stdcall*)(const wchar_t*, char*, DWORD);
+        auto wine_get_unix_file = reinterpret_cast<wine_get_unix_file_name_fn>(GetProcAddress(kernel32, "wine_get_unix_file_name"));
+        if (wine_get_unix_file != nullptr) {
+            debug("WINE: wine_get_unix_file_name detected");
+            return core::add(brand_enum::WINE);
+        }
 
-        #if (_WIN32_WINNT > _WIN32_WINNT_WIN8)
-            if (!util::is_windows_8_or_newer()) {
-                return false;
-            }
-
+    #if (_WIN32_WINNT > _WIN32_WINNT_WIN8)
+        if (util::is_windows_8_or_newer()) {
             using is_native_vhd_boot_fn = BOOL(__stdcall*)(PBOOL);
-            const auto is_native_vhd_boot = reinterpret_cast<is_native_vhd_boot_fn>(functions[0]);
+            auto is_native_vhd_boot = reinterpret_cast<is_native_vhd_boot_fn>(GetProcAddress(kernel32, "IsNativeVhdBoot"));
 
             if (is_native_vhd_boot) {
+                BOOL is_vhd = FALSE;
                 __try {
                     /*
                      * We dont call NtQuerySystemInformation with SystemPrefetchPathInformation | SystemHandleInformation
-                     * the point is to check if this kernel32.dll function throws an exception. This should actually make
-                     * VMAware unable to run on Wine since there's a missing import
+                     * the point is to check if this kernel32.dll function throws an exception
                      */
                     is_native_vhd_boot(&is_vhd);
-                    VMAWARE_UNUSED(is_native_vhd_boot);
+                    return is_vhd;
                 }
                 __except (EXCEPTION_EXECUTE_HANDLER) {
-                    debug("WINE: SEH invoked");
+                    debug("WINE: IsNativeVhdBoot threw an exception (Wine stub behavior)");
                     return core::add(brand_enum::WINE);
                 }
             }
             else {
-                debug("WINE: IsNativeVhdBoot export missing from kernel32.dll");
+                debug("WINE: IsNativeVhdBoot export missing in Win8+ environment");
                 return core::add(brand_enum::WINE);
             }
-        #endif
-
-        if (functions[1] != nullptr) { /* wine_get_unix_file_name is present */
-            return core::add(brand_enum::WINE);
         }
+    #endif
 
-        return is_vhd;
+        return false;
     }
-                
-                
+
+
     /**
      * @brief Check what power states are enabled
      * @category Windows
