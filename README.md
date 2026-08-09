@@ -267,21 +267,6 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 
 
 <details>
-<summary>How can I compile VMAware for older versions of Windows?</summary>
-<br>
-
-> By default, VMAware targets Windows 10-11 when compiling for Windows. 
-> 
-> If you want to compile for older Windows versions, you just need to tell us the target platform that you want to compile the library for with a Windows preprocessor definition.
-> 
-> For example, if you want to compile VMAware for Windows 7, add `#define _WIN32_WINNT _WIN32_WINNT_WIN7` at the top of vmaware.hpp. Note that in older Windows terminals, ANSI colors are not supported, but you can run the CLI with the `--no-ansi` argument.
-> 
-> Older versions than Windows 7 are NOT supported.
-
-</details>
-
-
-<details>
 <summary>I have linker errors when compiling</summary>
 <br>
 
