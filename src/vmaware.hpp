@@ -4712,10 +4712,21 @@ public:
                     return false;
                 }
 
+                const size_t header_offset = offsetof(info_struct, TagInfo);
+                if (needed < header_offset) {
+                    HeapFree(heap, 0, buffer);
+                    return false;
+                }
+
                 bool found = false;
                 const auto* info = static_cast<info_struct*>(buffer);
                 if (info) {
-                    for (ULONG i = 0; i < info->Count; ++i) {
+                    const size_t bytes_available = needed - header_offset;
+                    const size_t max_possible_count = bytes_available / sizeof(entry_struct);
+
+                    const ULONG safe_count = (info->Count < max_possible_count) ? info->Count : static_cast<ULONG>(max_possible_count);
+
+                    for (ULONG i = 0; i < safe_count; ++i) {
                         if (info->TagInfo[i].Tag == 0x486C6148) { /* HalH */
                             found = true;
                             break;
@@ -5266,7 +5277,7 @@ public:
                 u64 crc64 = crc;
 
                 for (; i < qwords; ++i) {
-                    VMAWARE_PREFETCH(&qptr[i + 8], _MM_HINT_T0);
+                    VMAWARE_PREFETCH(&qptr[i + 8], _MM_HINT_T0); /* hardware-level prefetch instructions on CPUs ignore invalid addresses without generating page faults */
                     crc64 = _mm_crc32_u64(crc64, qptr[i]);
                 }
                 crc = static_cast<u32>(crc64);
@@ -9024,10 +9035,11 @@ public:
                     }
 
                     static thread_local std::vector<wchar_t> buf;
-                    const size_t needed_wchars = (required_size + sizeof(wchar_t) - 1) / sizeof(wchar_t);
-                    if (buf.size() < needed_wchars + 2) {
-                        buf.resize(needed_wchars + 2);
-                    }
+                    const size_t aligned_size = (required_size + sizeof(wchar_t) - 1) & ~(sizeof(wchar_t) - 1);
+                    const size_t needed_wchars = aligned_size / sizeof(wchar_t);
+                    const size_t total_wchars_needed = needed_wchars + 2;
+
+                    buf.assign(total_wchars_needed, L'\0');
 
                     if (SetupDiGetDeviceRegistryPropertyW(
                         h_dev_info,
@@ -10224,11 +10236,24 @@ public:
         }
 
         const auto* kv = reinterpret_cast<KEY_VALUE_PARTIAL_INFORMATION_LOCAL*>(buffer);
-        const ULONG data_length = kv->DataLength;
-        if (data_length == 0 || data_length >= sizeof(buffer)) return false;
+
+        const size_t header_size = offsetof(KEY_VALUE_PARTIAL_INFORMATION_LOCAL, Data);
+        if (result_length <= header_size) {
+            return false;
+        }
+        const size_t max_safe_data_len = result_length - header_size;
+
+        const ULONG declared_len = kv->DataLength;
+        const size_t actual_data_len = (declared_len < max_safe_data_len) ? declared_len : max_safe_data_len;
+
+        if (actual_data_len == 0) {
+            return false;
+        }
 
         char product_id[64] = { 0 };
-        const size_t copyLen = (data_length < (sizeof(product_id) - 1)) ? data_length : (sizeof(product_id) - 1);
+
+        const size_t copyLen = (actual_data_len < (sizeof(product_id) - 1)) ? actual_data_len : (sizeof(product_id) - 1);
+
         memcpy(product_id, kv->Data, copyLen);
         product_id[copyLen] = '\0';
 
