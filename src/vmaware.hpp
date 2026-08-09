@@ -4593,9 +4593,7 @@ public:
 
                 if (cpu::is_leaf_supported(cpu::leaf::hypervisor)) {
                     const std::string vendor = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
-
-                    return vendor == "VirtualApple" ||
-                        vendor == "PowerVM Lx86";
+                    return vendor == "VirtualApple" || vendor == "PowerVM Lx86";
                 }
 
                 return false;
@@ -11116,7 +11114,12 @@ public:
         object_attributes.Attributes = OBJ_CASE_INSENSITIVE;
 
         HANDLE key = nullptr;
-        const ACCESS_MASK desired_access = KEY_READ;
+
+        /*
+         * KEY_WOW64_64KEY (0x0100) forces the 32-bit execution environment to access
+         * the native 64-bit registry key rather than the redirected Wow6432Node path
+         */
+        const ACCESS_MASK desired_access = KEY_READ | KEY_WOW64_64KEY;
 
         NTSTATUS st = nt_open_key(&key, desired_access, &object_attributes);
         if (!NT_SUCCESS(st) || key == nullptr) {
@@ -11139,13 +11142,17 @@ public:
             st = nt_query_key(key, info_class, info_buffer.data(), static_cast<ULONG>(info_buffer.size()), &returned_len);
         }
 
-        bool has_subkeys = false;
+        bool has_subkeys = true;
         bool query_successful = false;
 
         if (NT_SUCCESS(st)) {
-            const auto* kfi = reinterpret_cast<PKEY_FULL_INFORMATION>(info_buffer.data());
-            has_subkeys = (kfi->SubKeys > 0);
-            query_successful = true;
+            constexpr size_t subkeys_offset = offsetof(KEY_FULL_INFORMATION, SubKeys);
+            if (info_buffer.size() >= subkeys_offset + sizeof(ULONG)) {
+                ULONG subkeys_count = 0;
+                memcpy(&subkeys_count, info_buffer.data() + subkeys_offset, sizeof(ULONG));
+                has_subkeys = (subkeys_count > 0);
+                query_successful = true;
+            }
         }
 
         nt_close(key);
@@ -12924,12 +12931,34 @@ public:
 
         constexpr u32 random_msr = 0xDEADBEEFu;
 
-        auto try_read = [](u32 msr_index) noexcept -> bool {
+    #if (GCC || CLANG) 
+        const HMODULE ntdll = memory::get_ntdll();
+        if (!ntdll) return false;
+
+        constexpr const char* function_names[] = {
+            "RtlAddVectoredExceptionHandler",
+            "RtlRemoveVectoredExceptionHandler"
+        };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
+        using rtl_add_vectored_exception_handler_fn = PVOID(__stdcall*)(ULONG, PVECTORED_EXCEPTION_HANDLER);
+        using rtl_remove_vectored_exception_handler_fn = ULONG(__stdcall*)(PVOID);
+
+        static rtl_add_vectored_exception_handler_fn volatile rtl_add_vectored_exception_handler = reinterpret_cast<rtl_add_vectored_exception_handler_fn>(functions[0]);
+        static rtl_remove_vectored_exception_handler_fn volatile rtl_remove_vectored_exception_handler = reinterpret_cast<rtl_remove_vectored_exception_handler_fn>(functions[1]);
+
+        if (!rtl_add_vectored_exception_handler || !rtl_remove_vectored_exception_handler) {
+            return false;
+        }
+    #endif
+
+        auto try_read = [](const u32 msr_index) noexcept -> bool {
         #if (MSVC && !CLANG)
             unsigned __int64 value = 0;
             __try {
                 value = __readmsr(static_cast<unsigned long>(msr_index));
-                (void)value;
+                VMAWARE_UNUSED(value);
                 return true;
             }
             __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -12937,6 +12966,7 @@ public:
             }
         #elif (GCC || CLANG)
             static thread_local bool g_msr_faulted = false;
+            g_msr_faulted = false;
 
             auto veh_handler = [](PEXCEPTION_POINTERS info) noexcept -> LONG {
                 if (info->ExceptionRecord->ExceptionCode == EXCEPTION_PRIV_INSTRUCTION) {
@@ -12950,24 +12980,24 @@ public:
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
                 return EXCEPTION_CONTINUE_SEARCH;
-            };
+             };
 
-            const PVOID handle = AddVectoredExceptionHandler(1, veh_handler);
+            const PVOID handle = rtl_add_vectored_exception_handler(1, veh_handler);
 
-            u32 low, high;
+            u32 low = 0, high = 0;
             asm volatile (
                 "rdmsr"
                 : "=a"(low), "=d"(high)
                 : "c"(msr_index)
-            );
+             );
 
-            RemoveVectoredExceptionHandler(handle);
+            rtl_remove_vectored_exception_handler(handle);
 
             return !g_msr_faulted;
         #endif
         };
 
-        auto try_write = [](u32 msr_index, unsigned __int64 value) noexcept -> bool {
+        auto try_write = [](const u32 msr_index, const unsigned __int64 value) noexcept -> bool {
         #if (MSVC && !CLANG)
             __try {
                 __writemsr(static_cast<unsigned long>(msr_index), value);
@@ -12994,7 +13024,7 @@ public:
                 return EXCEPTION_CONTINUE_SEARCH;
             };
 
-            const PVOID handle = AddVectoredExceptionHandler(1, veh_handler);
+            const PVOID handle = rtl_add_vectored_exception_handler(1, veh_handler);
 
             u32 low = static_cast<u32>(value & 0xFFFFFFFF);
             u32 high = static_cast<u32>(value >> 32);
@@ -13004,7 +13034,7 @@ public:
             : "c"(msr_index), "a"(low), "d"(high)
             );
 
-            RemoveVectoredExceptionHandler(handle);
+            rtl_remove_vectored_exception_handler(handle);
 
             return !g_msr_write_faulted;
         #endif
@@ -14408,6 +14438,7 @@ public:
 
         if (!alg_mismatch) {
             debug("TPM: libtpm detected");
+            free_resources();
             return true;
         }
 
