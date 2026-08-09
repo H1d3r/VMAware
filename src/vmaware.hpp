@@ -8199,7 +8199,6 @@ public:
         bool has_battery = false;
         bool has_thermal_zone = false;
         bool dsdt_scanned = false;
-        size_t dsdt_size = 0;
         char dsdt_oem_id[7] = { 0 };
 
         auto scan_buffer = [&](const u8* buffer, const size_t buffer_len) noexcept -> bool {
@@ -8234,7 +8233,6 @@ public:
             /* Identify and record DSDT size and OEM details */
             if (memcmp(header.signature, "DSDT", 4) == 0) {
                 dsdt_scanned = true;
-                dsdt_size = buffer_len;
                 memcpy(dsdt_oem_id, header.oem_id, 6);
                 dsdt_oem_id[6] = '\0';
             }
@@ -8791,26 +8789,6 @@ public:
     #endif
 
         /* Post-processing and cross-table heuristic validation */
-        if (dsdt_scanned && dsdt_size > 0) {
-            /* Heuristic 1: DSDT size check combined with major motherboard/laptop manufacturers to allow legacy thin clients with naturally small tables */
-            if (dsdt_size < 30000) {
-                const std::array<const char*, 7> major_oems = { {
-                    "LENOVO", "DELL  ", "HP    ", "ASUS  ", "MSI   ", "GIGA  ", "ALASKA"
-                } };
-                bool is_major_oem = false;
-                for (const char* oem : major_oems) {
-                    if (memcmp(dsdt_oem_id, oem, 6) == 0) {
-                        is_major_oem = true;
-                        break;
-                    }
-                }
-                if (is_major_oem) {
-                    debug("FIRMWARE: Small DSDT size (", dsdt_size, " bytes) from a major OEM (", dsdt_oem_id, ") indicates a spoofed table");
-                    return true;
-                }
-            }
-        }
-
         if (is_mobile) {
             /* Heuristic 2: Battery check validation on mobile profiles */
             if (!has_battery) {
