@@ -11017,7 +11017,7 @@ public:
             ULONG         SubKeys;
             ULONG         MaxNameLen;
             ULONG         MaxClassLen;
-            ULONG         Values;             
+            ULONG         Values;
             ULONG         MaxValueNameLen;
             ULONG         MaxValueDataLen;
             WCHAR         Class[1];
@@ -11079,33 +11079,36 @@ public:
             return false;
         }
 
-        constexpr KEY_INFORMATION_CLASS InfoClass = KeyFullInformation;
+        constexpr KEY_INFORMATION_CLASS info_class = KeyFullInformation;
         std::vector<BYTE> info_buffer(512);
         ULONG returned_len = 0;
 
         /*
-         * Query the key information. If the buffer is too small (STATUS_BUFFER_TOO_SMALL),
-         * resize it to the exact length required by the kernel and try again
+         * Query the key information. If the initial query fails, try resizing.
+         * If returned_len is unpopulated or invalid, fallback to a safe larger size.
          */
-        st = nt_query_key(key, InfoClass, info_buffer.data(), static_cast<ULONG>(info_buffer.size()), &returned_len);
+        st = nt_query_key(key, info_class, info_buffer.data(), static_cast<ULONG>(info_buffer.size()), &returned_len);
 
-        if (!NT_SUCCESS(st) && returned_len > info_buffer.size()) {
-            info_buffer.resize(returned_len);
-            st = nt_query_key(key, InfoClass, info_buffer.data(), static_cast<ULONG>(info_buffer.size()), &returned_len);
+        if (!NT_SUCCESS(st)) {
+            const ULONG target_size = (returned_len > info_buffer.size()) ? returned_len : 2048;
+            info_buffer.resize(target_size);
+            st = nt_query_key(key, info_class, info_buffer.data(), static_cast<ULONG>(info_buffer.size()), &returned_len);
         }
 
         bool has_subkeys = false;
-        if (NT_SUCCESS(st) && returned_len >= sizeof(KEY_FULL_INFORMATION)) {
+        bool query_successful = false;
+
+        if (NT_SUCCESS(st)) {
             const auto* kfi = reinterpret_cast<PKEY_FULL_INFORMATION>(info_buffer.data());
-            const DWORD subkey_count = static_cast<DWORD>(kfi->SubKeys);
-            has_subkeys = (subkey_count > 0);
-        }
-        else {
-            nt_close(key);
-            return false;
+            has_subkeys = (kfi->SubKeys > 0);
+            query_successful = true;
         }
 
         nt_close(key);
+
+        if (!query_successful) {
+            return false;
+        }
 
         return !has_subkeys;
     }
