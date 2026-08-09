@@ -3516,6 +3516,11 @@ public:
                 while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) <= len) {
                     auto* ptr = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(topo.data() + offset);
 
+                    constexpr size_t base_header_size = sizeof(LOGICAL_PROCESSOR_RELATIONSHIP) + sizeof(DWORD);
+                    if (ptr->Size < base_header_size || offset + ptr->Size > len) {
+                        return {};
+                    }
+
                     switch (ptr->Relationship) {
                     case RelationProcessorCore: {
                         const size_t expected_size = offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor.GroupMask) + (ptr->Processor.GroupCount * sizeof(GROUP_AFFINITY));

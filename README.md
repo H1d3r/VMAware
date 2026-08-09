@@ -31,9 +31,6 @@ The library is:
 
 <br>
 
-> [!NOTE]
-> We are looking for translators willing to translate this README into your native language. If you'd like to contribute, feel free to give us a PR! 
-
 ## Example 🧪
 ```cpp
 #include "vmaware.hpp"
