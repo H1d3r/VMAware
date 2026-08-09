@@ -3339,11 +3339,6 @@ public:
                 return model; 
             }
         };
-
-        struct hardened {
-            static bool result;
-            static bool cached;
-        };
     };
 
 #if (WINDOWS)
@@ -14774,6 +14769,10 @@ public:
                     if (data.result) {
                         points += data.points;
                         detected_count_num++;
+
+                        if (data.brand_name != brand_enum::NULL_BRAND) {
+                            add(data.brand_name);
+                        }
                     }
 
                     continue;
@@ -15775,8 +15774,6 @@ bool VM::memo::multi_brand::cached = false;
 bool VM::memo::cpu_brand::cached = false;
 bool VM::memo::bios_info::cached = false;
 bool VM::memo::hyperx::cached = false;
-bool VM::memo::hardened::result = false;
-bool VM::memo::hardened::cached = false;
 bool VM::memo::brand_list::cached = false;
 
 enum VM::brand_enum VM::core::last_detected_brand = VM::brand_enum::NULL_BRAND;
