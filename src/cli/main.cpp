@@ -51,42 +51,41 @@
     #endif
 #endif
 
-constexpr const char* ver = "2.8.0";
-constexpr const char* date = "July 2026";
+constexpr const char* ver = "2.8.1";
+constexpr const char* date = "August 2026";
 
 [[noreturn]] static void help() {
     std::cout <<
-R"(Usage:
- vmaware [option] [extra]
- (do not run with any options if you want the full summary)
+        R"(Usage:
+         vmaware [option] [extra]
+         (do not run with any options if you want the full summary)
 
-Options:
- -h | --help        prints this help menu
- -v | --version     print CLI version and other details
- -a | --all         run the result with ALL the techniques shown and enabled
- -d | --detect      returns the result as a boolean (1 = VM, 0 = bare metal)
- -s | --stdout      returns either 0 or 1 to STDOUT without any text output (0 = VM, 1 = bare metal)
- -b | --brand       returns the VM brand string
- -l | --brand-list  returns all the possible VM brand string values
- -p | --percent     returns the VM percentage between 0 and 100
- -c | --conclusion  returns the conclusion message string
- -n | --number      returns the number of VM detection techniques it performs
- -t | --type        returns the VM type (if a VM was found)
- -o | --output      set the output path
+        Options:
+         -h | --help        prints this help menu
+         -v | --version     print CLI version and other details
+         -a | --all         run the result with ALL the techniques shown and enabled
+         -d | --detect      returns the result as a boolean (1 = VM, 0 = bare metal)
+         -s | --stdout      returns either 0 or 1 to STDOUT without any text output (0 = VM, 1 = bare metal)
+         -b | --brand       returns the VM brand string
+         -l | --brand-list  returns all the possible VM brand string values
+         -p | --percent     returns the VM percentage between 0 and 100
+         -c | --conclusion  returns the conclusion message string
+         -n | --number      returns the number of VM detection techniques it performs
+         -t | --type        returns the VM type (if a VM was found)
+         -o | --output      set the output path
 
-Extra:
- --disable-notes    no notes will be provided
- --high-threshold   a higher threshold bar for a VM detection will be applied (2x higher)
- --no-ansi          removes color and ansi escape codes from the output
- --dynamic          allow the conclusion message to be dynamic (8 possibilities instead of only 2)
- --experimental     disable experimental techniques
- --verbose          add more information to the output
- --enums            display the technique enum name used by the lib
- --detected-only    only display the techniques that were detected
- --json             output a json-formatted file of the results
- --rich             output the rich TUI alternative of the output (Windows specific)
-
-)";
+        Extra:
+         --disable-notes    no notes will be provided
+         --high-threshold   a higher threshold bar for a VM detection will be applied (2x higher)
+         --no-ansi          removes color and ansi escape codes from the output
+         --dynamic          allow the conclusion message to be dynamic (8 possibilities instead of only 2)
+         --experimental     disable experimental techniques
+         --verbose          add more information to the output
+         --enums            display the technique enum name used by the lib
+         --detected-only    only display the techniques that were detected
+         --json             output a json-formatted file of the results
+         --rich             output the rich TUI alternative of the output (Windows specific)
+        )";
 
     std::exit(0);
 }
@@ -97,86 +96,85 @@ Extra:
         "License MIT:<https://opensource.org/license/mit>.\n" <<
         "This is free software: you are free to change and redistribute it.\n" <<
         "There is NO WARRANTY, to the extent permitted by law.\n" <<
-        "Developed and maintained by kernelwernel and Requiem,\n" <<
-        "see https://github.com/kernelwernel and https://github.com/NotRequiem\n" <<
-        "For any inquiries, contact us on Discord at shenzken or kr.nl, or email us at vmaware.support@gmail.com\n";
+        "Developed and maintained by Requiem,\n" <<
+        "For any inquiries, contact us on Discord at shenzken, or email us at vmaware.support@gmail.com\n";
     std::exit(0);
 }
 
 [[noreturn]] static void brand_list() {
-    std::cout <<
-R"(VirtualBox
-VMware
-VMware Express
-VMware ESX
-VMware GSX
-VMware Workstation
-VMware Fusion
-bhyve
-QEMU
-KVM
-KVM Hyper-V Enlightenment
-QEMU+KVM Hyper-V Enlightenment
-QEMU+KVM
-Virtual PC
-Microsoft Hyper-V
-Microsoft Virtual PC/Hyper-V
-Parallels
-Xen HVM
-ACRN
-QNX hypervisor
-Hybrid Analysis
-Sandboxie
-Docker
-Wine
-Anubis
-JoeBox
-ThreatExpert
-CWSandbox
-Comodo
-Bochs
-Lockheed Martin LMHS
-NVMM
-OpenBSD VMM
-Intel HAXM
-Unisys s-Par
-Cuckoo
-BlueStacks
-Jailhouse
-Apple VZ
-Intel KGT (Trusty)
-Microsoft Azure Hyper-V
-Xbox NanoVisor (Hyper-V)
-SimpleVisor
-Hyper-V artifact (host with Hyper-V enabled)
-User-mode Linux
-IBM PowerVM
-Google Compute Engine (KVM)
-OpenStack (KVM)
-KubeVirt (KVM)
-AWS Nitro System (KVM-based)
-Podman
-WSL
-OpenVZ
-ANY.RUN
-Barevisor
-HyperPlatform
-MiniVisor
-Intel TDX
-LKVM
-AMD SEV
-AMD SEV-ES
-AMD SEV-SNP
-Neko Project II
-NoirVisor
-Qihoo 360 Sandbox
-DBVM
-UTM
-Compaq FX!32
-Insignia RealPC
-Connectix Virtual PC
-Containerd
-)";
+    std::cout << 
+        R"(VirtualBox
+        VMware
+        VMware Express
+        VMware ESX
+        VMware GSX
+        VMware Workstation
+        VMware Fusion
+        bhyve
+        QEMU
+        KVM
+        KVM Hyper-V Enlightenment
+        QEMU+KVM Hyper-V Enlightenment
+        QEMU+KVM
+        Virtual PC
+        Microsoft Hyper-V
+        Microsoft Virtual PC/Hyper-V
+        Parallels
+        Xen HVM
+        ACRN
+        QNX hypervisor
+        Hybrid Analysis
+        Sandboxie
+        Docker
+        Wine
+        Anubis
+        JoeBox
+        ThreatExpert
+        CWSandbox
+        Comodo
+        Bochs
+        Lockheed Martin LMHS
+        NVMM
+        OpenBSD VMM
+        Intel HAXM
+        Unisys s-Par
+        Cuckoo
+        BlueStacks
+        Jailhouse
+        Apple VZ
+        Intel KGT (Trusty)
+        Microsoft Azure Hyper-V
+        Xbox NanoVisor (Hyper-V)
+        SimpleVisor
+        Hyper-V artifact (host with Hyper-V enabled)
+        User-mode Linux
+        IBM PowerVM
+        Google Compute Engine (KVM)
+        OpenStack (KVM)
+        KubeVirt (KVM)
+        AWS Nitro System (KVM-based)
+        Podman
+        WSL
+        OpenVZ
+        ANY.RUN
+        Barevisor
+        HyperPlatform
+        MiniVisor
+        Intel TDX
+        LKVM
+        AMD SEV
+        AMD SEV-ES
+        AMD SEV-SNP
+        Neko Project II
+        NoirVisor
+        Qihoo 360 Sandbox
+        DBVM
+        UTM
+        Compaq FX!32
+        Insignia RealPC
+        Connectix Virtual PC
+        Containerd
+        )";
     std::exit(0);
 }
 
