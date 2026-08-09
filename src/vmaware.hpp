@@ -572,25 +572,25 @@
                 0x48, 0xCF                                                              /* iretq */
             };
             static const unsigned char dbvm_intel_stub[] VMAWARE_SECTION = {
-                0x49, 0x89, 0xD0,                               /* mov r8, rdx */
-                0x48, 0x89, 0xC8,                               /* mov rax, rcx */
+                0x52,                                       /* push rdx */
+                0x48, 0x89, 0xC8,                           /* mov rax, rcx */
                 0x48, 0xBA, 0x10, 0x32, 0x54, 0x76, 0x00, 0x00, 0x00, 0x00, /* mov rdx, 0x76543210 */
                 0x48, 0xB9, 0x90, 0x90, 0x90, 0x90, 0x00, 0x00, 0x00, 0x00, /* mov rcx, 0x90909090 */
-                0x0F, 0x01, 0xC1,                               /* vmcall */
-                0x49, 0x89, 0x00,                               /* mov [r8], rax (mov [imm64], rax ; &vmcallResult) */
-                0xC3                                            /* ret */
+                0x0F, 0x01, 0xC1,                           /* vmcall */
+                0x41, 0x5A,                                 /* pop r8 */
+                0x49, 0x89, 0x00,                           /* mov [r8], rax */
+                0xC3                                        /* ret */
             };
-
             static const unsigned char dbvm_amd_stub[] VMAWARE_SECTION = {
-                0x49, 0x89, 0xD0,                               /* mov r8, rdx */
-                0x48, 0x89, 0xC8,                               /* mov rax, rcx */
+                0x52,                                       /* push rdx */
+                0x48, 0x89, 0xC8,                           /* mov rax, rcx */
                 0x48, 0xBA, 0x10, 0x32, 0x54, 0x76, 0x00, 0x00, 0x00, 0x00, /* mov rdx, 0x76543210 */
                 0x48, 0xB9, 0x90, 0x90, 0x90, 0x90, 0x00, 0x00, 0x00, 0x00, /* mov rcx, 0x90909090 */
-                0x0F, 0x01, 0xD9,                               /* vmmcall */
-                0x49, 0x89, 0x00,                               /* mov [r8], rax (mov [imm64], rax ; &vmcallResult) */
-                0xC3                                            /* ret */
+                0x0F, 0x01, 0xD9,                           /* vmmcall */
+                0x41, 0x5A,                                 /* pop r8 */
+                0x49, 0x89, 0x00,                           /* mov [r8], rax */
+                0xC3                                        /* ret */
             };
-
             static const unsigned char dbvm_icebp_stub[] VMAWARE_SECTION = {
                 0xF1,                                           /* icebp */
                 0xC3                                            /* ret */
@@ -3855,7 +3855,7 @@ public:
             return exception_status;
         };
 
-        /* Retrieves the addresses of specified functions from a loaded module using the export directory, manual implementation of GetProcAddress */
+        /* Retrieves the addresses of specified functions from a loaded module using the export directory, manual implementation of GetProcAddress without PE export forwarding parsing */
         static void get_function_address(const HMODULE hModule, const char* const VMAWARE_RESTRICT names[], void** const VMAWARE_RESTRICT functions, const size_t count, const bool cache_result = true) {
             VMAWARE_ASSUME(names != nullptr);
             VMAWARE_ASSUME(functions != nullptr);
@@ -4533,54 +4533,44 @@ public:
                 USHORT proc_machine = 0;
                 USHORT native_machine = 0;
 
-                HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
-                constexpr const char* function_names[] = { "IsWow64Process2" };
-                void* functions[ARRAYSIZE(function_names)] = {};
-                memory::get_function_address(k32, function_names, functions, ARRAYSIZE(function_names));
+                const HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+                using is_wow_64_process_2_fn = BOOL(__stdcall*)(HANDLE, USHORT*, USHORT*);
+                is_wow_64_process_2_fn is_wow_64_process_2 = reinterpret_cast<is_wow_64_process_2_fn>(GetProcAddress(k32, "IsWow64Process2")); 
+                if (!is_wow_64_process_2) return false;
 
-                using is_wow_64_process_fn = BOOL(__stdcall*)(HANDLE, USHORT*, USHORT*);
-                is_wow_64_process_fn is_wow_64_process = reinterpret_cast<is_wow_64_process_fn>(functions[0]);
-                if (!is_wow_64_process) return false;
-
-                if (is_wow_64_process(current_process, &proc_machine, &native_machine)) {
-                    if ((native_machine == IMAGE_FILE_MACHINE_ARM64 &&
-                        (proc_machine == IMAGE_FILE_MACHINE_AMD64 ||
-                            proc_machine == IMAGE_FILE_MACHINE_I386)) ||
-                        (native_machine == IMAGE_FILE_MACHINE_ARMNT &&
-                            proc_machine == IMAGE_FILE_MACHINE_I386)) {
+                if (is_wow_64_process_2(current_process, &proc_machine, &native_machine)) {
+                    if ((native_machine == IMAGE_FILE_MACHINE_ARM64 && (proc_machine == IMAGE_FILE_MACHINE_AMD64 ||
+                         proc_machine == IMAGE_FILE_MACHINE_I386)) || (native_machine == IMAGE_FILE_MACHINE_ARMNT &&
+                         proc_machine == IMAGE_FILE_MACHINE_I386)) 
+                    {
                         return true;
                     }
                 }
 
-                if (native_machine == IMAGE_FILE_MACHINE_ARM64 ||
-                    native_machine == IMAGE_FILE_MACHINE_ARMNT) {
+                if (native_machine == IMAGE_FILE_MACHINE_ARM64 || native_machine == IMAGE_FILE_MACHINE_ARMNT) {
                     using get_process_information_fn = BOOL(__stdcall*)(HANDLE, PROCESS_INFORMATION_CLASS, PVOID, DWORD);
+                    constexpr const char* function_names[] = { "GetProcessInformation" };
+                    void* functions[ARRAYSIZE(function_names)] = {};
+                    memory::get_function_address(k32, function_names, functions, ARRAYSIZE(function_names));
 
-                    if (HMODULE ntdll = memory::get_ntdll()) {
-                        constexpr const char* names[] = { "GetProcessInformation" };
-                        void* funcs[1] = {};
-                        memory::get_function_address(ntdll, names, funcs, 1);
+                    if (auto get_process_information = reinterpret_cast<get_process_information_fn>(function_names[0])) {
+                        struct PROCESS_MACHINE_INFORMATION {
+                            USHORT ProcessMachine;
+                            USHORT Res0;
+                            DWORD MachineAttributes;
+                        } pmInfo{};
+                        constexpr auto process_machine_type_info = static_cast<PROCESS_INFORMATION_CLASS>(9);
 
-                        if (auto get_proc_info = reinterpret_cast<get_process_information_fn>(funcs[0])) {
-                            struct PROCESS_MACHINE_INFORMATION {
-                                USHORT ProcessMachine;
-                                USHORT Res0;
-                                DWORD MachineAttributes;
-                            } pmInfo{};
-
-                            constexpr auto process_machine_type_info = static_cast<PROCESS_INFORMATION_CLASS>(9);
-
-                            if (get_proc_info(current_process,
-                                process_machine_type_info,
-                                &pmInfo,
-                                sizeof(pmInfo))) {
-                                if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386 ||
-                                   (native_machine == IMAGE_FILE_MACHINE_ARM64 && pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)) {
-                                    return true;
-                                }
+                        if (get_process_information(current_process,
+                            process_machine_type_info,
+                            &pmInfo,
+                            sizeof(pmInfo))) {
+                            if (pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_I386 ||
+                                (native_machine == IMAGE_FILE_MACHINE_ARM64 && pmInfo.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)) {
+                                return true;
                             }
                         }
-                    }
+                    }                   
                 }
             #endif
 
@@ -5017,6 +5007,24 @@ public:
             vi.dwOSVersionInfoSize = sizeof(vi);
 
             return rtl_get_version(&vi) == 0 && vi.dwBuildNumber >= 22000;
+        }
+
+        [[nodiscard]] static bool is_windows_8_or_newer() noexcept {
+            const HMODULE ntdll = memory::get_ntdll();
+            if (!ntdll) return false;
+
+            const char* function_names[] = { "RtlGetVersion" };
+            void* functions[ARRAYSIZE(function_names)] = {};
+            memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
+            using rtl_get_version_fn = NTSTATUS(__stdcall*)(PRTL_OSVERSIONINFOW);
+            const auto rtl_get_version = reinterpret_cast<rtl_get_version_fn>(functions[0]);
+            if (!rtl_get_version) return false;
+
+            RTL_OSVERSIONINFOW vi{};
+            vi.dwOSVersionInfoSize = sizeof(vi);
+
+            return (rtl_get_version(&vi) == 0 && (vi.dwMajorVersion > 6 || (vi.dwMajorVersion == 6 && vi.dwMinorVersion >= 2)));
         }
 
         [[nodiscard]] static bool is_32bit_execution_disabled() noexcept {
@@ -10025,39 +10033,50 @@ public:
      * @implements VM::WINE
      */
     [[nodiscard]] static bool wine() {
-        #if (_WIN32_WINNT < _WIN32_WINNT_WIN8)
+        BOOL is_vhd = 0;
+        const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+        if (!kernel32) {
             return false;
-        #else
-            __try {
-                BOOL is_native_vhd_boot = 0;
-                /*
-                 * We dont call NtQuerySystemInformation with SystemPrefetchPathInformation | SystemHandleInformation
-                 * the point is to check if this kernel32.dll function throws an exception. This should actually make
-                 * VMAware unable to run on Wine since there's a missing import
-                 */
-                IsNativeVhdBoot(&is_native_vhd_boot);
-                VMAWARE_UNUSED(is_native_vhd_boot);
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER) {
-                debug("WINE: SEH invoked");
-                return true;
-            }
-        #endif
-
-        const HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
-        if (!k32) {
-           return false;
         }
 
-        constexpr const char* function_names[] = { "wine_get_unix_file_name" };
+        constexpr const char* function_names[] = { "IsNativeVhdBoot", "wine_get_unix_file_name" };
         void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function_address(k32, function_names, functions, ARRAYSIZE(function_names));
+        memory::get_function_address(kernel32, function_names, functions, ARRAYSIZE(function_names));
 
-        if (functions[0] != nullptr) {
+        #if (_WIN32_WINNT > _WIN32_WINNT_WIN8)
+            if (!util::is_windows_8_or_newer()) {
+                return false;
+            }
+
+            using is_native_vhd_boot_fn = BOOL(__stdcall*)(PBOOL);
+            const auto is_native_vhd_boot = reinterpret_cast<is_native_vhd_boot_fn>(functions[0]);
+
+            if (is_native_vhd_boot) {
+                __try {
+                    /*
+                     * We dont call NtQuerySystemInformation with SystemPrefetchPathInformation | SystemHandleInformation
+                     * the point is to check if this kernel32.dll function throws an exception. This should actually make
+                     * VMAware unable to run on Wine since there's a missing import
+                     */
+                    is_native_vhd_boot(&is_vhd);
+                    VMAWARE_UNUSED(is_native_vhd_boot);
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    debug("WINE: SEH invoked");
+                    return true;
+                }
+            }
+            else {
+                debug("WINE: IsNativeVhdBoot export missing from kernel32.dll");
+                return true;
+            }          
+        #endif
+
+        if (functions[1] != nullptr) { /* wine_get_unix_file_name is present */
             return core::add(brand_enum::WINE);
         }
 
-        return false;
+        return is_vhd;
     }
                 
                 
@@ -10075,9 +10094,7 @@ public:
 
         if (!functions[0]) return false;
 
-        using nt_power_information_fn = NTSTATUS(__stdcall*)(POWER_INFORMATION_LEVEL,
-            PVOID, ULONG,
-            PVOID, ULONG);
+        using nt_power_information_fn = NTSTATUS(__stdcall*)(POWER_INFORMATION_LEVEL, PVOID, ULONG, PVOID, ULONG);
         const auto nt_power_information = reinterpret_cast<nt_power_information_fn>(functions[0]);
 
         SYSTEM_POWER_CAPABILITIES caps{};
@@ -11071,17 +11088,11 @@ public:
             st = nt_query_key(key, InfoClass, info_buffer.data(), static_cast<ULONG>(info_buffer.size()), &returned_len);
         }
 
-        bool has_values = false;
+        bool has_subkeys = false;
         if (NT_SUCCESS(st) && returned_len >= sizeof(KEY_FULL_INFORMATION)) {
             const auto* kfi = reinterpret_cast<PKEY_FULL_INFORMATION>(info_buffer.data());
-
-            /*
-             * Check if the registry key has any values associated with it
-             * If 'Values' is 0, the audio system is likely uninitialized or barren,
-             * which strongly suggests a virtualized/sandbox environment
-             */
-            const DWORD value_count = static_cast<DWORD>(kfi->Values); /* values, not subkeys */
-            has_values = (value_count > 0);
+            const DWORD subkey_count = static_cast<DWORD>(kfi->SubKeys);
+            has_subkeys = (subkey_count > 0);
         }
         else {
             nt_close(key);
@@ -11090,7 +11101,7 @@ public:
 
         nt_close(key);
 
-        return has_values;
+        return !has_subkeys;
     }
     
     
@@ -12605,12 +12616,14 @@ public:
                 return 0;
             };
 
-            /* Setupapi stuff */
+            /* SetupAPI stuff */
             int intel_hits = 0;
             int amd_hits = 0;
 
             wchar_t stack_buf[1024]{};
+            stack_buf[ARRAYSIZE(stack_buf) - 1] = L'\0';
             std::vector<BYTE> heap_buf; /* fallback for rare huge strings */
+            heap_buf.push_back(0);
 
             auto scan_devices = [&](const GUID* classGuid, DWORD flags) noexcept {
                 HDEVINFO handle_dev_info = SetupDiGetClassDevsW(classGuid, nullptr, nullptr, flags);
@@ -14094,6 +14107,10 @@ public:
         };
 
         auto read_tpm_pcr = [&](const TBS_HCONTEXT h_context, const u32 pcr_index, const u16 alg_id, u8* const VMAWARE_RESTRICT out_digest, u32* const VMAWARE_RESTRICT out_digest_size) noexcept -> bool {
+            if (pcr_index >= 24) {
+                return false;
+            }
+
             u8 cmd[20] = { 0 };
             cmd[0] = 0x80; cmd[1] = 0x01;
             cmd[2] = 0x00; cmd[3] = 0x00; cmd[4] = 0x00; cmd[5] = 0x14;
