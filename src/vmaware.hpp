@@ -3515,17 +3515,14 @@ public:
 
                 while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) <= len) {
                     auto* ptr = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(topo.data() + offset);
-                    if (!ptr->Size) {
-                        return {};
-                    }
-
-                    const size_t expected_size = offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor.GroupMask) + (ptr->Processor.GroupCount * sizeof(GROUP_AFFINITY));
-                    if (ptr->Size < expected_size) {
-                        return {};
-                    }
 
                     switch (ptr->Relationship) {
                     case RelationProcessorCore: {
+                        const size_t expected_size = offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor.GroupMask) + (ptr->Processor.GroupCount * sizeof(GROUP_AFFINITY));
+                        if (ptr->Size < expected_size) {
+                            return {};
+                        }
+
                         const DWORD core_id = core_count++;
                         const BYTE efficiency = ptr->Processor.EfficiencyClass;
 
@@ -3561,6 +3558,11 @@ public:
                     }
 
                     case RelationCache: {
+                        const size_t expected_size = offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Cache.GroupMasks) + (ptr->Cache.GroupCount * sizeof(GROUP_AFFINITY));
+                        if (ptr->Size < expected_size) {
+                            return {};
+                        }
+
                         const WORD group_count_cache = ptr->Cache.GroupCount;
                         const DWORD cache_id = cache_count++;
 
@@ -10268,12 +10270,24 @@ public:
         }
 
         auto is_inside_vpc = [](PEXCEPTION_POINTERS ep) noexcept -> DWORD {
-            PCONTEXT ctx = ep->ContextRecord;
+            if (ep && ep->ExceptionRecord && ep->ContextRecord) {
+                if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ILLEGAL_INSTRUCTION) {
+                    const u8* ip = reinterpret_cast<const u8*>(ep->ExceptionRecord->ExceptionAddress);
 
-            ctx->Ebx = static_cast<DWORD>(-1); /* Not running VPC */
-            ctx->Eip += 4; /* skip past the "call VPC" opcodes */
-            return static_cast<DWORD>(EXCEPTION_CONTINUE_EXECUTION);
-            /* We can safely resume execution since we skipped faulty instruction */
+                    __try {
+                        if (ip && ip[0] == 0x0F && ip[1] == 0x3F && ip[2] == 0x07 && ip[3] == 0x0B) {
+                            PCONTEXT ctx = ep->ContextRecord;
+                            ctx->Ebx = static_cast<DWORD>(-1); /* Not running VPC */
+                            ctx->Eip += 4; /* skip past the 4-byte invalid instruction */
+                            return EXCEPTION_CONTINUE_EXECUTION;
+                        }
+                    }
+                    __except (EXCEPTION_EXECUTE_HANDLER) {
+                        return EXCEPTION_CONTINUE_SEARCH;
+                    }
+                }
+            }
+            return EXCEPTION_CONTINUE_SEARCH;
         };
 
         __try {
@@ -11309,6 +11323,10 @@ public:
         /* Static struct for SEH filtering to avoid release-mode lambda optimizations */
         struct exception_handler {
             static LONG evaluate(u32 code, EXCEPTION_POINTERS* info, trap_context* ctx) noexcept {
+                if (!info || !info->ExceptionRecord || !info->ContextRecord) {
+                    return EXCEPTION_CONTINUE_SEARCH;
+                }
+
                 if (code != static_cast<DWORD>(0x80000004L)) {
                     return EXCEPTION_CONTINUE_SEARCH;
                 }
@@ -13097,6 +13115,10 @@ public:
 
         HANDLE current_process = reinterpret_cast<HANDLE>(-1);
         HANDLE current_thread = reinterpret_cast<HANDLE>(-2);
+        GROUP_AFFINITY original_affinity{};
+        if (!GetThreadGroupAffinity(current_thread, &original_affinity)) {
+            return false;
+        }
 
         using find_double_cc_ntdll_fn = void* (*)(HMODULE);
         find_double_cc_ntdll_fn find_double_cc_ntdll = [](HMODULE module) noexcept -> void* {
@@ -13222,6 +13244,7 @@ public:
                 ULONG_PTR affinity = (ULONG_PTR)1 << i;
                 status = nt_set_information_thread(current_thread, 4 /* ThreadAffinityMask */, &affinity, sizeof(affinity));
                 if (status < 0) {
+                    SetThreadGroupAffinity(current_thread, &original_affinity, nullptr);
                     return false;
                 }
 
@@ -13232,6 +13255,8 @@ public:
                     did_anyone_throw = 1;
                 }
             }
+
+            SetThreadGroupAffinity(current_thread, &original_affinity, nullptr);
 
             if (did_anyone_throw != 0) {
                 hook_detected = true;
@@ -13317,7 +13342,7 @@ public:
             __movsb(static_cast<PBYTE>(dst_page), static_cast<PBYTE>(src_page), 0x2000);
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {
-            /* Veh will already detect if Dr0 fired successfully */
+            /* VEH will already detect if Dr0 fired successfully */
         }
 
         rtl_remove_vectored_exception_handler(veh_handle);
@@ -13527,13 +13552,19 @@ public:
                 /* Dispatch hardware context switch shellcode */
                 memory::execute(switch_stub, &frame, stack32_ptr, &g_saved_rsp);
             }
+            else {
+                hypervisor_detected = false;
+            }
+
             SIZE_T free_size = 0;
             nt_free_virtual_memory(current_process, &boundary_base, &free_size, MEM_RELEASE);
+        }
+        else {
+            hypervisor_detected = false;
         }
 
         SIZE_T free_size = 0;
         nt_free_virtual_memory(current_process, &stack32_base, &free_size, MEM_RELEASE);
-
         rtl_remove_vectored_exception_handler(handler_ptr);
 
         return hypervisor_detected;
@@ -14458,10 +14489,11 @@ public:
 
                 bool found = false;
                 const u16 size = alg_to_size.get(alg_id, &found);
-                if (!found) { 
+                if (!found || size > 64) {
                     parse_success = false;
                     break;
                 }
+
                 if (offset + size > log_size) { 
                     parse_success = false; 
                     break;
@@ -14470,7 +14502,7 @@ public:
                 if (alg_id == 0x000B) {
                     has_sha256 = true;
                 }
-
+                
                 if (temp_digest_count < 16) {
                     temp_digests[temp_digest_count].alg_id = alg_id;
                     temp_digests[temp_digest_count].size = size;
