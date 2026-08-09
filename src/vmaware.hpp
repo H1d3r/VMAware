@@ -3078,11 +3078,15 @@ public:
     static VMAWARE_CONSTEXPR void str_copy(char* VMAWARE_RESTRICT dest, const char* VMAWARE_RESTRICT src, const size_t max_len) noexcept {
         VMAWARE_ASSUME(dest != nullptr);
         VMAWARE_ASSUME(src != nullptr);
+
         size_t i = 0;
+        if (max_len == 0) return;
+
         while (src[i] != '\0' && i < max_len - 1) {
             dest[i] = src[i];
             i++;
         }
+
         dest[i] = '\0';
     }
 
@@ -3512,6 +3516,11 @@ public:
                 while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) <= len) {
                     auto* ptr = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(topo.data() + offset);
                     if (!ptr->Size) {
+                        return {};
+                    }
+
+                    const size_t expected_size = offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor.GroupMask) + (ptr->Processor.GroupCount * sizeof(GROUP_AFFINITY));
+                    if (ptr->Size < expected_size) {
                         return {};
                     }
 
@@ -4855,7 +4864,7 @@ public:
                     return false;
                 };
 
-                HMODULE wintrust_hmodule = LoadLibraryW(L"wintrust.dll");
+                HMODULE wintrust_hmodule = LoadLibraryExW(L"wintrust.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
                 if (!wintrust_hmodule) return false;
 
                 struct wintrust_guard {
@@ -4907,6 +4916,8 @@ public:
                 auto modules = reinterpret_cast<PRTL_PROCESS_MODULES>(buffer.data());
                 for (ULONG i = 0; i < modules->NumberOfModules; ++i) {
                     wchar_t module_path[MAX_PATH]{};
+                    modules->Modules[i].FullPathName[255] = '\0';
+
                     if (!to_wide(reinterpret_cast<const char*>(modules->Modules[i].FullPathName), module_path, ARRAYSIZE(module_path))) {
                         continue;
                     }
@@ -6451,7 +6462,7 @@ public:
         WHV_REGISTER_VALUE values[reg_count]{};
 
         if (check_nested_hypervisors) {
-            winhv_dll = LoadLibraryW(L"WinHvPlatform.dll");
+            winhv_dll = LoadLibraryExW(L"WinHvPlatform.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
             ntdll_dll = memory::get_ntdll();
 
             if (!winhv_dll || !ntdll_dll) {
@@ -9379,8 +9390,10 @@ public:
                 bool success = false;
                 if (NT_SUCCESS(query_st)) {
                     BYTE* payload = reinterpret_cast<BYTE*>(allocation_base) + header_size;
-                    memcpy(out_buf, payload, out_size);
-                    success = true;
+                    if (query_iosb.Information >= header_size + out_size) {
+                        memcpy(out_buf, payload, out_size);
+                        success = true;
+                    }   
                 }
 
                 SIZE_T free_size = 0;
@@ -10957,6 +10970,7 @@ public:
          * If they don't match, we have been redirected, confirming the presence of Sandboxie
          */
         const bool mismatch = (object_name->Name.Length != expected_name.Length) ||
+            (object_name->Name.Buffer == nullptr) ||
             (memcmp(object_name->Name.Buffer, expected_name.Buffer, expected_name.Length) != 0);
 
         return mismatch ? core::add(brand_enum::SANDBOXIE) : false;
@@ -13744,7 +13758,7 @@ public:
             return false;
         };
 
-        const HMODULE tbs = LoadLibraryW(L"tbs.dll");
+        const HMODULE tbs = LoadLibraryExW(L"tbs.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (tbs == nullptr) {
             return false;
         }
@@ -13987,7 +14001,7 @@ public:
             }
         };
 
-        bcrypt_dll = LoadLibraryW(L"bcrypt.dll");
+        bcrypt_dll = LoadLibraryExW(L"bcrypt.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!bcrypt_dll) {
             return false;
         }
@@ -14037,7 +14051,7 @@ public:
             return false;
         }
 
-        tbs_dll = LoadLibraryW(L"tbs.dll");
+        tbs_dll = LoadLibraryExW(L"tbs.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!tbs_dll) {
             free_resources();
             return false;
