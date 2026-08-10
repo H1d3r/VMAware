@@ -4841,6 +4841,16 @@ public:
             if (out_manufacturer) *out_manufacturer = "";
             if (out_model) *out_model = "";
 
+            if (memo::bios_info::is_cached()) {
+                const char* man = memo::bios_info::fetch_manufacturer();
+                const char* mod = memo::bios_info::fetch_model();
+
+                if (out_manufacturer) *out_manufacturer = man;
+                if (out_model) *out_model = mod;
+
+                return (man && man[0] != '\0') || (mod && mod[0] != '\0');
+            }
+
             auto is_placeholder = [](const char* s) noexcept -> bool {
                 if (!s || !*s) {
                     return true;
@@ -4896,16 +4906,6 @@ public:
                 out[out_size - 1] = '\0';
                 return true;
             };
-
-            if (memo::bios_info::is_cached()) {
-                const char* man = memo::bios_info::fetch_manufacturer();
-                const char* mod = memo::bios_info::fetch_model();
-
-                if (out_manufacturer) *out_manufacturer = man;
-                if (out_model) *out_model = mod;
-
-                return !is_placeholder(man) || !is_placeholder(mod);
-            }
 
             char man_tmp[sizeof(memo::bios_info::manufacturer)]{};
             char model_tmp[sizeof(memo::bios_info::model)]{};
@@ -10040,7 +10040,6 @@ public:
         constexpr const char* function_names[] = { "NtPowerInformation" }; /* Win8 // Windows Server 2012 */
         void* functions[ARRAYSIZE(function_names)] = {};
         memory::get_function_address(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
         if (!functions[0]) return false;
 
         using nt_power_information_fn = NTSTATUS(__stdcall*)(POWER_INFORMATION_LEVEL, PVOID, ULONG, PVOID, ULONG);
@@ -10061,8 +10060,7 @@ public:
         const bool s4_supported = caps.SystemS4;
         const bool hiber_file_present = caps.HiberFilePresent;
 
-        const bool is_physical_pattern = (s0_supported || s3_supported) &&
-            (s4_supported || hiber_file_present);
+        const bool is_physical_pattern = (s0_supported || s3_supported) && (s4_supported || hiber_file_present);
 
         if (is_physical_pattern) {
             return false;
@@ -10081,6 +10079,47 @@ public:
         if (no_sleep_states) {
             debug("POWER_CAPABILITIES: Detected !(S0||S1||S2||S3||S4||H) pattern");
             return true;
+        }
+
+        const char* manufacturer = nullptr;
+        const char* model = nullptr;
+
+        /* Some devices like Latitude 5440 and Lenovo 11BES09T00 do not expose thermal control */
+        if (util::get_manufacturer_model(&manufacturer, &model)) {
+            auto ci_contains = [](const char* hay, const char* needle) noexcept -> bool {
+                if (!hay || !needle || !*hay || !*needle) return false;
+
+                for (const char* h = hay; *h; ++h) {
+                    const char* a = h;
+                    const char* b = needle;
+
+                    while (*a && *b) {
+                        unsigned char ca = static_cast<unsigned char>(*a);
+                        unsigned char cb = static_cast<unsigned char>(*b);
+
+                        if (ca >= 'A' && ca <= 'Z') ca += 32;
+                        if (cb >= 'A' && cb <= 'Z') cb += 32;
+
+                        if (ca != cb) break;
+                        ++a;
+                        ++b;
+                    }
+
+                    if (!*b)
+                        return true;
+                }
+
+                return false;
+            };
+
+            const bool is_lenovo = ci_contains(manufacturer, "LENOVO");
+            const bool is_dell = ci_contains(manufacturer, "Dell Inc.");
+            const bool is_latitude = ci_contains(model, "Latitude");
+
+            if (is_lenovo || (is_dell && is_latitude)) {
+                debug("Lenovo or Dell device detected, aborting thermal control check");
+                return false;
+            }
         }
 
         return (caps.ThermalControl == 0);
@@ -12725,7 +12764,7 @@ public:
             return false;
         }
 
-        /* Surface Pro models typically do not have PIT, some devices might have it but not expose it due to firmware bugs (i.e. Lenovo 83AG) */
+        /* Microsoft Surface and Xiaomi models typically do not have PIT, some devices might have it but not expose it due to firmware bugs (i.e. Lenovo 83AG) */
         const char* manufacturer = nullptr;
         const char* model = nullptr;
 
@@ -12756,10 +12795,12 @@ public:
                 return false;
             };
 
-            const bool is_surface_pro = ci_contains(model, "surface pro");
-            const bool is_microsoft = ci_contains(manufacturer, "microsoft");
+            const bool is_surface = ci_contains(model, "Surface");
+            const bool is_microsoft = ci_contains(manufacturer, "Microsoft");
+            const bool is_xiaomi = ci_contains(manufacturer, "XIAOMI"); /* REDMI Books do not have PIT */
 
-            if (is_surface_pro && is_microsoft) {
+            if ((is_surface && is_microsoft) || is_xiaomi) {
+                debug("Surface or Xiaomi device found, aborting PIT/AT check");
                 return false;
             }
         }
@@ -14366,6 +14407,47 @@ public:
             debug("TPM: libtpm detected");
             free_resources();
             return true;
+        }
+
+        const char* manufacturer = nullptr;
+        const char* model = nullptr;
+
+        if (util::get_manufacturer_model(&manufacturer, &model)) {
+            auto ci_contains = [](const char* hay, const char* needle) noexcept -> bool {
+                if (!hay || !needle || !*hay || !*needle) return false;
+
+                for (const char* h = hay; *h; ++h) {
+                    const char* a = h;
+                    const char* b = needle;
+
+                    while (*a && *b) {
+                        unsigned char ca = static_cast<unsigned char>(*a);
+                        unsigned char cb = static_cast<unsigned char>(*b);
+
+                        if (ca >= 'A' && ca <= 'Z') ca += 32;
+                        if (cb >= 'A' && cb <= 'Z') cb += 32;
+
+                        if (ca != cb) break;
+                        ++a;
+                        ++b;
+                    }
+
+                    if (!*b)
+                        return true;
+                }
+
+                return false;
+            };
+
+            const bool is_lenovo = ci_contains(manufacturer, "LENOVO");
+            const bool is_hp = ci_contains(manufacturer, "HP") || ci_contains(manufacturer, "Hewlett-Packard");
+            const bool is_acer = ci_contains(manufacturer, "Acer");
+
+            if (is_lenovo || is_hp || is_acer) {
+                debug("TPM: Recognized physical OEM manufacturer (%s) which normally manufactures buggy firmware, skipping PCR mismatch check.", manufacturer);
+                free_resources();
+                return false;
+            }
         }
 
         /* Get raw log size and allocate log buffer */
