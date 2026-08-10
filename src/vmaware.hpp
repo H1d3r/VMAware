@@ -8361,14 +8361,6 @@ public:
                         }
                     }
 
-                    /* Flat CPU declarations with missing power-management methods */
-                    if (find_pattern("PR00", 4) && find_pattern("PR01", 4) && find_pattern("PR02", 4)) {
-                        if (!find_pattern("_PSS", 4) && !find_pattern("_CST", 4) && !find_pattern("_CPC", 4)) {
-                            debug("FIRMWARE: Flat processor topology with missing power-management methods");
-                            return core::add(brand_enum::QEMU);
-                        }
-                    }
-
                     /* CPU/PCI Hotplug synthetic I/O ranges (Prefixed with 0x0B WordPrefix to confirm actual I/O word sizing) */
                     constexpr u8 cpu_hotplug_io[] = { 0x0B, 0xD8, 0x0C }; // 0x0B (WordPrefix) followed by 0x0CD8
                     constexpr u8 pci_hotplug_io1[] = { 0x0B, 0xE0, 0xAF }; // 0x0B (WordPrefix) followed by 0xAFE0
