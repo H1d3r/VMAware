@@ -1370,7 +1370,7 @@ public:
 
         static void get_intel_core_db(const cpu_entry*& out_ptr, size_t& out_size) noexcept {
             static constexpr cpu_entry db[] = {
-                /* I3 series */
+                /* i3 series */
                 { "i3-1000G1", 4, true },
                 { "i3-1000G4", 4, true },
                 { "i3-1000NG4", 4, true },
@@ -1596,7 +1596,7 @@ public:
                 { "i3-N300", 8, false },
                 { "i3-N305", 8, false },
 
-                /* I5 series */
+                /* i5 series */
                 { "i5-10200H", 8, true },
                 { "i5-10210U", 8, true },
                 { "i5-10210Y", 8, true },
@@ -1956,7 +1956,7 @@ public:
                 { "i5-14600KF", 20, true },
                 { "i5-14600T", 20, true },
 
-                /* I7 series */
+                /* i7 series */
                 { "i7-10510U", 8, true },
                 { "i7-10510Y", 8, true },
                 { "i7-1060G7", 8, true },
@@ -2296,7 +2296,7 @@ public:
                 { "i7-14790F", 24, true },
                 { "i7-14950HX", 24, true },
 
-                /* I9 series */
+                /* i9 series */
                 { "i9-7900X", 20, true },
                 { "i9-7920X", 24, true },
                 { "i9-7940X", 28, true },
@@ -6156,10 +6156,13 @@ public:
         /* Calculation of minimum threshold for instrution latency */
         double threshold = 2.5;
         bool check_nested_hypervisors = false;
+        bool serialize_available = cpu::is_intel();
+
         if (util::hyper_x() == HYPERV_HOST) {
             debug("TIMER: Hyper-V detected, running nested checks");
-            threshold = 75.0;
             check_nested_hypervisors = true;
+            if (serialize_available)    threshold = 12.0;
+            else                        threshold = 25.0;
         }
         #if (x86_32)
             VMAWARE_UNUSED(check_nested_hypervisors);
@@ -6221,7 +6224,6 @@ public:
             #undef TICK8
         };
 
-        bool serialize_available = cpu::is_intel();
         if (serialize_available) {
             /* SERIALIZE requires Ice Lake or newer */
             u32 l7_eax = 0, l7_ebx = 0, l7_ecx = 0, l7_edx = 0;
@@ -6497,7 +6499,7 @@ public:
 
                     r_pre = *counter_ptr;
                     std::atomic_signal_fence(std::memory_order_acq_rel);
-                    _serialize(); _serialize(); _serialize(); /* first serialize is slower because of having to deal with the pipeline, subsequent only pay the architectural cost of the serialization itself */
+                    _serialize(); /* first serialize is slower because of having to deal with the pipeline, subsequent only pay the architectural cost of the serialization itself */
                     std::atomic_signal_fence(std::memory_order_acq_rel);
                     r_post = *counter_ptr;
 
@@ -14444,7 +14446,7 @@ public:
             const bool is_acer = ci_contains(manufacturer, "Acer");
 
             if (is_lenovo || is_hp || is_acer) {
-                debug("TPM: Recognized physical OEM manufacturer (%s) which normally manufactures buggy firmware, skipping PCR mismatch check.", manufacturer);
+                debug("TPM: Recognized OEM manufacturer which normally manufactures buggy firmware, skipping PCR mismatch check.");
                 free_resources();
                 return false;
             }
