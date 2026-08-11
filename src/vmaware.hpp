@@ -6163,15 +6163,15 @@ public:
         /* Calculation of minimum threshold for instrution latency */
         double threshold = 2.5;
         bool check_nested_hypervisors = false;
+        #if (x86_32)
+            VMAWARE_UNUSED(check_nested_hypervisors);
+        #endif
 
         if (util::hyper_x() == HYPERV_HOST) {
             debug("TIMER: Hyper-V detected, running nested checks");
             check_nested_hypervisors = true;
             threshold = 15.0;
         }
-        #if (x86_32)
-            VMAWARE_UNUSED(check_nested_hypervisors);
-        #endif
 
         static timer::cache_state state;
         static_assert(alignof(timer::cache_state) >= 64, "timer::cache_state must be aligned to 64 bytes to prevent cache-line thrashing (false sharing).");
@@ -6680,6 +6680,7 @@ public:
                         else {
                             debug("TIMER: Detected hypervisor faking exceptions for nested page faults");
                             nested_bypass_detected = true;
+                            break;
                         }                    
                     }
                 }
