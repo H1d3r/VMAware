@@ -389,6 +389,16 @@
     #endif
 #endif
 
+#if (GCC || CLANG)
+    #define TARGET_AVX    __attribute__((target("avx")))
+    #define TARGET_AVX2   __attribute__((target("avx2")))
+    #define TARGET_AVX512 __attribute__((target("avx512f")))
+#else
+    #define TARGET_AVX
+    #define TARGET_AVX2
+    #define TARGET_AVX512
+#endif
+
 #define VMAWARE_UNUSED(x) ((void)(x))
 
 #if (CLANG)
@@ -4852,15 +4862,13 @@ public:
             }
 
             auto is_placeholder = [](const char* s) noexcept -> bool {
-                if (!s || !*s) {
-                    return true;
-                }
+                if (!s || !*s) return true;
 
-                return strcmp(s, "System Product Name") == 0 ||
-                    strcmp(s, "To Be Filled By O.E.M.") == 0 ||
-                    strcmp(s, "Default string") == 0 ||
-                    strcmp(s, "Not Specified") == 0 ||
-                    strcmp(s, "None") == 0;
+                return _stricmp(s, "System Product Name") == 0 ||
+                    _stricmp(s, "To Be Filled By O.E.M.") == 0 ||
+                    _stricmp(s, "Default string") == 0 ||
+                    _stricmp(s, "Not Specified") == 0 ||
+                    _stricmp(s, "None") == 0;
             };
 
             auto read_reg_utf8 = [](const wchar_t* value_name, char* out, size_t out_size) noexcept -> bool {
@@ -5829,6 +5837,14 @@ public:
         #endif
         };
 
+    #if (WINDOWS && defined __VMAWARE_DEBUG__)
+        const char* manufacturer = "";
+        const char* device_model = "";
+        if (util::get_manufacturer_model(&manufacturer, &device_model)) {
+            debug("{\"manufacturer\": \"", manufacturer, "\", \"model\": \"", device_model, "\"}");
+        }
+    #endif
+
         constexpr size_t max_model_len = 32;
         cpu::cpu_type type = cpu::cpu_type::UNKNOWN;
         size_t db_size = 0;
@@ -5926,15 +5942,6 @@ public:
         }
 
         debug("CPU model = ", model_name);
-
-        #if (WINDOWS && defined __VMAWARE_DEBUG__)
-            const char* manufacturer = "";
-            const char* model = "";
-            if (util::get_manufacturer_model(&manufacturer, &model)) {
-                debug("{\"manufacturer\": \"", manufacturer,
-                    "\", \"model\": \"", model, "\"}");
-            }            
-        #endif
 
         const u32 actual = memo::thread_count::fetch();
         const bool model_expects_smt = matched->smt;
@@ -6156,13 +6163,11 @@ public:
         /* Calculation of minimum threshold for instrution latency */
         double threshold = 2.5;
         bool check_nested_hypervisors = false;
-        bool serialize_available = cpu::is_intel();
 
         if (util::hyper_x() == HYPERV_HOST) {
             debug("TIMER: Hyper-V detected, running nested checks");
             check_nested_hypervisors = true;
-            if (serialize_available)    threshold = 12.0;
-            else                        threshold = 25.0;
+            threshold = 15.0;
         }
         #if (x86_32)
             VMAWARE_UNUSED(check_nested_hypervisors);
@@ -6224,6 +6229,7 @@ public:
             #undef TICK8
         };
 
+        bool serialize_available = cpu::is_intel();
         if (serialize_available) {
             /* SERIALIZE requires Ice Lake or newer */
             u32 l7_eax = 0, l7_ebx = 0, l7_ecx = 0, l7_edx = 0;
@@ -6499,7 +6505,7 @@ public:
 
                     r_pre = *counter_ptr;
                     std::atomic_signal_fence(std::memory_order_acq_rel);
-                    _serialize(); /* first serialize is slower because of having to deal with the pipeline, subsequent only pay the architectural cost of the serialization itself */
+                    _serialize();
                     std::atomic_signal_fence(std::memory_order_acq_rel);
                     r_post = *counter_ptr;
 
@@ -8361,17 +8367,6 @@ public:
                         }
                     }
 
-                    /* CPU/PCI Hotplug synthetic I/O ranges (Prefixed with 0x0B WordPrefix to confirm actual I/O word sizing) */
-                    constexpr u8 cpu_hotplug_io[] = { 0x0B, 0xD8, 0x0C }; // 0x0B (WordPrefix) followed by 0x0CD8
-                    constexpr u8 pci_hotplug_io1[] = { 0x0B, 0xE0, 0xAF }; // 0x0B (WordPrefix) followed by 0xAFE0
-                    constexpr u8 pci_hotplug_io2[] = { 0x0B, 0x00, 0xAE }; // 0x0B (WordPrefix) followed by 0xAE00
-                    if (find_pattern(reinterpret_cast<const char*>(cpu_hotplug_io), sizeof(cpu_hotplug_io)) ||
-                        (find_pattern(reinterpret_cast<const char*>(pci_hotplug_io1), sizeof(pci_hotplug_io1)) &&
-                            find_pattern(reinterpret_cast<const char*>(pci_hotplug_io2), sizeof(pci_hotplug_io2)))) {
-                        debug("FIRMWARE: Detected QEMU CPU/PCI synthetic hotplug I/O ports");
-                        return core::add(brand_enum::QEMU);
-                    }
-
                     /* QEMU PIRQ Routing rotation names */
                     if (find_pattern("LNKE", 4) && find_pattern("LNKH", 4) && find_pattern("GSIE", 4) && find_pattern("GSIH", 4)) {
                         debug("FIRMWARE: Detected QEMU sequential PIRQ routing names (LNKE-H, GSIE-H)");
@@ -8389,14 +8384,6 @@ public:
                     if (find_pattern("D0FA", 4) && find_pattern(reinterpret_cast<const char*>(sata_addr_dummy), sizeof(sata_addr_dummy))) {
                         debug("FIRMWARE: Detected QEMU dummy SATA controller named D0FA on Device 31, Function 2");
                         return core::add(brand_enum::QEMU);
-                    }
-
-                    /* Real ICH9 contains multiple USB controllers (EHC1/EHC2, UHC1-UHC6). Here I put XHC to match XHC, XHC_, XHC1, or XHCI */
-                    if (find_pattern("LNKE", 4) && find_pattern("LNKH", 4)) {
-                        if (!find_pattern("EHC1", 4) && !find_pattern("EHC2", 4) && !find_pattern("UHC1", 4) && !find_pattern("XHC", 3)) {
-                            debug("FIRMWARE: Detected Q35 emulation footprint with complete absence of USB controller declarations");
-                            return core::add(brand_enum::QEMU);
-                        }
                     }
                 }
             }
@@ -10108,10 +10095,11 @@ public:
 
             const bool is_lenovo = ci_contains(manufacturer, "LENOVO");
             const bool is_dell = ci_contains(manufacturer, "Dell Inc.");
+            const bool is_qiyida = ci_contains(manufacturer, "QIYIDA");
             const bool is_latitude = ci_contains(model, "Latitude");
 
-            if (is_lenovo || (is_dell && is_latitude)) {
-                debug("Lenovo or Dell device detected, aborting thermal control check");
+            if (is_lenovo || is_qiyida || (is_dell && is_latitude)) {
+                debug("Lenovo, Qiyida or Dell device detected, aborting thermal control check");
                 return false;
             }
         }
@@ -12142,7 +12130,13 @@ public:
             return false;
         }
 
+        const HANDLE current_thread = reinterpret_cast<HANDLE>(-2);
+        const DWORD_PTR old_affinity = SetThreadAffinityMask(current_thread, 1);
+
         /* 1) Check for commonly disabled instructions on patches and VMs */
+        u32 max_leaf = 0, ebx_0 = 0, ecx_0 = 0, edx_0 = 0;
+        cpu::cpuid(max_leaf, ebx_0, ecx_0, edx_0, cpu::leaf::basic_info);
+
         u32 a = 0, b = 0, c = 0, d = 0;
         cpu::cpuid(a, b, c, d, cpu::leaf::features);
 
@@ -12161,10 +12155,10 @@ public:
 
         /* Need to do a lambda wrapper to isolate SEH from the parent function's stack unwinding */
         struct aes_executor {
-                #if (CLANG || GCC)
-                    __attribute__((__target__("aes")))
-                #endif
-                static bool VMAWARE_VECTORCALL check_aes_integrity(__m128i block, __m128i key_vec, unsigned char* o, const bool support) {
+            #if (CLANG || GCC)
+                __attribute__((__target__("aes")))
+            #endif
+            static bool VMAWARE_VECTORCALL check_aes_integrity(const __m128i block, const __m128i key_vec, unsigned char* o, const bool support) {
                 __try {
                     __m128i tmp = _mm_xor_si128(block, key_vec);
                     tmp = _mm_aesenc_si128(tmp, key_vec);
@@ -12179,7 +12173,7 @@ public:
                 __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
                     ? EXCEPTION_EXECUTE_HANDLER
                     : EXCEPTION_CONTINUE_SEARCH
-                    ) 
+                    )
                 {
                     if (support) {
                         debug("CPU_HEURISTIC: Hypervisor reports AES, but it is not handled correctly");
@@ -12190,22 +12184,16 @@ public:
             }
         };
 
-        __m128i block_val = _mm_loadu_si128(reinterpret_cast<const __m128i*>(plaintext));
-        __m128i key_val = _mm_loadu_si128(reinterpret_cast<const __m128i*>(key));
+        const __m128i block_val = _mm_loadu_si128(reinterpret_cast<const __m128i*>(plaintext));
+        const __m128i key_val = _mm_loadu_si128(reinterpret_cast<const __m128i*>(key));
 
-        if (aes_executor::check_aes_integrity(block_val, key_val, out, aes_support)) return true;
+        bool is_spoofed = false;
+
+        if (aes_executor::check_aes_integrity(block_val, key_val, out, aes_support)) {
+            is_spoofed = true;
+        }
 
         /* Detect spoofed AVX state */
-    #if defined(__GNUC__) || defined(__clang__)
-        #define TARGET_AVX    __attribute__((target("avx")))
-        #define TARGET_AVX2   __attribute__((target("avx2")))
-        #define TARGET_AVX512 __attribute__((target("avx512f")))
-    #else
-        #define TARGET_AVX
-        #define TARGET_AVX2
-        #define TARGET_AVX512
-    #endif
-
         constexpr u32 CPUID1_OSXSAVE = 1u << 27;
         constexpr u32 CPUID1_AVX = 1u << 28;
 
@@ -12218,9 +12206,12 @@ public:
         const bool avx_adv = (c & CPUID1_AVX) != 0;
         const bool osxsave_adv = (c & CPUID1_OSXSAVE) != 0;
 
+        /*
+         * Due to this, it only triggers if a hypervisor has misconfigured its CPUID emulation
+         * (e.g., leaving AVX enabled in CPUID but disabling XSAVE or failing to emulate _xgetbv correctly)
+         */
         u32 a7 = 0, b7 = 0, c7 = 0, d7 = 0;
-        cpu::cpuid(a, b, c, d, cpu::leaf::basic_info, 0u);
-        if (a >= 7u) {
+        if (max_leaf >= 7u) {
             cpu::cpuid(a7, b7, c7, d7, cpu::leaf::ext_features, 0u);
         }
 
@@ -12228,66 +12219,80 @@ public:
         const bool avx512_adv = (b7 & CPUID7_AVX512F) != 0;
 
         /* Probe AVX */
-        auto is_avx_spoofed = [&]() TARGET_AVX noexcept -> bool{
+        auto is_avx_spoofed = [&]() TARGET_AVX noexcept -> bool {
+            /* If hardware doesn't advertise AVX, we cannot test it in user-mode */
             if (!avx_adv) return false;
-            if (!osxsave_adv) return true;
 
-            const u64 xcr0 = static_cast<u64>(_xgetbv(0));
-            if ((xcr0 & XCR0_AVX_MASK) != XCR0_AVX_MASK) return true;
+            /*
+             * If the OS has not enabled XSAVE/XRSTOR, AVX cannot run
+             * This is normal bare-metal OS behavior (e.g. legacy/minimal bootloader environments)
+             */
+            if (!osxsave_adv) return false;
 
             alignas(32) float in0[8] = { 1,2,3,4,5,6,7,8 };
             alignas(32) float in1[8] = { 16,15,14,13,12,11,10,9 };
             alignas(32) float out[8] = {};
 
             __try {
-                const __m256 va = _mm256_load_ps(in0);
-                const __m256 vb = _mm256_load_ps(in1);
+                /* Since CPUID reports OSXSAVE as active, xgetbv is guaranteed to work */
+                const u64 xcr0 = static_cast<u64>(_xgetbv(0));
+                /*
+                 * If the OS has not enabled AVX state tracking in XCR0, AVX cannot execute
+                 * If a hypervisor misconfigures this, the xgetbv instruction itself will #UD here
+                 */
+                if ((xcr0 & XCR0_AVX_MASK) != XCR0_AVX_MASK) return false;
+
+                const __m256 va = _mm256_loadu_ps(in0);
+                const __m256 vb = _mm256_loadu_ps(in1);
                 const __m256 vc = _mm256_add_ps(va, vb);
-                _mm256_store_ps(out, vc);
+                _mm256_storeu_ps(out, vc);
                 return out[0] != 17.0f;
             }
             __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
                 ? EXCEPTION_EXECUTE_HANDLER
                 : EXCEPTION_CONTINUE_SEARCH)
             {
+                /*
+                 * CPUID says AVX is supported, OSXSAVE is enabled, and XCR0 has the AVX state bit
+                 * An illegal instruction exception here is architecturally impossible
+                 */
+                debug("CPU_HEURISTIC: Hypervisor detected hiding AVX capabilities");
                 return true;
             }
         };
 
         /* Probe AVX2 */
-        auto is_avx2_spoofed = [&]() TARGET_AVX2 noexcept -> bool {
+        auto is_avx2_spoofed = [&]() TARGET_AVX2 noexcept -> bool{
             if (!avx2_adv) return false;
-            if (!avx_adv || !osxsave_adv) return true;
-
-            const u64 xcr0 = static_cast<u64>(_xgetbv(0));
-            if ((xcr0 & XCR0_AVX_MASK) != XCR0_AVX_MASK) return true;
+            if (!avx_adv || !osxsave_adv) return false;
 
             alignas(32) u32 in0[8] = { 1,2,3,4,5,6,7,8 };
             alignas(32) u32 in1[8] = { 16,15,14,13,12,11,10,9 };
             alignas(32) u32 out[8] = {};
 
             __try {
-                const __m256i va = _mm256_load_si256(reinterpret_cast<const __m256i*>(in0));
-                const __m256i vb = _mm256_load_si256(reinterpret_cast<const __m256i*>(in1));
+                const u64 xcr0 = static_cast<u64>(_xgetbv(0));
+                if ((xcr0 & XCR0_AVX_MASK) != XCR0_AVX_MASK) return false;
+
+                const __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(in0));
+                const __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(in1));
                 const __m256i vc = _mm256_add_epi32(va, vb);
-                _mm256_store_si256(reinterpret_cast<__m256i*>(out), vc);
+                _mm256_storeu_si256(reinterpret_cast<__m256i*>(out), vc);
                 return out[0] != 17u;
             }
             __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
                 ? EXCEPTION_EXECUTE_HANDLER
                 : EXCEPTION_CONTINUE_SEARCH)
             {
+                debug("CPU_HEURISTIC: Hypervisor detected hiding AVX2 capabilities");
                 return true;
             }
         };
 
         /* Probe AVX512 */
-        auto is_avx512_spoofed = [&]() TARGET_AVX512 noexcept -> bool {
+        auto is_avx512_spoofed = [&]() TARGET_AVX512 noexcept -> bool{
             if (!avx512_adv) return false;
-            if (!avx_adv || !osxsave_adv) return true;
-
-            const u64 xcr0 = static_cast<u64>(_xgetbv(0));
-            if ((xcr0 & XCR0_AVX512_MASK) != XCR0_AVX512_MASK) return true;
+            if (!avx_adv || !osxsave_adv) return false;
 
             alignas(64) u32 in0[16] = {
                 1,2,3,4,5,6,7,8, 9,10,11,12,13,14,15,16
@@ -12298,61 +12303,94 @@ public:
             alignas(64) u32 out[16] = {};
 
             __try {
-                const __m512i va = _mm512_load_si512(reinterpret_cast<const void*>(in0));
-                const __m512i vb = _mm512_load_si512(reinterpret_cast<const void*>(in1));
+                const u64 xcr0 = static_cast<u64>(_xgetbv(0));
+
+                /*
+                 * If the OS disabled AVX-512 state tracking (e.g. kernel flags or hybrid cores)
+                 * we return false. Running AVX-512 would legitimately #UD here
+                 */
+                if ((xcr0 & XCR0_AVX512_MASK) != XCR0_AVX512_MASK) return false;
+
+                const __m512i va = _mm512_loadu_si512(reinterpret_cast<const void*>(in0));
+                const __m512i vb = _mm512_loadu_si512(reinterpret_cast<const void*>(in1));
                 const __m512i vc = _mm512_add_epi32(va, vb);
-                _mm512_store_si512(reinterpret_cast<void*>(out), vc);
+                _mm512_storeu_si512(reinterpret_cast<void*>(out), vc);
                 return out[0] != 17u;
             }
             __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
                 ? EXCEPTION_EXECUTE_HANDLER
                 : EXCEPTION_CONTINUE_SEARCH)
             {
+                debug("CPU_HEURISTIC: Hypervisor detected hiding AVX512 capabilities");
                 return true;
             }
         };
 
-        if (is_avx_spoofed() || is_avx2_spoofed() || is_avx512_spoofed()) {
-            debug("Hypervisor detected hiding AVX capabilities");
-            return true;
+        if (!is_spoofed) {
+            if (is_avx_spoofed() || is_avx2_spoofed() || is_avx512_spoofed()) {
+                is_spoofed = true;
+            }
         }
 
         const bool rdrand_support = ((c >> 30) & 1u) != 0;
 
-        auto check_rdrand_integrity = [&]() noexcept -> bool {
+        auto is_rdrand_spoofed = [&]() noexcept -> bool {
         #if (MSVC) && !(CLANG)
             unsigned int v = 0;
 
             __try {
                 const int ok = _rdrand32_step(&v);
-
                 if (ok && !rdrand_support) {
                     debug("CPU_HEURISTIC: Hypervisor detected hiding RDRAND capabilities");
+                    return true;
                 }
             }
             __except (EXCEPTION_EXECUTE_HANDLER) {
                 if (rdrand_support) {
-                   debug("CPU_HEURISTIC: Hypervisor did not handle RDRAND correctly");
+                    debug("CPU_HEURISTIC: Hypervisor did not handle RDRAND correctly");
+                    return true;
                 }
             }
         #else
             unsigned int v = 0;
             unsigned char ok = 0;
 
-            asm volatile("rdrand %0\n\tsetc %1"
-                : "=r"(v), "=qm"(ok)
-                :
-                : "cc");
+            __try {
+                asm volatile("rdrand %0\n\tsetc %1"
+                    : "=r"(v), "=qm"(ok)
+                    :
+                    : "cc"
+                );
 
-            if (ok && !rdrand_support) {
-                debug("CPU_HEURISTIC: Hypervisor detected hiding RDRAND capabilities");
+                if (ok && !rdrand_support) {
+                    debug("CPU_HEURISTIC: Hypervisor detected hiding RDRAND capabilities");
+                    return true;
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                if (rdrand_support) {
+                    debug("CPU_HEURISTIC: Hypervisor did not handle RDRAND correctly");
+                    return true;
+                }
             }
         #endif
 
             return false;
         };
 
-        if (check_rdrand_integrity()) return true;
+        if (!is_spoofed) {
+            if (is_rdrand_spoofed()) {
+                is_spoofed = true;
+            }
+        }
+
+        if (old_affinity != 0) {
+            SetThreadAffinityMask(current_thread, old_affinity);
+        }
+
+        if (is_spoofed) {
+            return true;
+        }
 
         /* 2. Test if the CPU vendor is spoofed (for example, a CPU reports being AMD in CPUID, but it is Intel) */
         /*
