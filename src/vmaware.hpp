@@ -4749,6 +4749,203 @@ public:
                 return found;
             };
 
+            auto is_log_present = []() -> bool {
+            #pragma pack(push, 1)
+                struct tcg_pcr_event_header {
+                    u8 pad[28];
+                    u32 event_data_size;
+                    u8 event_data[1];
+                };
+                struct tcg_efi_spec_id_event_struct_header {
+                    u8 pad[24];
+                    u32 number_of_algorithms;
+                };
+                struct tbs_context_params {
+                    u32 version;
+                };
+            #pragma pack(pop)
+
+                using pfn_tbsi_get_tcg_log_ex = int(__stdcall*)(u32, u8*, u32*);
+                using pfn_tbsi_context_create = int(__stdcall*)(void*, void**);
+                using pfn_tbsi_get_tcg_log = int(__stdcall*)(void*, u8*, u32*);
+                using pfn_tbsip_context_close = int(__stdcall*)(void*);
+
+                const HMODULE tbs_module = LoadLibraryW(L"tbs.dll");
+                if (!tbs_module) {
+                    return true; /* If not Windows 10, return true (legit) to not false flag */
+                }
+
+                const char* function_names[] = {
+                    "Tbsi_Get_TCG_Log_Ex",
+                    "Tbsi_Context_Create",
+                    "Tbsi_Get_TCG_Log",
+                    "Tbsip_Context_Close"
+                };
+                constexpr size_t function_count = sizeof(function_names) / sizeof(function_names[0]);
+                void* functions[function_count] = {};
+                memory::get_function_address(tbs_module, function_names, functions, function_count);
+
+                const pfn_tbsi_get_tcg_log_ex get_tcg_log_ex = reinterpret_cast<pfn_tbsi_get_tcg_log_ex>(functions[0]);
+                const pfn_tbsi_context_create context_create = reinterpret_cast<pfn_tbsi_context_create>(functions[1]);
+                const pfn_tbsi_get_tcg_log get_tcg_log = reinterpret_cast<pfn_tbsi_get_tcg_log>(functions[2]);
+                const pfn_tbsip_context_close context_close = reinterpret_cast<pfn_tbsip_context_close>(functions[3]);
+
+                if (!get_tcg_log_ex && !(context_create && get_tcg_log && context_close)) {
+                    FreeLibrary(tbs_module);
+                    return true; /* If not Windows 10, return true (legit) to not false flag */
+                }
+
+                u32 log_size = 0;
+                u8* log_buffer = nullptr;
+                int hr = -1;
+
+                if (get_tcg_log_ex) {
+                    hr = get_tcg_log_ex(0, nullptr, &log_size);
+                    if ((hr == 0 || hr == 0x80284005) && log_size > 0) {
+                        log_buffer = new u8[log_size];
+                        hr = get_tcg_log_ex(0, log_buffer, &log_size);
+                    }
+                }
+                else if (context_create && get_tcg_log && context_close) {
+                    void* context = nullptr;
+                    tbs_context_params params{};
+                    params.version = 1;
+                    hr = context_create(&params, &context);
+                    if (hr == 0) {
+                        hr = get_tcg_log(context, nullptr, &log_size);
+                        if ((hr == 0 || hr == 0x80284005) && log_size > 0) {
+                            log_buffer = new u8[log_size];
+                            hr = get_tcg_log(context, log_buffer, &log_size);
+                        }
+                        context_close(context);
+                    }
+                }
+
+                FreeLibrary(tbs_module);
+
+                if (hr != 0 || !log_buffer) {
+                    delete[] log_buffer;
+                    return true; /* No functional TPM? */
+                }
+
+                bool found_hyperv = false;
+                do {
+                    if (log_size < 32) break;
+                    const auto* const first_event = reinterpret_cast<const tcg_pcr_event_header*>(log_buffer);
+                    const size_t first_event_size = static_cast<size_t>(32) + first_event->event_data_size;
+                    if (first_event_size > log_size) break;
+
+                    const bool crypto_agile = (first_event->event_data_size >= 16 && memcmp(first_event->event_data, "Spec ID Event03", 15) == 0);
+
+                    struct alg_size_pair {
+                        u16 alg_id;
+                        u16 digest_size;
+                    };
+
+                    alg_size_pair alg_sizes[16] = {
+                        {0x0004, 20}, /* SHA1 */
+                        {0x000B, 32}, /* SHA256 */
+                        {0x000C, 48}, /* SHA384 */
+                        {0x000D, 64}, /* SHA512 */
+                        {0x0012, 32}  /* SM3 */
+                    };
+                    size_t alg_count = 5;
+
+                    if (crypto_agile) {
+                        if (first_event->event_data_size >= sizeof(tcg_efi_spec_id_event_struct_header)) {
+                            const auto* const spec_id = reinterpret_cast<const tcg_efi_spec_id_event_struct_header*>(first_event->event_data);
+                            const u8* p_alg = first_event->event_data + sizeof(*spec_id);
+                            if (first_event->event_data_size - sizeof(*spec_id) >= static_cast<unsigned long long>(spec_id->number_of_algorithms) * 4) {
+                                for (u32 i = 0; i < spec_id->number_of_algorithms; ++i, p_alg += 4) {
+                                    const u16 alg_id = *reinterpret_cast<const u16*>(p_alg);
+                                    const u16 digest_size = *reinterpret_cast<const u16*>(p_alg + 2);
+                                    bool updated = false;
+                                    for (size_t j = 0; j < alg_count; ++j) {
+                                        if (alg_sizes[j].alg_id == alg_id) {
+                                            alg_sizes[j].digest_size = digest_size;
+                                            updated = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!updated && alg_count < 16) {
+                                        alg_sizes[alg_count++] = { alg_id, digest_size };
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    size_t offset = first_event_size;
+
+                    constexpr const wchar_t* hyperv_targets[] = {
+                        L"hvix64.exe", L"hvax64.exe", L"hvloader.dll", L"securekernel.exe",
+                        L"winresume.efi", L"hiberresume.exe", L"hiberrsm.exe" /* If PC booted from hibernation, Hyper-V measurements won't be present */
+                    };
+
+                    const auto scan_targets = [&](const u32 pcr, const u32 event_size, const u8* const event_data) -> bool {
+                        if (pcr == 11 || pcr == 13) {
+                            for (const auto& target : hyperv_targets) {
+                                const auto* const pat = reinterpret_cast<const u8*>(target);
+                                size_t target_len = 0;
+                                while (target[target_len] != L'\0') target_len++;
+                                const size_t len = target_len * 2;
+
+                                if (event_size >= len && std::search(event_data, event_data + event_size, pat, pat + len) != event_data + event_size) {
+                                    return true;
+                                }
+                            }
+                        }
+                        return false;
+                    };
+
+                    while (offset < log_size) {
+                        if (crypto_agile) {
+                            if (offset + 12 > log_size) break;
+                            const u32 pcr = *reinterpret_cast<const u32*>(log_buffer + offset);
+                            const u32 digest_count = *reinterpret_cast<const u32*>(log_buffer + offset + 8);
+
+                            size_t temp = offset + 12;
+                            for (u32 i = 0; i < digest_count && temp + 2 <= log_size; ++i) {
+                                const u16 alg_id = *reinterpret_cast<const u16*>(log_buffer + temp);
+                                u16 digest_size = 0;
+                                for (size_t j = 0; j < alg_count; ++j) {
+                                    if (alg_sizes[j].alg_id == alg_id) {
+                                        digest_size = alg_sizes[j].digest_size;
+                                        break;
+                                    }
+                                }
+                                temp += static_cast<unsigned long long>(2) + digest_size;
+                            }
+
+                            if (temp + 4 > log_size) break;
+                            const u32 event_size = *reinterpret_cast<const u32*>(log_buffer + temp);
+                            const u8* const event_data = log_buffer + temp + 4;
+                            offset = temp + 4 + event_size;
+
+                            if (offset <= log_size && scan_targets(pcr, event_size, event_data)) {
+                                found_hyperv = true;
+                                break;
+                            }
+                        }
+                        else {
+                            if (offset + 32 > log_size) break;
+                            const u32 pcr = *reinterpret_cast<const u32*>(log_buffer + offset);
+                            const u32 event_size = *reinterpret_cast<const u32*>(log_buffer + offset + 28);
+                            const u8* const event_data = log_buffer + offset + 32;
+                            offset += 32 + static_cast<unsigned long long>(event_size);
+
+                            if (offset <= log_size && scan_targets(pcr, event_size, event_data)) {
+                                found_hyperv = true;
+                                break;
+                            }
+                        }
+                    }
+                } while (false);
+
+                delete[] log_buffer;
+                return found_hyperv;
+            };
+
             const char* enlightenment_str = cpu::cpu_manufacturer(cpu::leaf::hv_enlightenment);
             if (enlightenment_str && util::find(enlightenment_str, "KVM")) {
                 debug("HYPER-X: Detected Hyper-V enlightenments");
@@ -4785,6 +4982,10 @@ public:
                         debug("HYPER-X: Hypervisor Hardware Abstraction Layer: ", hal);
                         is_hyper_v_host &= hal;
                     }
+
+                    const bool tpml = is_log_present();
+                    debug("HYPER-X: Hypervisor Measured Boot Log: ", tpml);
+                    is_hyper_v_host &= tpml;
 
                     if (is_hyper_v_host) {
                         debug("HYPER-X: Detected Hyper-V host machine");
@@ -9094,8 +9295,9 @@ public:
     #if (x86_64)       
         #if (WINDOWS)
             const HMODULE ntdll = memory::get_ntdll();
-            if (!ntdll)
+            if (!ntdll) {
                 return false;
+            }
 
             const char* function_names[] = { "NtQuerySystemInformation" };
             void* functions[ARRAYSIZE(function_names)] = {};
@@ -9369,7 +9571,7 @@ public:
             BYTE identify_ctrl[4096];
             RtlZeroMemory(identify_ctrl, sizeof(identify_ctrl));
             if (query_protocol(StorageAdapterProtocolSpecificProperty, 1, 0x01, 0, identify_ctrl, sizeof(identify_ctrl))) {
-                const uint16_t oacs = *reinterpret_cast<const uint16_t*>(&identify_ctrl[256]);
+                const u16 oacs = *reinterpret_cast<const u16*>(&identify_ctrl[256]);
                 const bool supports_virtualization_mgmt = (oacs & (1 << 8)) != 0;
                 const bool supports_namespace_mgmt = (oacs & (1 << 3)) != 0;
                 const bool lacks_self_test = (oacs & (1 << 4)) == 0;
@@ -9384,12 +9586,12 @@ public:
             BYTE identify_ns[4096];
             RtlZeroMemory(identify_ns, sizeof(identify_ns));
             if (query_protocol(StorageDeviceProtocolSpecificProperty, 1, 0x00, 1, identify_ns, sizeof(identify_ns))) {
-                const uint8_t nlbaf = identify_ns[25]; /* Number of LBA Formats (0 - based) */
+                const u8 nlbaf = identify_ns[25]; /* Number of LBA Formats (0 - based) */
                 if (nlbaf == 7) { /* 8 available formats */
                     bool has_metadata_option = false;
                     for (int i = 0; i < 8; ++i) {
                         const size_t entry_offset = 128 + (static_cast<size_t>(i) * 4); /* LBA Format Table starts at offset 128 */
-                        const uint16_t ms = *reinterpret_cast<const uint16_t*>(&identify_ns[entry_offset]);
+                        const u16 ms = *reinterpret_cast<const u16*>(&identify_ns[entry_offset]);
                         if (ms != 0) {
                             has_metadata_option = true;
                             break;
