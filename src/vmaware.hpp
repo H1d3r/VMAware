@@ -6465,6 +6465,7 @@ public:
     #if (x86_64)
         timer::timer_tick_t best_npf_l = (std::numeric_limits<timer::timer_tick_t>::max)();
         timer::timer_tick_t best_add_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+        bool nested_bypass_detected = false;
     #endif
 
         std::thread t1(counter_thread);
@@ -6670,10 +6671,16 @@ public:
                     std::atomic_signal_fence(std::memory_order_seq_cst);
                     v_post = *nested_counter_ptr;
 
-                    if (v_post > v_pre && r_post > r_pre && exit_ctx.ExitReason == WHvRunVpExitReasonMemoryAccess) {
-                        npf_samples[npf_valid] = v_post - v_pre;
-                        add_samples[npf_valid] = r_post - r_pre;
-                        npf_valid++;
+                    if (v_post > v_pre && r_post > r_pre) {
+                        if (exit_ctx.ExitReason == WHvRunVpExitReasonMemoryAccess) {
+                            npf_samples[npf_valid] = v_post - v_pre;
+                            add_samples[npf_valid] = r_post - r_pre;
+                            npf_valid++;
+                        }
+                        else {
+                            debug("TIMER: Detected hypervisor faking exceptions for nested page faults");
+                            nested_bypass_detected = true;
+                        }                    
                     }
                 }
 
@@ -6733,7 +6740,7 @@ public:
         if (check_nested_hypervisors) {
             const double npf_ratio = best_add_l ? (double)best_npf_l / (double)best_add_l : 0;
             debug("TIMER: Memory > VMM -> ", best_npf_l, " | nVMM -> ", best_add_l, " | Ratio -> ", npf_ratio);
-            if (npf_ratio >= 4.00) hypervisor_detected = true;
+            if (npf_ratio >= 4.00 || nested_bypass_detected) hypervisor_detected = true;
         }
 
         /* Cleanup stuff until end of function */
