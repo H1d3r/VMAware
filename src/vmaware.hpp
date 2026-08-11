@@ -545,17 +545,18 @@
             0x9D,                                      /* 28: popfq/popfd */
             0xC3                                       /* 29: ret */
         };
-        static const unsigned char singlestep_stub[] VMAWARE_SECTION = {
-            0x9C,                                     /* pushfq */
-            0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00, /* or dword ptr [rsp], 0x100 (sets TF) */
-            0x9D,                                     /* popfq */
-            0x0F, 0xA2,                               /* cpuid */
-            0xC7, 0xB2,                               /* db 0xC7, 0xB2 (invalid opcode) */
-            0xC3                                      /* ret */
-        };
         static const unsigned char ud_stub[] VMAWARE_SECTION = { 0x0F, 0x0B, 0xC3 }; /* ud2; ret */
 
         #if (x86_64)
+            static const unsigned char singlestep_stub[] VMAWARE_SECTION = {
+                0x49, 0x89, 0xD8,                         /* mov r8, rbx */
+                0x9C,                                     /* pushfq */
+                0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00, /* or dword ptr [rsp], 0x100 (sets TF) */
+                0x9D,                                     /* popfq */
+                0x0F, 0xA2,                               /* cpuid */
+                0xC7, 0xB2,                               /* db 0xC7, 0xB2 (invalid opcode) */
+                0xC3                                      /* ret */
+            };
             static const unsigned char trampoline_stub[] VMAWARE_SECTION = {
                 0x49, 0x89, 0xD8,                         /* mov r8, rbx (save rbx to volatile register r8) */
                 0x9C,                                     /* pushfq */
@@ -601,6 +602,16 @@
             static const unsigned char dbvm_icebp_stub[] VMAWARE_SECTION = {
                 0xF1,                                           /* icebp */
                 0xC3                                            /* ret */
+            };
+        #elif (x86_32)
+            static const unsigned char singlestep_stub[] VMAWARE_SECTION = {
+                0x89, 0xDF,                               /* mov edi, ebx */
+                0x9C,                                     /* pushfd */
+                0x81, 0x0C, 0x24, 0x00, 0x01, 0x00, 0x00, /* or dword ptr [esp], 0x100 (sets TF) */
+                0x9D,                                     /* popfd */
+                0x0F, 0xA2,                               /* cpuid */
+                0xC7, 0xB2,                               /* db 0xC7, 0xB2 (invalid opcode) */
+                0xC3                                      /* ret */
             };
         #endif
     #elif (ARM32)
@@ -11314,7 +11325,7 @@ public:
 
         /* Static struct for SEH filtering to avoid release-mode lambda optimizations */
         struct exception_handler {
-            static LONG evaluate(u32 code, EXCEPTION_POINTERS* info, trap_context* ctx) noexcept {
+            static LONG execute(const u32 code, EXCEPTION_POINTERS* info, trap_context* ctx) noexcept {
                 if (!info || !info->ExceptionRecord || !info->ContextRecord) {
                     return EXCEPTION_CONTINUE_SEARCH;
                 }
@@ -11359,7 +11370,7 @@ public:
         __try {
             memory::execute(trampoline_stub);
         }
-        __except (exception_handler::evaluate(GetExceptionCode(), reinterpret_cast<EXCEPTION_POINTERS*>(_exception_info()), &ctx)) {
+        __except (exception_handler::execute(GetExceptionCode(), reinterpret_cast<EXCEPTION_POINTERS*>(_exception_info()), &ctx)) {
             /* Unreachable, the exception_handler always returns CONTINUE_EXECUTION or CONTINUE_SEARCH */
         }
 
@@ -11412,7 +11423,7 @@ public:
         }
 
         struct exception_handler {
-            static int evaluate(unsigned int code, struct _EXCEPTION_POINTERS* ep, volatile ULONG_PTR* out_trap_ip) {
+            static int execute(const unsigned int code, struct _EXCEPTION_POINTERS* ep, volatile ULONG_PTR* out_trap_ip) {
                 if (code == EXCEPTION_SINGLE_STEP && ep && ep->ContextRecord) {
                 #if (x86_64)
                     *out_trap_ip = ep->ContextRecord->Rip;
@@ -11450,7 +11461,7 @@ public:
                     popfd
             }
         }
-        __except (exception_handler::evaluate(GetExceptionCode(), GetExceptionInformation(), &trap_ip)) {}
+        __except (exception_handler::execute(GetExceptionCode(), GetExceptionInformation(), &trap_ip)) {}
 
         /*
          * Hypervisor is detected if the trap fired at any IP differing from the expected bare metal target
@@ -11465,7 +11476,7 @@ public:
         __try {
             memory::execute(blockstep_stub);
         }
-        __except (exception_handler::evaluate(GetExceptionCode(), GetExceptionInformation(), &trap_ip)) {}
+        __except (exception_handler::execute(GetExceptionCode(), GetExceptionInformation(), &trap_ip)) {}
 
         /*
          * Hypervisor is detected if execution trapped at any offset other than expected bare metal
@@ -13357,7 +13368,7 @@ public:
         ermsb_trap_detected = false;
 
         struct handler {
-            static LONG __stdcall execute(PEXCEPTION_POINTERS ctx) {
+            static LONG __stdcall execute(const PEXCEPTION_POINTERS ctx) {
                 if (ctx->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
                     ermsb_trap_detected = true;
                     return EXCEPTION_CONTINUE_EXECUTION;
@@ -13446,14 +13457,26 @@ public:
         bool is_vm = true;
         DWORD exc_code = 0;
 
+        struct handler {
+            static LONG execute(const EXCEPTION_POINTERS* info, DWORD* exceptionCode) {
+                *exceptionCode = info->ExceptionRecord->ExceptionCode;
+            #if (x86_64)
+                info->ContextRecord->Rbx = info->ContextRecord->R8;
+            #elif (x86_32)
+                info->ContextRecord->Ebx = info->ContextRecord->Edi;
+            #endif
+                return EXCEPTION_EXECUTE_HANDLER;
+            }
+        };
+
         __try {
             memory::execute(singlestep_stub);
             /* If the hypervisor completely swallows all exceptions, is_vm still remains true */
         }
-        __except (exc_code = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {
+        __except (handler::execute(GetExceptionInformation(), &exc_code)) {
             /*
              * If the exception doesnt reach this block, hypervisor delayed the trap flag over cpuid, execution fell through into
-             * the bad bytes (C7 B2) causing EXCEPTION_ILLEGAL_INSTRUCTION
+             * the bad bytes (C7 B2) causing STATUS_ILLEGAL_INSTRUCTION
              */
             if (exc_code == EXCEPTION_SINGLE_STEP) {
                 is_vm = false; /* trap flag single-step exception triggered on CPUID */
