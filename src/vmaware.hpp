@@ -3634,9 +3634,9 @@ public:
                 }
 
                 /* Golden Rule 2: Counter thread always in the middle available physical CPU (or 2nd core if exactly 2) */
-                DWORD unique_cores[64]{};
+                DWORD unique_cores[256]{};
                 DWORD unique_cores_count = 0;
-                DWORD core_to_logical[64]{};
+                DWORD core_to_logical[256]{};
 
                 for (DWORD i = 0; i < active_cpu_count; ++i) {
                     const DWORD log = idxs[i];
@@ -3650,9 +3650,14 @@ public:
                         }
                     }
                     if (!already_seen) {
-                        unique_cores[unique_cores_count] = core;
-                        core_to_logical[unique_cores_count] = log;
-                        unique_cores_count++;
+                        if (unique_cores_count < 64) {
+                            unique_cores[unique_cores_count] = core;
+                            core_to_logical[unique_cores_count] = log;
+                            unique_cores_count++;
+                        }
+                        else {
+                            break;
+                        }
                     }
                 }
 
@@ -3973,7 +3978,7 @@ public:
                 if (!current_name) continue;
                 const std::string s_name(current_name);
 
-                /* Only query and populate the cache if it's not a dynamically loaded module with LoadLibrary */
+                /* Only query and populate the cache if it's not a dynamically loaded module with LoadLibraryEx */
                 if (cache_result) {
                     func_map& module_cache = function_cache[hModule];
                     const auto cache_it = module_cache.find(s_name);
@@ -4770,7 +4775,7 @@ public:
                 using pfn_tbsi_get_tcg_log = int(__stdcall*)(void*, u8*, u32*);
                 using pfn_tbsip_context_close = int(__stdcall*)(void*);
 
-                const HMODULE tbs_module = LoadLibraryW(L"tbs.dll");
+                const HMODULE tbs_module = LoadLibraryExW(L"tbs.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
                 if (!tbs_module) {
                     return true; /* If not Windows 10, return true (legit) to not false flag */
                 }
@@ -8122,121 +8127,120 @@ public:
         const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
 
         /* Iterating processors for SGDT, SLDT, and SIDT */
-        for (DWORD i = 0; i < si.dwNumberOfProcessors; ++i) {
-            const DWORD_PTR mask = (DWORD_PTR)1 << i;
-            const DWORD_PTR previous_mask = SetThreadAffinityMask(current_thread, mask);
+        GROUP_AFFINITY original_group_aff{};
+        if (GetThreadGroupAffinity(current_thread, &original_group_aff)) {
+            for (DWORD i = 0; i < 64; ++i) {
+                if (original_group_aff.Mask & ((ULONG_PTR)1 << i)) {
+                    GROUP_AFFINITY target_aff = original_group_aff;
+                    target_aff.Mask = (ULONG_PTR)1 << i; 
 
-            if (previous_mask == 0) {
-                continue;
-            }
+                    if (SetThreadGroupAffinity(current_thread, &target_aff, nullptr)) {
+                        /* Technique 1: SGDT(x86 & x64) */
+                        {
+                        #if (x86_64)
+                            u8 gdtr[10] = { 0 };
+                        #else
+                            u8 gdtr[6] = { 0 };
+                        #endif
 
-            if (original_mask == 0) {
-                original_mask = previous_mask;
-            }
+                            __try {
+                            #if (CLANG || GCC)
+                                __asm__ volatile("sgdt %0" : "=m"(gdtr));
+                            #elif (MSVC && x86_32)
+                                __asm { sgdt gdtr }
+                            #else
+                                #pragma pack(push,1)
+                                struct {
+                                    u16 limit;
+                                    u64 base;
+                                } _gdtr = {};
+                                #pragma pack(pop)
+                                _sgdt(&_gdtr);
+                                memcpy(gdtr, &_gdtr, sizeof(_gdtr));
+                            #endif
+                            }
+                            __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-            /* Technique 1: SGDT (x86 & x64) */
-            {
-            #if (x86_64)
-                u8 gdtr[10] = { 0 };
-            #else
-                u8 gdtr[6] = { 0 };
-            #endif
+                            ULONG_PTR gdt_base = 0;
+                            memcpy(&gdt_base, &gdtr[2], sizeof(gdt_base));
 
-                __try {
-                #if (CLANG || GCC)
-                    __asm__ volatile("sgdt %0" : "=m"(gdtr));
-                #elif (MSVC && x86_32)
-                    __asm { sgdt gdtr }
-                #else
-                    #pragma pack(push,1)
-                    struct {
-                        u16 limit;
-                        u64 base;
-                    } _gdtr = {};
-                    #pragma pack(pop)
-                    _sgdt(&_gdtr);
-                    memcpy(gdtr, &_gdtr, sizeof(_gdtr));
-                #endif
-                }
-                __except (EXCEPTION_EXECUTE_HANDLER) {} /* CR4.UMIP */
+                            if ((gdt_base >> 24) == 0xFF) {
+                                debug("SGDT: 0xFF signature detected on core ", i);
+                                found = true;
+                            }
+                        }
 
-                ULONG_PTR gdt_base = 0;
-                memcpy(&gdt_base, &gdtr[2], sizeof(gdt_base));
+                        /* Technique 2: SLDT (x86_32 only) */
+                    #if (x86_32)
+                        if (!found) {
+                            u8 ldtr_buf[4] = { 0xEF, 0xBE, 0xAD, 0xDE };
+                            u32 ldt_val = 0;
 
-                if ((gdt_base >> 24) == 0xFF) {
-                    debug("SGDT: 0xFF signature detected on core %u", i);
-                    found = true;
-                }
-            }
+                            __try {
+                            #if (CLANG || GCC)
+                                __asm__ volatile("sldt %0" : "=m"(*(u16*)ldtr_buf));
+                            #else
+                                __asm {
+                                    sldt ax
+                                    mov  word ptr[ldtr_buf], ax
+                                }
+                            #endif
+                            }
+                            __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-            /* Technique 2: SLDT (x86_32 only) */
-            #if (x86_32)
-                if (!found) {
-                    u8 ldtr_buf[4] = { 0xEF, 0xBE, 0xAD, 0xDE };
-                    u32 ldt_val = 0;
-
-                    __try {
-                    #if (CLANG || GCC)
-                        __asm__ volatile("sldt %0" : "=m"(*(u16*)ldtr_buf));
-                    #else  /* MSVC */
-                        __asm {
-                            sldt ax
-                            mov  word ptr[ldtr_buf], ax
+                            memcpy(&ldt_val, ldtr_buf, sizeof(ldt_val));
+                            if (ldtr_buf[0] != 0x00 && ldtr_buf[1] != 0x00) {
+                                debug("SLDT: ldtr_buf signature detected");
+                                found = true;
+                            }
+                            if (ldt_val != 0xDEAD0000) {
+                                debug("SLDT: 0xDEAD0000 signature detected");
+                                found = true;
+                            }
                         }
                     #endif
-                    }
-                    __except (EXCEPTION_EXECUTE_HANDLER) {} /* CR4.UMIP */
 
-                    memcpy(&ldt_val, ldtr_buf, sizeof(ldt_val));
-                    if (ldtr_buf[0] != 0x00 && ldtr_buf[1] != 0x00) {
-                        debug("SLDT: ldtr_buf signature detected");
-                        found = true;
-                    }
-                    if (ldt_val != 0xDEAD0000) {
-                        debug("SLDT: 0xDEAD0000 signature detected");
-                        found = true;
-                    }
-                }
-            #endif
+                        /* Technique 3: SIDT(x86 & x64) */
+                        if (!found) {
+                        #if (x86_64)    
+                            u8 idtr_buffer[10] = { 0 };
+                        #else
+                            u8 idtr_buffer[6] = { 0 };
+                        #endif
 
-                /* Technique 3: SIDT (x86 & x64) */
-                if (!found) {
-                #if (x86_64)
-                    u8 idtr_buffer[10] = { 0 };
-                #else
-                    u8 idtr_buffer[6] = { 0 };
-                #endif
+                            __try {
+                            #if (CLANG || GCC)
+                                __asm__ volatile("sidt %0" : "=m"(idtr_buffer));
+                            #elif (MSVC) && (x86_32)
+                                __asm { sidt idtr_buffer }
+                            #elif (MSVC) && (x86_64)
+                                #pragma pack(push, 1)
+                                struct {
+                                    USHORT Limit;
+                                    ULONG_PTR Base;
+                                } idtr;
+                                #pragma pack(pop)
+                                __sidt(&idtr);
+                                memcpy(idtr_buffer, &idtr, sizeof(idtr));
+                            #endif
+                            }
+                            __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-                    __try {
-                    #if (CLANG || GCC)
-                        __asm__ volatile("sidt %0" : "=m"(idtr_buffer));
-                    #elif (MSVC) && (x86_32)
-                        __asm { sidt idtr_buffer }
-                    #elif (MSVC) && (x86_64)
-                        #pragma pack(push, 1)
-                        struct {
-                            USHORT Limit;
-                            ULONG_PTR Base;
-                        } idtr;
-                        #pragma pack(pop)
-                        __sidt(&idtr);
-                        memcpy(idtr_buffer, &idtr, sizeof(idtr));
-                    #endif
-                    }
-                    __except (EXCEPTION_EXECUTE_HANDLER) {} /* CR4.UMIP */
+                            ULONG_PTR idt_base = 0;
+                            memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
 
-                    ULONG_PTR idt_base = 0;
-                    memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
-
-                    /* Check for the 0xE8 signature (VPC/Hyper-V) in the high byte */
-                    if ((idt_base >> 24) == 0xE8) {
-                        debug("SIDT: VPC/Hyper-V signature detected on core %u", i);
-                        core::add(brand_enum::VPC, 100);
-                        found = true;
+                            if ((idt_base >> 24) == 0xE8) {
+                                debug("SIDT: VPC/Hyper-V signature detected on core ", i);
+                                core::add(brand_enum::VPC, 100);
+                                found = true;
+                            }
+                        }
                     }
                 }
+                if (found) break;
+            }
 
-            if (found) break;
+            SetThreadGroupAffinity(current_thread, &original_group_aff, nullptr);
         }
 
         if (original_mask != 0) {
@@ -13519,27 +13523,24 @@ public:
 
             volatile LONG did_anyone_throw = 0;
 
-            for (ULONG i = 0; i < num_processors && i < 256; ++i) {
-                /* Pin the current thread to physical core i */
-                ULONG_PTR affinity = (ULONG_PTR)1 << i;
-                status = nt_set_information_thread(current_thread, 4 /* ThreadAffinityMask */, &affinity, sizeof(affinity));
-                if (status < 0) {
-                    SetThreadGroupAffinity(current_thread, &original_affinity, nullptr);
-                    return false;
-                }
+            GROUP_AFFINITY active_group_aff{};
+            if (GetThreadGroupAffinity(current_thread, &active_group_aff)) {
+                for (ULONG i = 0; i < 64; ++i) {
+                    if (active_group_aff.Mask & ((ULONG_PTR)1 << i)) {
+                        GROUP_AFFINITY target_aff = active_group_aff;
+                        target_aff.Mask = (ULONG_PTR)1 << i; 
 
-                __try {
-                    memory::execute(pointer);
+                        if (SetThreadGroupAffinity(current_thread, &target_aff, nullptr)) {
+                            __try {
+                                memory::execute(pointer);
+                            }
+                            __except (EXCEPTION_EXECUTE_HANDLER) {
+                                did_anyone_throw = 1;
+                            }
+                        }
+                    }
                 }
-                __except (EXCEPTION_EXECUTE_HANDLER) {
-                    did_anyone_throw = 1;
-                }
-            }
-
-            SetThreadGroupAffinity(current_thread, &original_affinity, nullptr);
-
-            if (did_anyone_throw != 0) {
-                hook_detected = true;
+                SetThreadGroupAffinity(current_thread, &original_affinity, nullptr);
             }
         }
 
