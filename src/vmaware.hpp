@@ -8580,7 +8580,7 @@ public:
                                 }
                             }
                             return nullptr;
-                            };
+                        };
 
                         const u8* pnp_ptr = find_eisa();
                         if (pnp_ptr) {
@@ -8647,7 +8647,7 @@ public:
                         }
                     }
 
-                    /* HPET dynamic check logic (VEND / PRD threshold) - upgraded to Constant-Agnostic Structural _STA check */
+                    /* HPET dynamic check logic (VEND / PRD threshold) with a constant-agnostic structural _STA check */
                     if (find_pattern("HPET", 4)) {
                         /* Search the buffer for: LEqualOp (0x93), Local1 (0x61), ZeroOp (0x00) */
                         /* followed closely by LGreaterOp (0x94), Local1 (0x61) */
@@ -8842,11 +8842,11 @@ public:
 
                             u8 source_mask = 0;
                             switch (source) {
-                            case 5:  source_mask = 1u << 0; break;
-                            case 9:  source_mask = 1u << 1; break;
-                            case 10: source_mask = 1u << 2; break;
-                            case 11: source_mask = 1u << 3; break;
-                            default: break;
+                                case 5:  source_mask = 1u << 0; break;
+                                case 9:  source_mask = 1u << 1; break;
+                                case 10: source_mask = 1u << 2; break;
+                                case 11: source_mask = 1u << 3; break;
+                                default: break;
                             }
 
                             /*
@@ -8877,7 +8877,7 @@ public:
             }
 
             return false;
-         };
+        };
 
     #if (WINDOWS)
         /* To minimize heap allocations */
