@@ -3360,6 +3360,7 @@ public:
             }
         };
 
+    #if (WINDOWS)
         struct bios_info {
             static char manufacturer[256];
             static char model[128];
@@ -3430,6 +3431,7 @@ public:
                 return cached;
             }
         };
+    #endif
     };
 
 #if (WINDOWS)
