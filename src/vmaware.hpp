@@ -11897,6 +11897,10 @@ public:
             return false;
         }
 
+        /* Verify basic CPUID information using the cross-platform cpu::cpuid helper */
+        u32 max_leaf = 0, ebx_0 = 0, ecx_0 = 0, edx_0 = 0;
+        cpu::cpuid(max_leaf, ebx_0, ecx_0, edx_0, cpu::leaf::basic_info);
+
         auto try_keys = [&]() noexcept -> bool {
             /* Store forwarding */
             vmcall_info.structsize = static_cast<u32>(sizeof(vmcall_info));
@@ -11916,14 +11920,19 @@ public:
             return (((vmcall_result >> 24) & 0xFF) == 0xCE); /* the VM returns status in bits 24–31; Cheat Engine uses 0xCE here */
         };
 
+        /*
+         * Pure ICEBP RIP Advancement Check (Clean DR State)
+         * Verifies if the hypervisor correctly increments guest RIP when emulating ICEBP
+         */
         auto try_icebp = [&]() noexcept -> bool {
-            bool detected = false;
             CONTEXT ctx = {};
             ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
 
-            if (!NT_SUCCESS(nt_get_context_thread(current_thread, &ctx))) return false;
+            if (!NT_SUCCESS(nt_get_context_thread(current_thread, &ctx))) {
+                return false;
+            }
 
-            /* Save old stuff */
+            /* Save old debug register configuration */
             const auto old_dr0 = ctx.Dr0;
             const auto old_dr1 = ctx.Dr1;
             const auto old_dr2 = ctx.Dr2;
@@ -11931,40 +11940,63 @@ public:
             const auto old_dr6 = ctx.Dr6;
             const auto old_dr7 = ctx.Dr7;
 
-            ctx.Dr0 = reinterpret_cast<u64>(dbvm_icebp_stub);
-            ctx.Dr1 = reinterpret_cast<u64>(dbvm_icebp_stub);
-            ctx.Dr2 = reinterpret_cast<u64>(dbvm_icebp_stub);
-            ctx.Dr3 = reinterpret_cast<u64>(dbvm_icebp_stub);
-            ctx.Dr7 = 0x55; /* local exact execute breakpoints for Dr0-Dr3 */
+            /* Clean all debug registers to ensure we test pure trap-class behavior */
+            ctx.Dr0 = 0;
+            ctx.Dr1 = 0;
+            ctx.Dr2 = 0;
+            ctx.Dr3 = 0;
+            ctx.Dr6 = 0;
+            ctx.Dr7 = 0;
 
-            if (!NT_SUCCESS(nt_set_context_thread(current_thread, &ctx))) return false;
+            if (!NT_SUCCESS(nt_set_context_thread(current_thread, &ctx))) {
+                return false;
+            }
+
+            bool rip_failed = false;
+            bool step_triggered = false;
+            const u64 stub_base = reinterpret_cast<u64>(dbvm_icebp_stub);
+
+            /* Local helper struct to evaluate exception parameters across compilers */
+            struct icebp_handler {
+                static LONG execute(
+                    const EXCEPTION_POINTERS* ep,
+                    DWORD exception_code,
+                    bool* rip_failed,
+                    bool* step_triggered,
+                    u64 stub_base_addr
+                ) {
+                    if (exception_code == EXCEPTION_SINGLE_STEP && ep && ep->ContextRecord) {
+                        *step_triggered = true;
+                        const u64 exception_rip = ep->ContextRecord->Rip;
+
+                        /*
+                         * Under DBVM, the exception context contains a RIP pointing directly
+                         * to the ICEBP instruction (stub_base_addr) instead of (stub_base_addr + 1)
+                         */
+                        if (exception_rip == stub_base_addr) {
+                            *rip_failed = true;
+                            /* Manually advance RIP past ICEBP (0xF1) to RET (0xC3) to avoid an infinite loop */
+                            ep->ContextRecord->Rip = stub_base_addr + 1;
+                        }
+                    }
+                    return EXCEPTION_EXECUTE_HANDLER;
+                }
+            };
 
             __try {
                 memory::execute(dbvm_icebp_stub);
-
-                /*
-                 * If the code makes it here without aborting to the __except block,
-                 * the exception was silently swallowed by the hypervisor.
-                 */
-                detected = true;
-                debug("DBVM: INT 1 exception was not correctly handled");
             }
-            __except (GetExceptionCode() == EXCEPTION_SINGLE_STEP ?
-                (
-                    /* Check if they mess up Dr6 and Dr7 */
-                    detected = ((GetExceptionInformation()->ContextRecord->Dr7 & 0xFF) != 0x55 || GetExceptionInformation()->ContextRecord->Dr6 == 0),
-                    EXCEPTION_EXECUTE_HANDLER
-                ) : EXCEPTION_EXECUTE_HANDLER) {
-                if (_exception_code() != EXCEPTION_SINGLE_STEP) {
-                    detected = true;
-                    debug("DBVM: ICEBP exception didn't trigger #DB");
-                }
-                else if (detected) {
-                    debug("DBVM: hardware debug registers were not correctly restored");
-                }
+            __except (icebp_handler::execute(
+                GetExceptionInformation(),
+                GetExceptionCode(),
+                &rip_failed,
+                &step_triggered,
+                stub_base
+            )) {
+                /* Handled */
             }
 
-            /* Restore old stuff */
+            /* Restore original debug registers */
             ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
             ctx.Dr0 = old_dr0;
             ctx.Dr1 = old_dr1;
@@ -11974,16 +12006,27 @@ public:
             ctx.Dr7 = old_dr7;
             nt_set_context_thread(current_thread, &ctx);
 
-            return detected;
+            if (!step_triggered) {
+                debug("DBVM: ICEBP exception didn't trigger #DB");
+                return true; /* Hypervisor swallowed the trap entirely, but should not happen */
+            }
+
+            if (rip_failed) {
+                debug("DBVM: ICEBP failed to advance guest RIP");
+                return true;
+            }
+
+            return false;
         };
 
-        const bool found_vmcall = try_keys();
+        const bool found_keys = try_keys();
         const bool found_icebp = try_icebp();
 
-        if (found_vmcall) return core::add(brand_enum::DBVM);
-        if (found_icebp)  return true;
+        if (found_keys) {
+            return core::add(brand_enum::DBVM);
+        }
 
-        return false;
+        return found_icebp;
     #endif
     }
 
