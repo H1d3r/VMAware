@@ -6513,7 +6513,6 @@ public:
             }
         }
 
-        debug("TIMER: CPU supports SERIALIZE: ", serialize_available);
     #if (x86_64) /* WHP stuff not available for x86_32 */
         using whv_create_partition_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE*);
         using whv_set_partition_property_fn = HRESULT(__stdcall*)(WHV_PARTITION_HANDLE, WHV_PARTITION_PROPERTY_CODE, const void*, UINT32);
@@ -6603,43 +6602,60 @@ public:
             }
 
             bool partition_ready = false;
-            if (whv_create_partition && SUCCEEDED(whv_create_partition(&p))) {
+            HRESULT hr = S_OK;
 
+            if (!whv_create_partition || FAILED(hr = whv_create_partition(&p))) {
+                debug("TIMER: WHvCreatePartition failed with 0x%08X", hr);
+            }
+            else {
                 UINT32 cpu_count = 1;
-                HRESULT hr = S_OK;
                 if (whv_set_partition_property) {
                     hr = whv_set_partition_property(p, WHvPartitionPropertyCodeProcessorCount, &cpu_count, sizeof(cpu_count));
+                    if (FAILED(hr)) {
+                        debug("TIMER: WHvSetPartitionProperty failed with 0x%08X", hr);
+                    }
                 }
 
-                if (SUCCEEDED(hr) && whv_setup_partition && SUCCEEDED(whv_setup_partition(p))) {
-                    if (whv_create_virtual_processor && SUCCEEDED(whv_create_virtual_processor(p, 0, 0))) {
-
-                        mem = nullptr;
-                        SIZE_T region_size = 0x2000; 
-                        NTSTATUS status = static_cast<NTSTATUS>(0xC0000001L);
-
-                        if (nt_allocate_virtual_memory) {
-                            status = nt_allocate_virtual_memory(
-                                current_process,
-                                &mem,
-                                0,
-                                &region_size,
-                                MEM_RESERVE | MEM_COMMIT,
-                                PAGE_READWRITE
-                            );
+                if (SUCCEEDED(hr) && whv_setup_partition) {
+                    hr = whv_setup_partition(p);
+                    if (FAILED(hr)) {
+                        debug("TIMER: WHvSetupPartition failed with 0x%08X", hr);
+                    }
+                    else if (whv_create_virtual_processor) {
+                        hr = whv_create_virtual_processor(p, 0, 0);
+                        if (FAILED(hr)) {
+                            debug("TIMER: WHvCreateVirtualProcessor failed with 0x%08X", hr);
                         }
+                        else {
+                            mem = nullptr;
+                            SIZE_T region_size = 0x2000;
+                            NTSTATUS status = static_cast<NTSTATUS>(0xC0000001L);
 
-                        if (NT_SUCCESS(status)) {
-                            constexpr auto flags = static_cast<WHV_MAP_GPA_RANGE_FLAGS>(7); /* Flags 7 = Read | Write | Execute) */
-                            if (whv_map_gpa_range && SUCCEEDED(whv_map_gpa_range(p, mem, 0, 0x2000, flags))) {
-                                partition_ready = true;
+                            if (nt_allocate_virtual_memory) {
+                                status = nt_allocate_virtual_memory(
+                                    current_process, 
+                                    &mem,
+                                    0,
+                                    &region_size,
+                                    MEM_RESERVE | MEM_COMMIT,
+                                    PAGE_EXECUTE_READWRITE 
+                                );
+                            }
+
+                            if (NT_SUCCESS(status)) {
+                                constexpr auto flags = static_cast<WHV_MAP_GPA_RANGE_FLAGS>(7);
+                                if (whv_map_gpa_range) {
+                                    hr = whv_map_gpa_range(p, mem, 0, 0x2000, flags);
+                                    if (SUCCEEDED(hr)) {
+                                        partition_ready = true;
+                                    }
+                                    else {
+                                        debug("TIMER: WHvMapGpaRange failed with 0x%08X", hr);
+                                    }
+                                }
                             }
                             else {
-                                if (nt_free_virtual_memory) {
-                                    SIZE_T free_size = 0;
-                                    nt_free_virtual_memory(current_process, &mem, &free_size, MEM_RELEASE);
-                                }
-                                mem = nullptr;
+                                debug("TIMER: NtAllocateVirtualMemory failed with 0x%08X", status);
                             }
                         }
                     }
