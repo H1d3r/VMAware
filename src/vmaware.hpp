@@ -4843,7 +4843,7 @@ public:
 
                 if (get_tcg_log_ex) {
                     hr = get_tcg_log_ex(0, nullptr, &log_size);
-                    if ((hr == 0 || hr == 0x80284005) && log_size > 0) {
+                    if ((hr == 0 || hr == static_cast<decltype(hr)>(0x80284005)) && log_size > 0) {
                         log_buffer = new u8[log_size];
                         hr = get_tcg_log_ex(0, log_buffer, &log_size);
                     }
@@ -4855,7 +4855,7 @@ public:
                     hr = context_create(&params, &context);
                     if (hr == 0) {
                         hr = get_tcg_log(context, nullptr, &log_size);
-                        if ((hr == 0 || hr == 0x80284005) && log_size > 0) {
+                        if ((hr == 0 || hr == static_cast<decltype(hr)>(0x80284005)) && log_size > 0) {
                             log_buffer = new u8[log_size];
                             hr = get_tcg_log(context, log_buffer, &log_size);
                         }
@@ -5930,44 +5930,64 @@ public:
         auto is_smt_active = []() noexcept -> bool {
         #if (WINDOWS)
             DWORD len = 0;
+
             if (GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &len) ||
                 GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
                 return false;
             }
 
-            std::vector<unsigned char> buf(static_cast<size_t>(len));
-            if (!GetLogicalProcessorInformationEx(
-                RelationProcessorCore,
-                reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data()),
-                &len)) {
-                return false;
+            unsigned char* buf = nullptr;
+            bool result = false;
+
+            /* To support CPU hot-plugging */
+            while (true) {
+                buf = static_cast<unsigned char*>(_aligned_malloc(len, alignof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)));
+                if (!buf) {
+                    return false;
+                }
+
+                if (GetLogicalProcessorInformationEx(
+                    RelationProcessorCore,
+                    reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf),
+                    &len)) {
+                    break;
+                }
+
+                _aligned_free(buf);
+                buf = nullptr;
+
+                if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+                    return false;
+                }
             }
 
             size_t offset = 0;
-            while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) <= static_cast<size_t>(len)) {
-                auto* rec = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buf.data() + offset);
+            while (offset < len) {
+                auto* rec = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buf + offset);
+
+                if (rec->Size == 0 || offset + rec->Size > len) {
+                    break;
+                }
 
                 if (rec->Relationship == RelationProcessorCore) {
                     const PROCESSOR_RELATIONSHIP& pr = rec->Processor;
                     unsigned logicals = 0;
 
                     for (WORD i = 0; i < pr.GroupCount; ++i) {
-                        logicals += util::popcount(static_cast<u64>(pr.GroupMask[i].Mask));
+                        logicals += util::popcount(static_cast<unsigned long long>(pr.GroupMask[i].Mask));
                     }
 
                     if (logicals > 1) {
-                        return true;
+                        result = true;
+                        break;
                     }
                 }
 
-                if (rec->Size == 0) {
-                    break;
-                }
-
-                offset += rec->Size;
+                offset += rec->Size; 
             }
 
-            return false;
+            _aligned_free(buf);
+            return result;
 
         #elif (APPLE)
 
@@ -5994,7 +6014,7 @@ public:
                 while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
                     s.pop_back();
                 }
-                };
+            };
 
             {
                 std::ifstream f("/sys/devices/system/cpu/smt/control");
@@ -6200,8 +6220,8 @@ public:
         const u32 actual = memo::thread_count::fetch();
         const bool model_expects_smt = matched->smt;
 
-        if (model_expects_smt) {
-            if (!is_smt_active()) {
+        if (!model_expects_smt) {
+            if (is_smt_active()) {
                 debug("THREAD_MISMATCH: CPU normally runs under SMT, but SMT was fully disabled on BIOS");
                 return false;
             }
@@ -13518,7 +13538,7 @@ public:
         if (!nt_allocate_virtual_memory || !nt_free_virtual_memory || !nt_get_context_thread ||
             !nt_set_context_thread || !rtl_add_vectored_exception_handler || !rtl_remove_vectored_exception_handler ||
             !nt_protect_virtual_memory || !nt_query_system_information || !nt_create_thread_ex ||
-            !nt_wait_for_single_object || !nt_close || !nt_set_information_thread || 
+            !nt_wait_for_single_object || !nt_close || !nt_set_information_thread ||
             !nt_flush_instruction_cache) {
             return false;
         }
@@ -13621,32 +13641,6 @@ public:
             hook_detected = true;
         }
         else {
-            /* Now try on all cores, total hardware processors */
-            struct SYSTEM_BASIC_INFORMATION_LOCAL {
-                ULONG Reserved;
-                ULONG TimerResolution;
-                ULONG PageSize;
-                ULONG NumberOfPhysicalPages;
-                ULONG LowestPhysicalPageNumber;
-                ULONG HighestPhysicalPageNumber;
-                ULONG AllocationGranularity;
-                ULONG_PTR MinimumUserModeAddress;
-                ULONG_PTR MaximumUserModeAddress;
-                ULONG_PTR ActiveProcessorsAffinityMask;
-                CCHAR NumberOfProcessors;
-            };
-
-            SYSTEM_BASIC_INFORMATION_LOCAL sys_info{};
-            ULONG ret_len = 0;
-            ULONG num_processors = 1;
-
-            /* 0 = SystemBasicInformation */
-            status = nt_query_system_information(0, &sys_info, sizeof(sys_info), &ret_len);
-            if (status < 0) {
-                return false;
-            }
-            num_processors = sys_info.NumberOfProcessors;
-
             volatile LONG did_anyone_throw = 0;
 
             GROUP_AFFINITY active_group_aff{};
@@ -13654,7 +13648,7 @@ public:
                 for (ULONG i = 0; i < 64; ++i) {
                     if (active_group_aff.Mask & ((ULONG_PTR)1 << i)) {
                         GROUP_AFFINITY target_aff = active_group_aff;
-                        target_aff.Mask = (ULONG_PTR)1 << i; 
+                        target_aff.Mask = (ULONG_PTR)1 << i;
 
                         if (SetThreadGroupAffinity(current_thread, &target_aff, nullptr)) {
                             __try {
@@ -13667,6 +13661,10 @@ public:
                     }
                 }
                 SetThreadGroupAffinity(current_thread, &original_affinity, nullptr);
+            }
+
+            if (did_anyone_throw != 0) {
+                hook_detected = true;
             }
         }
 
@@ -16370,7 +16368,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
         #endif
 
         {VM::TIMER, {100, VM::timer}},
-        {VM::THREAD_MISMATCH, {50, VM::thread_mismatch}},
+        {VM::THREAD_MISMATCH, {45, VM::thread_mismatch}},
         {VM::VMID, {100, VM::vmid}},
         {VM::CPU_BRAND, {95, VM::cpu_brand}},
         {VM::CPUID_SIGNATURE, {95, VM::cpuid_signature}},
