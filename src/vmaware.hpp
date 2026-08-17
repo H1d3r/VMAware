@@ -1166,10 +1166,7 @@ public:
              *
              * left-trim only to handle stupid whitespaces before the brand string in ARM CPUs (Virtual CPUs)
              */
-            const char* start_ptr = buffer;
-            while (*start_ptr && std::isspace(static_cast<u8>(*start_ptr))) {
-                ++start_ptr;
-            }
+            const char* start_ptr = util::string::ltrim(buffer);
 
             memo::cpu_brand::store(start_ptr);
             debug("CPU: ", start_ptr);
@@ -1280,7 +1277,7 @@ public:
 
             if (cpu::is_intel()) {
                 /* Ultra */
-                if (strstr(brand, "Ultra") &&
+                if (util::string::find(brand, "Ultra") &&
                     strpbrk(brand, "0123456789")) {
                     result.found = true;
                     result.string = brand;
@@ -1308,7 +1305,7 @@ public:
                 }
             }
             else if (cpu::is_amd()) {
-                if (strstr(brand, "AMD Ryzen")) {
+                if (util::string::find(brand, "AMD Ryzen")) {
                     result.found = true;
                     result.is_ryzen = true;
                     result.string = brand;
@@ -4201,6 +4198,133 @@ public:
 
     /* Miscellaneous functionalities */
     struct util {
+        struct string {
+            /* Converts a single character to lowercase */
+            static VMAWARE_FORCE_INLINE char to_lower(char c) noexcept {
+                return (c >= 'A' && c <= 'Z') ? static_cast<char>(c | 0x20) : c;
+            }
+
+            /* Converts a single character to uppercase */
+            static VMAWARE_FORCE_INLINE char to_upper(char c) noexcept {
+                return (c >= 'a' && c <= 'z') ? static_cast<char>(c & 0xDF) : c;
+            }
+
+            /* Checks if a string starts with a specific prefix (case-sensitive) */
+            static VMAWARE_FORCE_INLINE bool starts_with(const char* str, const char* prefix) noexcept {
+                if (!str || !prefix) return false;
+                while (*prefix) {
+                    if (*str++ != *prefix++) return false;
+                }
+                return true;
+            }
+
+            /* Checks if a string starts with a specific prefix (case-insensitive) */
+            static VMAWARE_FORCE_INLINE bool starts_with_ci(const char* str, const char* prefix) noexcept {
+                if (!str || !prefix) return false;
+                while (*prefix) {
+                    if (to_lower(*str++) != to_lower(*prefix++)) return false;
+                }
+                return true;
+            }
+
+            /* Finds a substring inside a null-terminated string (case-sensitive) */
+            static const char* find(const char* haystack, const char* needle) noexcept {
+                if (!haystack || !needle) return nullptr;
+                if (!*needle) return haystack;
+                for (; *haystack; ++haystack) {
+                    if (*haystack == *needle) {
+                        const char* h = haystack;
+                        const char* n = needle;
+                        while (*h && *n && *h == *n) {
+                            h++;
+                            n++;
+                        }
+                        if (!*n) return haystack;
+                    }
+                }
+                return nullptr;
+            }
+
+            /* Finds a substring inside a null-terminated string (case-insensitive) */
+            static const char* find_ci(const char* haystack, const char* needle) noexcept {
+                if (!haystack || !needle) return nullptr;
+                if (!*needle) return haystack;
+                const char n0_lower = to_lower(*needle);
+                for (; *haystack; ++haystack) {
+                    if (to_lower(*haystack) == n0_lower) {
+                        const char* h = haystack;
+                        const char* n = needle;
+                        while (*h && *n && to_lower(*h) == to_lower(*n)) {
+                            h++;
+                            n++;
+                        }
+                        if (!*n) return haystack;
+                    }
+                }
+                return nullptr;
+            }
+
+            /* Checks if a std::string contains a substring (case-sensitive) */
+            static VMAWARE_FORCE_INLINE bool contains(const std::string& base_str, const char* keyword) noexcept {
+                return base_str.find(keyword) != std::string::npos;
+            }
+
+            /* Checks if a std::string contains a substring (case-insensitive) */
+            static VMAWARE_FORCE_INLINE bool contains_ci(const std::string& base_str, const char* keyword) noexcept {
+                return find_ci(base_str.c_str(), keyword) != nullptr;
+            }
+
+            /* Compares two null-terminated strings for equality (case-insensitive) */
+            static bool equals_ci(const char* s1, const char* s2) noexcept {
+                if (!s1 || !s2) return s1 == s2;
+                while (*s1 && *s2) {
+                    if (to_lower(*s1) != to_lower(*s2)) return false;
+                    s1++;
+                    s2++;
+                }
+                return *s1 == *s2;
+            }
+
+            /* Converts a std::string to lowercase in place */
+            static VMAWARE_FORCE_INLINE void to_lower_inplace(std::string& str) noexcept {
+                const size_t len = str.length();
+                for (size_t i = 0; i < len; ++i) {
+                    str[i] = to_lower(str[i]);
+                }
+            }
+
+            /* Trims leading and trailing whitespaces from a std::string in place */
+            static void trim_inplace(std::string& s) noexcept {
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+                    s.erase(s.begin());
+                }
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+                    s.pop_back();
+                }
+            }
+
+            /* Trims leading whitespaces from a null-terminated string pointer */
+            static const char* ltrim(const char* str) noexcept {
+                if (!str) return nullptr;
+                while (*str && std::isspace(static_cast<unsigned char>(*str))) {
+                    str++;
+                }
+                return str;
+            }
+
+            /* Checks if a std::string consists only of numerical digits */
+            static bool is_numeric(const std::string& s) noexcept {
+                if (s.empty()) return false;
+                const size_t len = s.length();
+                for (size_t i = 0; i < len; ++i) {
+                    if (!std::isdigit(static_cast<unsigned char>(s[i]))) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        };
+
         [[nodiscard]] static constexpr bool is_unsupported(const VM::enum_flags flag) noexcept {
             return (flag >= VM::HYPERVISOR_BIT && flag <= VM::KGT_SIGNATURE) ? false :
             #if (LINUX)
@@ -4333,7 +4457,7 @@ public:
 
         [[nodiscard]] static bool find(const std::string& base_str, const char* keyword) noexcept {
             VMAWARE_ASSUME(keyword != nullptr);
-            return (base_str.find(keyword) != std::string::npos);
+            return string::contains(base_str, keyword);
         };
 
         [[nodiscard]] static i32 popcount(u64 v) noexcept {
@@ -4535,7 +4659,7 @@ public:
                         continue;
                     }
             #endif
-                if (!std::all_of(filename.begin(), filename.end(), [](u8 c) { return std::isdigit(c); })) {
+                if (!util::string::is_numeric(filename)) 
                     continue;
                 }
 
@@ -4589,7 +4713,7 @@ public:
             static const bool cached = []() -> bool {
             #if (WINDOWS)
                 const char* brand = cpu::get_brand();
-                if (brand && strstr(brand, "Virtual CPU")) {
+                if (brand && util::string::find(brand, "Virtual CPU")) {
                     return true;
                 }
 
@@ -5123,11 +5247,12 @@ public:
             auto is_placeholder = [](const char* s) noexcept -> bool {
                 if (!s || !*s) return true;
 
-                return _stricmp(s, "System Product Name") == 0 ||
-                    _stricmp(s, "To Be Filled By O.E.M.") == 0 ||
-                    _stricmp(s, "Default string") == 0 ||
-                    _stricmp(s, "Not Specified") == 0 ||
-                    _stricmp(s, "None") == 0;
+                return 
+                    util::string::equals_ci(s, "System Product Name") ||
+                    util::string::equals_ci(s, "To Be Filled By O.E.M.") ||
+                    util::string::equals_ci(s, "Default string") ||
+                    util::string::equals_ci(s, "Not Specified") ||
+                    util::string::equals_ci(s, "None");
             };
 
             auto read_reg_utf8 = [](const wchar_t* value_name, char* out, size_t out_size) noexcept -> bool {
@@ -5742,7 +5867,7 @@ public:
              return false;
          }
 
-         if (strncmp(brand, "QEMU Virtual CPU version", 24) == 0) {
+         if (util::string::starts_with(brand, "QEMU Virtual CPU version")) {
              return core::add(brand_enum::QEMU);
          }
 
@@ -5761,15 +5886,17 @@ public:
          };
 
          for (const auto& c : checks) {
-             if (strstr(brand, c.text)) {
+             if (util::string::find(brand, c.text)) {
                  debug("CPU_BRAND: match = ", c.text);
                  return core::add(c.brand);
              }
          }
 
-         if (strstr(brand, "monitor") ||
-             strstr(brand, "hypervisor") ||
-             strstr(brand, "hvisor"))
+         if (
+             util::string::find(brand, "monitor")    ||
+             util::string::find(brand, "hypervisor") ||
+             util::string::find(brand, "hvisor")
+            )
          {
              debug("CPU_BRAND: generic virtualization match");
              return true;
@@ -6012,14 +6139,7 @@ public:
 
         #else
 
-            auto trim = [](std::string& s) {
-                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
-                    s.erase(s.begin());
-                }
-                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
-                    s.pop_back();
-                }
-            };
+            util::string::trim_inplace(s);
 
             {
                 std::ifstream f("/sys/devices/system/cpu/smt/control");
@@ -7790,18 +7910,10 @@ public:
                 continue;
             }
 
-            char* data = &content[0];
-            const size_t len = content.size();
-
-            for (size_t i = 0; i < len; ++i) {
-                if (data[i] >= 'A' && data[i] <= 'Z') {
-                    data[i] |= 0x20;
-                }
-            }
+            util::string::to_lower_inplace(content);
 
             for (const auto& vm_string : vm_table) {
-                if (content.find(vm_string.first) != std::string::npos) {
-
+                if (util::string::contains(content, vm_string.first))
                     debug("DMI_SCAN: content = ", content);
 
                     if (vm_string.second == brand_enum::AWS_NITRO) {
@@ -8566,26 +8678,7 @@ public:
                         bool is_acer_aspire = false;
 
                         if (util::get_manufacturer_model(&man, &mod)) {
-                            auto str_contains = [](const char* haystack, const char* needle) noexcept -> bool {
-                                if (!haystack || !needle) return false;
-                                const size_t h_len = strlen(haystack);
-                                const size_t n_len = strlen(needle);
-                                if (n_len > h_len) return false;
-                                for (size_t i = 0; i <= h_len - n_len; ++i) {
-                                    size_t j = 0;
-                                    for (; j < n_len; ++j) {
-                                        char hc = haystack[i + j];
-                                        char nc = needle[j];
-                                        if (hc >= 'A' && hc <= 'Z') hc += 32;
-                                        if (nc >= 'A' && nc <= 'Z') nc += 32;
-                                        if (hc != nc) break;
-                                    }
-                                    if (j == n_len) return true;
-                                }
-                                return false;
-                                };
-
-                            if (str_contains(man, "Acer") && str_contains(mod, "Aspire")) {
+                            if (util::string::find_ci(man, "Acer") && util::string::find_ci(mod, "Aspire")) {
                                 is_acer_aspire = true;
                             }
                         }
@@ -9524,8 +9617,8 @@ public:
                 return false;
             }
 
-            if ((str[0] & 0xDF) != 'Q') return false;
-            if ((str[1] & 0xDF) != 'M') return false;
+            if (util::string::to_upper(str[0]) != 'Q') return false;
+            if (util::string::to_upper(str[1]) != 'M') return false;
 
             return str[2] == '0' && str[3] == '0' && str[4] == '0' && str[5] == '0';
         };
@@ -11861,6 +11954,7 @@ public:
     #endif
     }
 
+
     /**
      * @brief Check if Dark Byte's VM is present
      * @category Windows
@@ -11901,10 +11995,6 @@ public:
         if (!nt_get_context_thread || !nt_set_context_thread) {
             return false;
         }
-
-        /* Verify basic CPUID information using the cross-platform cpu::cpuid helper */
-        u32 max_leaf = 0, ebx_0 = 0, ecx_0 = 0, edx_0 = 0;
-        cpu::cpuid(max_leaf, ebx_0, ecx_0, edx_0, cpu::leaf::basic_info);
 
         auto try_keys = [&]() noexcept -> bool {
             /* Store forwarding */
