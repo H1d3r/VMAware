@@ -5287,7 +5287,7 @@ public:
 
                 delete[] log_buffer;
 
-                if (parse_error && !found_hyperv) {
+                if (parse_error) {
                     return true;
                 }
 
