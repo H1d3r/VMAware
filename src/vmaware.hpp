@@ -8959,20 +8959,22 @@ public:
                     }
 
                     /* HPET dynamic check logic (VEND / PRD threshold) with a constant-agnostic structural _STA check */
-                    if (find_pattern("HPET", 4)) {
-                        /* Search the buffer for: LEqualOp (0x93), Local1 (0x61), ZeroOp (0x00) */
-                        /* followed closely by LGreaterOp (0x94), Local1 (0x61) */
-                        const u8* ptr = buffer;
-                        const size_t end_offset = buffer_len >= 12 ? buffer_len - 12 : 0;
+                    /* Search for the exact QEMU HPET period limit: LOr(LEqual(Local1, Zero), LGreater(Local1, 0x05F5E100)) */
+                    static const u8 qemu_hpet_signature[] = {
+                        0x91, 0x93, 0x61, 0x00, // LOr, LEqual, Local1, Zero
+                        0x94, 0x61,             // LGreater, Local1
+                        0x0C, 0x00, 0xE1, 0xF5, 0x05 // DWordPrefix, 0x05F5E100
+                    };
 
-                        for (size_t i = 0; i < end_offset; ++i) {
-                            if (ptr[i] == 0x93 && ptr[i + 1] == 0x61 && ptr[i + 2] == 0x00) {
-                                /* Scan a tight window ahead to find the companion LGreater(Local1, <any integer>) */
-                                for (size_t j = 3; j < 12 && i + j + 1 < buffer_len; ++j) {
-                                    if (ptr[i + j] == 0x94 && ptr[i + j + 1] == 0x61) {
-                                        debug("FIRMWARE: Detected QEMU HPET structural register-validation loop");
-                                        return core::add(brand_enum::QEMU);
-                                    }
+                    if (find_pattern("HPET", 4)) {
+                        const u8* ptr = buffer;
+                        if (buffer_len >= sizeof(qemu_hpet_signature)) {
+                            const size_t end_offset = buffer_len - sizeof(qemu_hpet_signature);
+
+                            for (size_t i = 0; i <= end_offset; ++i) {
+                                if (memcmp(&ptr[i], qemu_hpet_signature, sizeof(qemu_hpet_signature)) == 0) {
+                                    debug("FIRMWARE: Detected QEMU HPET period-validation signature");
+                                    return core::add(brand_enum::QEMU);
                                 }
                             }
                         }
