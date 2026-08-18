@@ -13650,32 +13650,26 @@ public:
      */
     [[nodiscard]] static bool clock() {
     #if (ARM)
-		return false; /* ARM systems do not have the classic x86 timers */
+        return false; /* ARM systems do not have the classic x86 timers */
     #else   
-		if (util::is_x86_process_on_arm()) {
+        if (util::is_x86_process_on_arm()) {
             return false;
         }
 
-        /* Microsoft Surface and Xiaomi models typically do not have PIT, some devices might have it but not expose it due to firmware bugs (i.e. Lenovo 83AG) */
         const char* manufacturer = nullptr;
         const char* model = nullptr;
 
         if (util::get_manufacturer_model(&manufacturer, &model)) {
             const bool is_surface = string::contains_ci(model, "Surface");
             const bool is_microsoft = string::contains_ci(manufacturer, "Microsoft");
-            const bool is_xiaomi = string::contains_ci(manufacturer, "XIAOMI"); /* REDMI Books do not have PIT */
+            const bool is_xiaomi = string::contains_ci(manufacturer, "XIAOMI");
 
             if ((is_surface && is_microsoft) || is_xiaomi) {
                 debug("Surface or Xiaomi device found, aborting PIT/AT check");
                 return false;
             }
         }
-        
-        /*
-         * The RTC (ACPI/CMOS RTC) timer can't be always detected via SetupAPI, it needs AML decode of the DSDT firmware table
-         * The HPET (PNP0103) timer presence check was removed, more info at: https://github.com/NotRequiem/VMAware/pull/616
-         * Here, we check for the PIT/AT timer (PC-class System Timer)
-         */
+
         const HDEVINFO devs = SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_PRESENT | DIGCF_ALLCLASSES);
         if (devs == INVALID_HANDLE_VALUE) {
             return false;
@@ -13702,9 +13696,9 @@ public:
                 continue;
             }
 
-            if (needed > buffer_size) {
-                BYTE* new_buffer = static_cast<BYTE*>(
-                    realloc(buffer, needed + sizeof(wchar_t)));
+            if (needed + sizeof(wchar_t) > buffer_size) {
+                DWORD new_size = needed + sizeof(wchar_t);
+                BYTE* new_buffer = static_cast<BYTE*>(realloc(buffer, new_size));
 
                 if (!new_buffer) {
                     free(buffer);
@@ -13713,7 +13707,7 @@ public:
                 }
 
                 buffer = new_buffer;
-                buffer_size = needed + sizeof(wchar_t);
+                buffer_size = new_size;
             }
 
             if (!SetupDiGetDeviceRegistryPropertyW(
@@ -13725,9 +13719,13 @@ public:
             if (type != REG_MULTI_SZ) {
                 continue;
             }
+
             reinterpret_cast<wchar_t*>(buffer)[needed / sizeof(wchar_t)] = L'\0';
 
-            for (const wchar_t* s = reinterpret_cast<const wchar_t*>(buffer); *s; s += wcslen(s) + 1) {
+            const wchar_t* const buffer_start = reinterpret_cast<const wchar_t*>(buffer);
+            const wchar_t* const buffer_end = buffer_start + (needed / sizeof(wchar_t));
+
+            for (const wchar_t* s = buffer_start; s < buffer_end && *s; s += wcslen(s) + 1) {
                 if (_wcsicmp(s, L"ACPI\\PNP0100") == 0 ||
                     _wcsicmp(s, L"PNP0100") == 0) {
                     found = true;
@@ -13735,7 +13733,7 @@ public:
                 }
             }
 
-            if (found) { 
+            if (found) {
                 break;
             }
         }
