@@ -4639,27 +4639,27 @@ public:
         #if (LINUX)
             VMAWARE_ASSUME(executable != nullptr);
             #if (VMA_CPP >= 17)
-                for (const auto& entry : std::filesystem::directory_iterator("/proc")) {
-                    if (!entry.is_directory()) {
-                        continue;
-                    }
-
-                    const std::string filename = entry.path().filename().string();
-            #else
-                std::unique_ptr<DIR, decltype(&closedir)> dir(opendir("/proc"), closedir);
-                if (!dir) {
-                    debug("util::is_proc_running: ", "failed to open /proc directory");
-                    return false;
+            for (const auto& entry : std::filesystem::directory_iterator("/proc")) {
+                if (!entry.is_directory()) {
+                    continue;
                 }
 
-                struct dirent* entry;
-                while ((entry = readdir(dir.get())) != nullptr) {
-                    std::string filename(entry->d_name);
-                    if (filename == "." || filename == "..") {
-                        continue;
-                    }
+                const std::string filename = entry.path().filename().string();
+            #else
+            std::unique_ptr<DIR, decltype(&closedir)> dir(opendir("/proc"), closedir);
+            if (!dir) {
+                debug("util::is_proc_running: ", "failed to open /proc directory");
+                return false;
+            }
+
+            struct dirent* entry;
+            while ((entry = readdir(dir.get())) != nullptr) {
+                std::string filename(entry->d_name);
+                if (filename == "." || filename == "..") {
+                    continue;
+                }
             #endif
-                if (!util::string::is_numeric(filename)) 
+                if (!util::string::is_numeric(filename)) {
                     continue;
                 }
 
@@ -7913,14 +7913,15 @@ public:
             util::string::to_lower_inplace(content);
 
             for (const auto& vm_string : vm_table) {
-                if (util::string::contains(content, vm_string.first))
+                if (util::string::contains(content, vm_string.first)) {
                     debug("DMI_SCAN: content = ", content);
 
                     if (vm_string.second == brand_enum::AWS_NITRO) {
                         if (smbios_vm_bit()) {
                             return core::add(brand_enum::AWS_NITRO);
                         }
-                    } else {
+                    }
+                    else {
                         return core::add(vm_string.second);
                     }
                 }
