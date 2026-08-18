@@ -6139,14 +6139,12 @@ public:
 
         #else
 
-            util::string::trim_inplace(s);
-
             {
                 std::ifstream f("/sys/devices/system/cpu/smt/control");
                 if (f) {
                     std::string s;
                     if (std::getline(f, s)) {
-                        trim(s);
+                        util::string::trim_inplace(s);
 
                         if (s == "on") {
                             return true;
@@ -6164,7 +6162,7 @@ public:
                 if (f) {
                     std::string s;
                     if (std::getline(f, s)) {
-                        trim(s);
+                        util::string::trim_inplace(s);
 
                         if (s == "1") {
                             return true;
@@ -6182,7 +6180,7 @@ public:
                 if (f) {
                     std::string s;
                     if (std::getline(f, s)) {
-                        trim(s);
+                        util::string::trim_inplace(s);
 
                         for (char ch : s) {
                             if (ch == ',' || ch == '-') {
@@ -6213,8 +6211,8 @@ public:
                         std::string key = line.substr(0, pos);
                         std::string val = line.substr(pos + 1);
 
-                        trim(key);
-                        trim(val);
+                        util::string::trim_inplace(key);
+                        util::string::trim_inplace(val);
 
                         if (key == "siblings") {
                             try { siblings = std::stoi(val); }
