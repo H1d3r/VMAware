@@ -16791,7 +16791,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
         #endif
 
         #if (LINUX || WINDOWS)
-            {VM::FIRMWARE, {150, VM::firmware}},
+            {VM::FIRMWARE, {100, VM::firmware}},
             {VM::DEVICES, {95, VM::pci_devices}},
             {VM::SYSTEM_REGISTERS, {50, VM::system_registers}},
             {VM::AZURE, {30, VM::azure}},
