@@ -327,6 +327,12 @@
     #define VMAWARE_CONSTEXPR
 #endif
 
+#if (VMA_CPP >= 20)
+    #define VMAWARE_CONSTEXPR_20 constexpr
+#else
+    #define VMAWARE_CONSTEXPR_20
+#endif
+
 #if (MSVC)
     #define VMAWARE_FORCE_INLINE __forceinline
 #elif (CLANG || GCC)
@@ -1166,7 +1172,7 @@ public:
              *
              * left-trim only to handle stupid whitespaces before the brand string in ARM CPUs (Virtual CPUs)
              */
-            const char* start_ptr = util::string::ltrim(buffer);
+            const char* start_ptr = string::ltrim(buffer);
 
             memo::cpu_brand::store(start_ptr);
             debug("CPU: ", start_ptr);
@@ -1277,7 +1283,7 @@ public:
 
             if (cpu::is_intel()) {
                 /* Ultra */
-                if (util::string::find(brand, "Ultra") &&
+                if (string::find(brand, "Ultra") &&
                     strpbrk(brand, "0123456789")) {
                     result.found = true;
                     result.string = brand;
@@ -1305,7 +1311,7 @@ public:
                 }
             }
             else if (cpu::is_amd()) {
-                if (util::string::find(brand, "AMD Ryzen")) {
+                if (string::find(brand, "AMD Ryzen")) {
                     result.found = true;
                     result.is_ryzen = true;
                     result.string = brand;
@@ -4196,135 +4202,160 @@ public:
     };
 #endif
 
+    /* String utilities */
+    struct string {
+        /* Converts a single character to lowercase */
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR char to_lower(char c) noexcept {
+            return (c >= 'A' && c <= 'Z') ? static_cast<char>(c | 0x20) : c;
+        }
+
+        /* Converts a single character to uppercase */
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR char to_upper(char c) noexcept {
+            return (c >= 'a' && c <= 'z') ? static_cast<char>(c & 0xDF) : c;
+        }
+
+        /* Checks if a string starts with a specific prefix (case-sensitive) */
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR_20 bool starts_with(const char* str, const char* prefix) noexcept {
+            if (!str || !prefix) return false;
+            while (*prefix) {
+                if (*str++ != *prefix++) return false;
+            }
+            return true;
+        }
+
+        /* Finds a substring inside a null-terminated string (case-sensitive) */
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR_20 const char* find(const char* haystack, const char* needle) noexcept {
+            if (!haystack || !needle) return nullptr;
+            if (!*needle) return haystack;
+            for (; *haystack; ++haystack) {
+                if (*haystack == *needle) {
+                    const char* h = haystack;
+                    const char* n = needle;
+                    while (*h && *n && *h == *n) {
+                        h++;
+                        n++;
+                    }
+                    if (!*n) return haystack;
+                }
+            }
+            return nullptr;
+        }
+
+        /* Finds a substring inside a null-terminated string (case-insensitive) */
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR_20 const char* find_ci(const char* haystack, const char* needle) noexcept {
+            if (!haystack || !needle) return nullptr;
+            if (!*needle) return haystack;
+            const char n0_lower = to_lower(*needle);
+            for (; *haystack; ++haystack) {
+                if (to_lower(*haystack) == n0_lower) {
+                    const char* h = haystack;
+                    const char* n = needle;
+                    while (*h && *n && to_lower(*h) == to_lower(*n)) {
+                        h++;
+                        n++;
+                    }
+                    if (!*n) return haystack;
+                }
+            }
+            return nullptr;
+        }
+
+        /* Checks if a std::string contains a substring (case-sensitive) */
+        static VMAWARE_FORCE_INLINE bool contains(const std::string& base_str, const char* keyword) noexcept {
+            return base_str.find(keyword) != std::string::npos;
+        }
+
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR_20 bool contains_ci(const char* haystack, const char* needle) noexcept {
+            if (!haystack || !needle) return false;
+            if (!*needle) return true;
+            const char n0_lower = to_lower(*needle);
+            for (; *haystack; ++haystack) {
+                if (to_lower(*haystack) == n0_lower) {
+                    const char* h = haystack;
+                    const char* n = needle;
+                    while (*h && *n && to_lower(*h) == to_lower(*n)) {
+                        h++;
+                        n++;
+                    }
+                    if (!*n) return true;
+                }
+            }
+            return false;
+        }
+
+        /* Compares two null-terminated strings for equality (case-insensitive) */
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR_20 bool equals_ci(const char* s1, const char* s2) noexcept {
+            if (!s1 || !s2) return s1 == s2;
+            while (*s1 && *s2) {
+                if (to_lower(*s1) != to_lower(*s2)) return false;
+                s1++;
+                s2++;
+            }
+            return *s1 == *s2;
+        }
+
+        /* Converts a std::string to lowercase in place */
+        static VMAWARE_FORCE_INLINE void to_lower_inplace(std::string& str) noexcept {
+            const size_t len = str.length();
+            for (size_t i = 0; i < len; ++i) {
+                str[i] = to_lower(str[i]);
+            }
+        }
+
+        /* Trims leading and trailing whitespaces from a std::string in place */
+        static VMAWARE_FORCE_INLINE void trim_inplace(std::string& s) noexcept {
+            while (!s.empty() && is_space(s.front())) {
+                s.erase(s.begin());
+            }
+            while (!s.empty() && is_space(s.back())) {
+                s.pop_back();
+            }
+        }
+
+        /* Trims leading whitespaces from a null-terminated string pointer */
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR_20 const char* ltrim(const char* str) noexcept {
+            if (!str) return nullptr;
+            while (*str && is_space(*str)) {
+                str++;
+            }
+            return str;
+        }
+
+        /* Checks if a std::string consists only of numerical digits */
+        static VMAWARE_FORCE_INLINE bool is_numeric(const std::string& s) noexcept {
+            if (s.empty()) return false;
+            const size_t len = s.length();
+            for (size_t i = 0; i < len; ++i) {
+                if (!is_digit(s[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /* Helper to check for ASCII spaces (avoids locale overhead) */
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR bool is_space(char c) noexcept {
+            return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+        }
+
+        /* Helper to check for ASCII digits */
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR bool is_digit(char c) noexcept {
+            return c >= '0' && c <= '9';
+        }
+
+        /* Helper to check for hexadecimal characters */
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR bool is_hex(char c) noexcept {
+            return (c >= '0' && c <= '9') || (to_lower(c) >= 'a' && to_lower(c) <= 'f');
+        }
+
+        /* Helper to check if a character is alphanumeric */
+        static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR bool is_alnum(char c) noexcept {
+            return (to_lower(c) >= 'a' && to_lower(c) <= 'z') || is_digit(c);
+        }
+    };
+
     /* Miscellaneous functionalities */
     struct util {
-        struct string {
-            /* Converts a single character to lowercase */
-            static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR char to_lower(char c) noexcept {
-                return (c >= 'A' && c <= 'Z') ? static_cast<char>(c | 0x20) : c;
-            }
-
-            /* Converts a single character to uppercase */
-            static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR char to_upper(char c) noexcept {
-                return (c >= 'a' && c <= 'z') ? static_cast<char>(c & 0xDF) : c;
-            }
-
-            /* Checks if a string starts with a specific prefix (case-sensitive) */
-            static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR bool starts_with(const char* str, const char* prefix) noexcept {
-                if (!str || !prefix) return false;
-                while (*prefix) {
-                    if (*str++ != *prefix++) return false;
-                }
-                return true;
-            }
-
-            /* Checks if a string starts with a specific prefix (case-insensitive) */
-            static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR bool starts_with_ci(const char* str, const char* prefix) noexcept {
-                if (!str || !prefix) return false;
-                while (*prefix) {
-                    if (to_lower(*str++) != to_lower(*prefix++)) return false;
-                }
-                return true;
-            }
-
-            /* Finds a substring inside a null-terminated string (case-sensitive) */
-            static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR const char* find(const char* haystack, const char* needle) noexcept {
-                if (!haystack || !needle) return nullptr;
-                if (!*needle) return haystack;
-                for (; *haystack; ++haystack) {
-                    if (*haystack == *needle) {
-                        const char* h = haystack;
-                        const char* n = needle;
-                        while (*h && *n && *h == *n) {
-                            h++;
-                            n++;
-                        }
-                        if (!*n) return haystack;
-                    }
-                }
-                return nullptr;
-            }
-
-            /* Finds a substring inside a null-terminated string (case-insensitive) */
-            static const char* find_ci(const char* haystack, const char* needle) noexcept {
-                if (!haystack || !needle) return nullptr;
-                if (!*needle) return haystack;
-                const char n0_lower = to_lower(*needle);
-                for (; *haystack; ++haystack) {
-                    if (to_lower(*haystack) == n0_lower) {
-                        const char* h = haystack;
-                        const char* n = needle;
-                        while (*h && *n && to_lower(*h) == to_lower(*n)) {
-                            h++;
-                            n++;
-                        }
-                        if (!*n) return haystack;
-                    }
-                }
-                return nullptr;
-            }
-
-            /* Checks if a std::string contains a substring (case-sensitive) */
-            static VMAWARE_FORCE_INLINE bool contains(const std::string& base_str, const char* keyword) noexcept {
-                return base_str.find(keyword) != std::string::npos;
-            }
-
-            /* Checks if a std::string contains a substring (case-insensitive) */
-            static VMAWARE_FORCE_INLINE bool contains_ci(const std::string& base_str, const char* keyword) noexcept {
-                return find_ci(base_str.c_str(), keyword) != nullptr;
-            }
-
-            /* Compares two null-terminated strings for equality (case-insensitive) */
-            static VMAWARE_FORCE_INLINE bool equals_ci(const char* s1, const char* s2) noexcept {
-                if (!s1 || !s2) return s1 == s2;
-                while (*s1 && *s2) {
-                    if (to_lower(*s1) != to_lower(*s2)) return false;
-                    s1++;
-                    s2++;
-                }
-                return *s1 == *s2;
-            }
-
-            /* Converts a std::string to lowercase in place */
-            static VMAWARE_FORCE_INLINE void to_lower_inplace(std::string& str) noexcept {
-                const size_t len = str.length();
-                for (size_t i = 0; i < len; ++i) {
-                    str[i] = to_lower(str[i]);
-                }
-            }
-
-            /* Trims leading and trailing whitespaces from a std::string in place */
-            static VMAWARE_FORCE_INLINE void trim_inplace(std::string& s) noexcept {
-                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
-                    s.erase(s.begin());
-                }
-                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
-                    s.pop_back();
-                }
-            }
-
-            /* Trims leading whitespaces from a null-terminated string pointer */
-            static VMAWARE_FORCE_INLINE const char* ltrim(const char* str) noexcept {
-                if (!str) return nullptr;
-                while (*str && std::isspace(static_cast<unsigned char>(*str))) {
-                    str++;
-                }
-                return str;
-            }
-
-            /* Checks if a std::string consists only of numerical digits */
-            static VMAWARE_FORCE_INLINE bool is_numeric(const std::string& s) noexcept {
-                if (s.empty()) return false;
-                const size_t len = s.length();
-                for (size_t i = 0; i < len; ++i) {
-                    if (!std::isdigit(static_cast<unsigned char>(s[i]))) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-        };
-
         [[nodiscard]] static constexpr bool is_unsupported(const VM::enum_flags flag) noexcept {
             return (flag >= VM::HYPERVISOR_BIT && flag <= VM::KGT_SIGNATURE) ? false :
             #if (LINUX)
@@ -4659,7 +4690,7 @@ public:
                     continue;
                 }
             #endif
-                if (!util::string::is_numeric(filename)) {
+                if (!string::is_numeric(filename)) {
                     continue;
                 }
 
@@ -4713,7 +4744,7 @@ public:
             static const bool cached = []() -> bool {
             #if (WINDOWS)
                 const char* brand = cpu::get_brand();
-                if (brand && util::string::find(brand, "Virtual CPU")) {
+                if (brand && string::find(brand, "Virtual CPU")) {
                     return true;
                 }
 
@@ -5118,7 +5149,7 @@ public:
             };
 
             const char* enlightenment_str = cpu::cpu_manufacturer(cpu::leaf::hv_enlightenment);
-            if (enlightenment_str && util::find(enlightenment_str, "KVM")) {
+            if (enlightenment_str && string::find(enlightenment_str, "KVM")) {
                 debug("HYPER-X: Detected Hyper-V enlightenments");
                 core::add(brand_enum::QEMU_KVM_HYPERV);
                 memo::hyperx::store(HYPERV_ENLIGHTENMENT);
@@ -5248,11 +5279,11 @@ public:
                 if (!s || !*s) return true;
 
                 return 
-                    util::string::equals_ci(s, "System Product Name") ||
-                    util::string::equals_ci(s, "To Be Filled By O.E.M.") ||
-                    util::string::equals_ci(s, "Default string") ||
-                    util::string::equals_ci(s, "Not Specified") ||
-                    util::string::equals_ci(s, "None");
+                    string::equals_ci(s, "System Product Name") ||
+                    string::equals_ci(s, "To Be Filled By O.E.M.") ||
+                    string::equals_ci(s, "Default string") ||
+                    string::equals_ci(s, "Not Specified") ||
+                    string::equals_ci(s, "None");
             };
 
             auto read_reg_utf8 = [](const wchar_t* value_name, char* out, size_t out_size) noexcept -> bool {
@@ -5867,7 +5898,7 @@ public:
              return false;
          }
 
-         if (util::string::starts_with(brand, "QEMU Virtual CPU version")) {
+         if (string::starts_with(brand, "QEMU Virtual CPU version")) {
              return core::add(brand_enum::QEMU);
          }
 
@@ -5886,16 +5917,16 @@ public:
          };
 
          for (const auto& c : checks) {
-             if (util::string::find(brand, c.text)) {
+             if (string::find(brand, c.text)) {
                  debug("CPU_BRAND: match = ", c.text);
                  return core::add(c.brand);
              }
          }
 
          if (
-             util::string::find(brand, "monitor")    ||
-             util::string::find(brand, "hypervisor") ||
-             util::string::find(brand, "hvisor")
+             string::find(brand, "monitor")    ||
+             string::find(brand, "hypervisor") ||
+             string::find(brand, "hvisor")
             )
          {
              debug("CPU_BRAND: generic virtualization match");
@@ -6144,7 +6175,7 @@ public:
                 if (f) {
                     std::string s;
                     if (std::getline(f, s)) {
-                        util::string::trim_inplace(s);
+                        string::trim_inplace(s);
 
                         if (s == "on") {
                             return true;
@@ -6162,7 +6193,7 @@ public:
                 if (f) {
                     std::string s;
                     if (std::getline(f, s)) {
-                        util::string::trim_inplace(s);
+                        string::trim_inplace(s);
 
                         if (s == "1") {
                             return true;
@@ -6180,7 +6211,7 @@ public:
                 if (f) {
                     std::string s;
                     if (std::getline(f, s)) {
-                        util::string::trim_inplace(s);
+                        string::trim_inplace(s);
 
                         for (char ch : s) {
                             if (ch == ',' || ch == '-') {
@@ -6211,8 +6242,8 @@ public:
                         std::string key = line.substr(0, pos);
                         std::string val = line.substr(pos + 1);
 
-                        util::string::trim_inplace(key);
-                        util::string::trim_inplace(val);
+                        string::trim_inplace(key);
+                        string::trim_inplace(val);
 
                         if (key == "siblings") {
                             try { siblings = std::stoi(val); }
@@ -7908,10 +7939,10 @@ public:
                 continue;
             }
 
-            util::string::to_lower_inplace(content);
+            string::to_lower_inplace(content);
 
             for (const auto& vm_string : vm_table) {
-                if (util::string::contains(content, vm_string.first)) {
+                if (string::contains(content, vm_string.first)) {
                     debug("DMI_SCAN: content = ", content);
 
                     if (vm_string.second == brand_enum::AWS_NITRO) {
@@ -8505,17 +8536,17 @@ public:
         return false;
     #endif
 
-        if (memcmp(buf, "runnervm", 8) != 0) {
+        if (!string::starts_with(buf, "runnervm")) {
             return false;
         }
 
-        const unsigned int is_match = is_alnum_ascii(buf[8]) &
-            is_alnum_ascii(buf[9]) &
-            is_alnum_ascii(buf[10]) &
-            is_alnum_ascii(buf[11]) &
-            is_alnum_ascii(buf[12]);
+        const bool is_match = string::is_alnum(buf[8]) &&
+            string::is_alnum(buf[9]) &&
+            string::is_alnum(buf[10]) &&
+            string::is_alnum(buf[11]) &&
+            string::is_alnum(buf[12]);
 
-        if (is_match != 0u) {
+        if (is_match) {
             return core::add(brand_enum::AZURE_HYPERV);
         }
         return false;
@@ -8677,7 +8708,7 @@ public:
                         bool is_acer_aspire = false;
 
                         if (util::get_manufacturer_model(&man, &mod)) {
-                            if (util::string::find_ci(man, "Acer") && util::string::find_ci(mod, "Aspire")) {
+                            if (string::find_ci(man, "Acer") && string::find_ci(mod, "Aspire")) {
                                 is_acer_aspire = true;
                             }
                         }
@@ -9063,7 +9094,7 @@ public:
             }
 
             return scan_buffer(work_buffer.data(), sz, is_acpi);
-            };
+        };
 
         /* Scan every ACPI table */
         for (const auto table_id : tables) {
@@ -9513,7 +9544,9 @@ public:
 
             using nt_query_sysinfo_fn = NTSTATUS(__stdcall*)(ULONG, PVOID, ULONG, PULONG); /* int is SYSTEM_INFORMATION_CLASS */
             nt_query_sysinfo_fn nt_query_system_information = reinterpret_cast<nt_query_sysinfo_fn>(functions[0]);
-            if (!nt_query_system_information) return false;
+            if (!nt_query_system_information) {
+                return false;
+            }
 
             /* Parse header to locate the bitmap */
             struct boot_logo_info { ULONG flags, bitmap_offset; };
@@ -9523,22 +9556,25 @@ public:
             NTSTATUS st = nt_query_system_information(sys_boot_info, nullptr, 0, &needed);
             if (st != static_cast<NTSTATUS>(0xC0000023) &&
                 st != static_cast<NTSTATUS>(0x80000005) &&
-                st != static_cast<NTSTATUS>(0xC0000004))
+                st != static_cast<NTSTATUS>(0xC0000004)) { 
                 return false;
-
+            }
             std::vector<u8> buffer(needed);
 
             /* Fetch the boot-logo data */
             st = nt_query_system_information(sys_boot_info, buffer.data(), needed, &needed);
-            if (!NT_SUCCESS(st))
+            if (!NT_SUCCESS(st)) {
                 return false;
+            }
 
-            if (needed < sizeof(boot_logo_info))
+            if (needed < sizeof(boot_logo_info)) {
                 return false;
+            }
 
             const auto* info = reinterpret_cast<const boot_logo_info*>(buffer.data());
-            if (info->bitmap_offset >= needed)
+            if (info->bitmap_offset >= needed) {
                 return false;
+            }
 
             const u8* bmp = buffer.data() + info->bitmap_offset;
             const size_t size = static_cast<size_t>(needed) - info->bitmap_offset;
@@ -9615,11 +9651,9 @@ public:
             if (!str || len < 6) {
                 return false;
             }
-
-            if (util::string::to_upper(str[0]) != 'Q') return false;
-            if (util::string::to_upper(str[1]) != 'M') return false;
-
-            return str[2] == '0' && str[3] == '0' && str[4] == '0' && str[5] == '0';
+            return (string::to_lower(str[0]) == 'q' &&
+                string::to_lower(str[1]) == 'm' &&
+                string::starts_with(str + 2, "0000"));
         };
 
         /*
@@ -9628,30 +9662,25 @@ public:
          */
         auto is_vbox_serial = [](const char* str, const size_t len) noexcept -> bool {
             /* Format: VB12345678-12345678 (19 chars) */
-            if (len != 19) {
+            if (len != 19 || !str) {
                 return false;
             }
 
-            if ((str[0] & 0xDF) != 'V' || (str[1] & 0xDF) != 'B') {
+            if (string::to_lower(str[0]) != 'v' || string::to_lower(str[1]) != 'b') {
                 return false;
             }
             if (str[10] != '-') {
                 return false;
             }
 
-            auto is_hex = [](const char c) noexcept -> bool {
-                const char lower = static_cast<char>(c | 0x20);
-                return (c >= '0' && c <= '9') || (lower >= 'a' && lower <= 'f');
-            };
-
             for (size_t i = 2; i < 10; ++i) {
-                if (!is_hex(str[i])) {
+                if (!string::is_hex(str[i])) {
                     return false;
                 }
             }
 
             for (size_t i = 11; i < 19; ++i) {
-                if (!is_hex(str[i])) {
+                if (!string::is_hex(str[i])) {
                     return false;
                 }
             }
@@ -9997,11 +10026,11 @@ public:
                 continue;
             }
 
-            if (util::string::starts_with(name, "nvme") ||
-                util::string::starts_with(name, "sd") ||
-                util::string::starts_with(name, "sg") ||
-                util::string::starts_with(name, "hd") ||
-                util::string::starts_with(name, "vd")) {
+            if (string::starts_with(name, "nvme") ||
+                string::starts_with(name, "sd") ||
+                string::starts_with(name, "sg") ||
+                string::starts_with(name, "hd") ||
+                string::starts_with(name, "vd")) {
                 const char sys_block_str[] = "/sys/block/";
                 const char device_serial_str[] = "/device/serial";
 
@@ -10126,7 +10155,7 @@ public:
 
         debug("MAC_MEMSIZE: ", "ram size = ", ram);
 
-        if (!util::string::is_numeric(ram)) {
+        if (!string::is_numeric(ram)) {
             debug("MAC_MEMSIZE: ", "found non-digit character, returned false");
             return false;
         }
@@ -10334,7 +10363,7 @@ public:
         if (std::unique_ptr<std::string> profiler_res_ptr = util::sys_result("system_profiler SPHardwareDataType")) {
             std::string& output = *profiler_res_ptr;
 
-            util::string::to_lower_inplace(output);
+            string::to_lower_inplace(output);
 
             if (util::find(output, keyword)) {
                 return true;
@@ -10491,36 +10520,10 @@ public:
 
         /* Some devices like Latitude 5440 and Lenovo 11BES09T00 do not expose thermal control */
         if (util::get_manufacturer_model(&manufacturer, &model)) {
-            auto ci_contains = [](const char* hay, const char* needle) noexcept -> bool {
-                if (!hay || !needle || !*hay || !*needle) return false;
-
-                for (const char* h = hay; *h; ++h) {
-                    const char* a = h;
-                    const char* b = needle;
-
-                    while (*a && *b) {
-                        unsigned char ca = static_cast<unsigned char>(*a);
-                        unsigned char cb = static_cast<unsigned char>(*b);
-
-                        if (ca >= 'A' && ca <= 'Z') ca += 32;
-                        if (cb >= 'A' && cb <= 'Z') cb += 32;
-
-                        if (ca != cb) break;
-                        ++a;
-                        ++b;
-                    }
-
-                    if (!*b)
-                        return true;
-                }
-
-                return false;
-            };
-
-            const bool is_lenovo = ci_contains(manufacturer, "LENOVO");
-            const bool is_dell = ci_contains(manufacturer, "Dell Inc.");
-            const bool is_qiyida = ci_contains(manufacturer, "QIYIDA");
-            const bool is_latitude = ci_contains(model, "Latitude");
+            const bool is_lenovo = string::contains_ci(manufacturer, "LENOVO");
+            const bool is_dell = string::contains_ci(manufacturer, "Dell Inc.");
+            const bool is_qiyida = string::contains_ci(manufacturer, "QIYIDA");
+            const bool is_latitude = string::contains_ci(model, "Latitude");
 
             if (is_lenovo || is_qiyida || (is_dell && is_latitude)) {
                 debug("Lenovo, Qiyida or Dell device detected, aborting thermal control check");
@@ -10550,8 +10553,9 @@ public:
         const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(functions[2]);
         const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[3]);
 
-        if (!nt_open_key || !nt_query_value_key || !rtl_init_unicode_string || !nt_close) 
+        if (!nt_open_key || !nt_query_value_key || !rtl_init_unicode_string || !nt_close) {
             return false;
+        }
 
         UNICODE_STRING key_name;
         rtl_init_unicode_string(&key_name, L"\\Registry\\Machine\\Software\\Microsoft\\Windows NT\\CurrentVersion");
@@ -11029,8 +11033,9 @@ public:
         const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[6]);
 
         if (nt_query_system_information == nullptr || nt_allocate_virtual_memory == nullptr || nt_free_virtual_memory == nullptr ||
-            rtl_init_unicode_string == nullptr || nt_open_key == nullptr || nt_query_key == nullptr || nt_close == nullptr)
+            rtl_init_unicode_string == nullptr || nt_open_key == nullptr || nt_query_key == nullptr || nt_close == nullptr) { 
             return false;
+        }
 
         ULONG ul_size = 0;
         NTSTATUS status = nt_query_system_information(system_module_information, nullptr, 0, &ul_size);
@@ -11358,9 +11363,10 @@ public:
         const auto nt_query_object = reinterpret_cast<nt_query_object_fn>(functions[1]);
         const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[2]);
 
-        if (!nt_open_key || !nt_query_object || !nt_close)
+        if (!nt_open_key || !nt_query_object || !nt_close) {
             return false;
-    
+        }
+
         /* Prepare to open the root USER registry hive */
         UNICODE_STRING key_path{};
         key_path.Buffer = const_cast<PWSTR>(L"\\REGISTRY\\USER");
@@ -11395,9 +11401,10 @@ public:
         ULONG returned_length = 0;
         status = nt_query_object(key, ObjectNameInformation, buffer, sizeof(buffer), &returned_length);
         nt_close(key);
-        if (!(((NTSTATUS)(status)) >= 0))
-            return false;
 
+        if (!(((NTSTATUS)(status)) >= 0)) {
+            return false;
+        }
         const auto object_name = reinterpret_cast<POBJECT_NAME_INFORMATION>(buffer);
 
         UNICODE_STRING expected_name{};
@@ -13320,35 +13327,9 @@ public:
         const char* model = nullptr;
 
         if (util::get_manufacturer_model(&manufacturer, &model)) {
-            auto ci_contains = [](const char* hay, const char* needle) noexcept -> bool {
-                if (!hay || !needle || !*hay || !*needle) return false;
-
-                for (const char* h = hay; *h; ++h) {
-                    const char* a = h;
-                    const char* b = needle;
-
-                    while (*a && *b) {
-                        unsigned char ca = static_cast<unsigned char>(*a);
-                        unsigned char cb = static_cast<unsigned char>(*b);
-
-                        if (ca >= 'A' && ca <= 'Z') ca += 32;
-                        if (cb >= 'A' && cb <= 'Z') cb += 32;
-
-                        if (ca != cb) break;
-                        ++a;
-                        ++b;
-                    }
-
-                    if (!*b)
-                        return true;
-                }
-
-                return false;
-            };
-
-            const bool is_surface = ci_contains(model, "Surface");
-            const bool is_microsoft = ci_contains(manufacturer, "Microsoft");
-            const bool is_xiaomi = ci_contains(manufacturer, "XIAOMI"); /* REDMI Books do not have PIT */
+            const bool is_surface = string::contains_ci(model, "Surface");
+            const bool is_microsoft = string::contains_ci(manufacturer, "Microsoft");
+            const bool is_xiaomi = string::contains_ci(manufacturer, "XIAOMI"); /* REDMI Books do not have PIT */
 
             if ((is_surface && is_microsoft) || is_xiaomi) {
                 debug("Surface or Xiaomi device found, aborting PIT/AT check");
@@ -13711,7 +13692,6 @@ public:
 
             auto* section = IMAGE_FIRST_SECTION(nt_headers);
             for (WORD i = 0; i < nt_headers->FileHeader.NumberOfSections; ++i, ++section) {
-
                 /* Only scan memory marked as executable */
                 if ((section->Characteristics & IMAGE_SCN_MEM_EXECUTE) != 0) {
                     u8* ptr = reinterpret_cast<u8*>(module) + section->VirtualAddress;
@@ -14871,7 +14851,7 @@ public:
         std::string t;
 
         while (std::getline(ss, t, ',')) {
-            util::string::trim_inplace(t);
+            string::trim_inplace(t);
             if (t.empty() || t.find('=') != std::string::npos) {
                 continue;
             }
@@ -14968,35 +14948,9 @@ public:
         const char* model = nullptr;
 
         if (util::get_manufacturer_model(&manufacturer, &model)) {
-            auto ci_contains = [](const char* hay, const char* needle) noexcept -> bool {
-                if (!hay || !needle || !*hay || !*needle) return false;
-
-                for (const char* h = hay; *h; ++h) {
-                    const char* a = h;
-                    const char* b = needle;
-
-                    while (*a && *b) {
-                        unsigned char ca = static_cast<unsigned char>(*a);
-                        unsigned char cb = static_cast<unsigned char>(*b);
-
-                        if (ca >= 'A' && ca <= 'Z') ca += 32;
-                        if (cb >= 'A' && cb <= 'Z') cb += 32;
-
-                        if (ca != cb) break;
-                        ++a;
-                        ++b;
-                    }
-
-                    if (!*b)
-                        return true;
-                }
-
-                return false;
-            };
-
-            const bool is_lenovo = ci_contains(manufacturer, "LENOVO");
-            const bool is_hp = ci_contains(manufacturer, "HP") || ci_contains(manufacturer, "Hewlett-Packard");
-            const bool is_acer = ci_contains(manufacturer, "Acer");
+            const bool is_lenovo = string::contains_ci(manufacturer, "LENOVO");
+            const bool is_hp = string::contains_ci(manufacturer, "HP") || string::contains_ci(manufacturer, "Hewlett-Packard");
+            const bool is_acer = string::contains_ci(manufacturer, "Acer");
 
             if (is_lenovo || is_hp || is_acer) {
                 debug("TPM: Recognized OEM manufacturer which normally manufactures buggy firmware, skipping PCR mismatch check.");
@@ -15429,7 +15383,6 @@ public:
             /* For custom VM techniques, won't be used most of the time */
             if (VMAWARE_UNLIKELY(!core::custom_table.empty())) {
                 for (const auto& technique : core::custom_table) {
-
                     /* If cached, return that result */
                     if (memo::is_cached(technique.id)) {
                         const memo::data_t data = memo::cache_fetch(technique.id);
