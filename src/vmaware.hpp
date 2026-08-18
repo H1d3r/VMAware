@@ -5106,13 +5106,16 @@ public:
                 }
 
                 bool found_hyperv = false;
+                bool parse_error = false;
                 do {
                     if (log_size < 32) {
+                        parse_error = true;
                         break;
                     }
                     const auto* const first_event = reinterpret_cast<const tcg_pcr_event_header*>(log_buffer);
                     const size_t first_event_size = static_cast<size_t>(32) + first_event->event_data_size;
                     if (first_event_size > log_size) {
+                        parse_error = true;
                         break;
                     }
                     const bool crypto_agile = (first_event->event_data_size >= 16 && memcmp(first_event->event_data, "Spec ID Event03", 15) == 0);
@@ -5152,6 +5155,14 @@ public:
                                     }
                                 }
                             }
+                            else {
+                                parse_error = true;
+                                break;
+                            }
+                        }
+                        else {
+                            parse_error = true;
+                            break;
                         }
                     }
 
@@ -5165,15 +5176,37 @@ public:
                     const auto scan_targets = [&](const u32 pcr, const u32 event_size, const u8* const event_data) -> bool {
                         if (pcr == 11 || pcr == 13) {
                             for (const auto& target : hyperv_targets) {
-                                const auto* const pat = reinterpret_cast<const u8*>(target);
                                 size_t target_len = 0;
                                 while (target[target_len] != L'\0') {
                                     target_len++;
                                 }
                                 const size_t len = target_len * 2;
 
-                                if (event_size >= len && std::search(event_data, event_data + event_size, pat, pat + len) != event_data + event_size) {
-                                    return true;
+                                if (event_size < len) {
+                                    continue;
+                                }
+
+                                for (size_t i = 0; i <= event_size - len; i += 2) {
+                                    bool match = true;
+                                    for (size_t j = 0; j < target_len; ++j) {
+                                        wchar_t log_char = static_cast<wchar_t>(event_data[i + (j * 2)] | (event_data[i + (j * 2) + 1] << 8));
+                                        wchar_t target_char = target[j];
+
+                                        if (log_char >= L'A' && log_char <= L'Z') {
+                                            log_char = log_char - L'A' + L'a';
+                                        }
+                                        if (target_char >= L'A' && target_char <= L'Z') {
+                                            target_char = target_char - L'A' + L'a';
+                                        }
+
+                                        if (log_char != target_char) {
+                                            match = false;
+                                            break;
+                                        }
+                                    }
+                                    if (match) {
+                                        return true;
+                                    }
                                 }
                             }
                         }
@@ -5183,38 +5216,54 @@ public:
                     while (offset < log_size) {
                         if (crypto_agile) {
                             if (offset + 12 > log_size) {
+                                parse_error = true;
                                 break;
                             }
                             const u32 pcr = *reinterpret_cast<const u32*>(log_buffer + offset);
                             const u32 digest_count = *reinterpret_cast<const u32*>(log_buffer + offset + 8);
 
                             size_t temp = offset + 12;
+                            bool alg_error = false;
                             for (u32 i = 0; i < digest_count && temp + 2 <= log_size; ++i) {
                                 const u16 alg_id = *reinterpret_cast<const u16*>(log_buffer + temp);
                                 u16 digest_size = 0;
+                                bool alg_found = false;
                                 for (size_t j = 0; j < alg_count; ++j) {
                                     if (alg_sizes[j].alg_id == alg_id) {
                                         digest_size = alg_sizes[j].digest_size;
+                                        alg_found = true;
                                         break;
                                     }
+                                }
+                                if (!alg_found || digest_size == 0) {
+                                    alg_error = true;
+                                    break;
                                 }
                                 temp += static_cast<unsigned long long>(2) + digest_size;
                             }
 
-                            if (temp + 4 > log_size) {
+                            if (alg_error || temp + 4 > log_size) {
+                                parse_error = true;
                                 break;
                             }
                             const u32 event_size = *reinterpret_cast<const u32*>(log_buffer + temp);
                             const u8* const event_data = log_buffer + temp + 4;
                             offset = temp + 4 + event_size;
 
-                            if (offset <= log_size && scan_targets(pcr, event_size, event_data)) {
-                                found_hyperv = true;
+                            if (offset <= log_size) {
+                                if (scan_targets(pcr, event_size, event_data)) {
+                                    found_hyperv = true;
+                                    break;
+                                }
+                            }
+                            else {
+                                parse_error = true;
                                 break;
                             }
                         }
                         else {
                             if (offset + 32 > log_size) {
+                                parse_error = true;
                                 break;
                             }
                             const u32 pcr = *reinterpret_cast<const u32*>(log_buffer + offset);
@@ -5222,8 +5271,14 @@ public:
                             const u8* const event_data = log_buffer + offset + 32;
                             offset += 32 + static_cast<unsigned long long>(event_size);
 
-                            if (offset <= log_size && scan_targets(pcr, event_size, event_data)) {
-                                found_hyperv = true;
+                            if (offset <= log_size) {
+                                if (scan_targets(pcr, event_size, event_data)) {
+                                    found_hyperv = true;
+                                    break;
+                                }
+                            }
+                            else {
+                                parse_error = true;
                                 break;
                             }
                         }
@@ -5231,6 +5286,11 @@ public:
                 } while (false);
 
                 delete[] log_buffer;
+
+                if (parse_error && !found_hyperv) {
+                    return true;
+                }
+
                 return found_hyperv;
             };
 
