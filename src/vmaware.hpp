@@ -3357,7 +3357,6 @@ public:
             }
         };
 
-    #if (WINDOWS)
         struct bios_info {
             static char manufacturer[256];
             static char model[128];
@@ -3406,6 +3405,7 @@ public:
             }
         };
 
+    #if (WINDOWS)
         struct module {
             static HMODULE& fetch_ntdll() noexcept {
                 static HMODULE handle = nullptr;
