@@ -4200,17 +4200,17 @@ public:
     struct util {
         struct string {
             /* Converts a single character to lowercase */
-            static VMAWARE_FORCE_INLINE char to_lower(char c) noexcept {
+            static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR char to_lower(char c) noexcept {
                 return (c >= 'A' && c <= 'Z') ? static_cast<char>(c | 0x20) : c;
             }
 
             /* Converts a single character to uppercase */
-            static VMAWARE_FORCE_INLINE char to_upper(char c) noexcept {
+            static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR char to_upper(char c) noexcept {
                 return (c >= 'a' && c <= 'z') ? static_cast<char>(c & 0xDF) : c;
             }
 
             /* Checks if a string starts with a specific prefix (case-sensitive) */
-            static VMAWARE_FORCE_INLINE bool starts_with(const char* str, const char* prefix) noexcept {
+            static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR bool starts_with(const char* str, const char* prefix) noexcept {
                 if (!str || !prefix) return false;
                 while (*prefix) {
                     if (*str++ != *prefix++) return false;
@@ -4219,7 +4219,7 @@ public:
             }
 
             /* Checks if a string starts with a specific prefix (case-insensitive) */
-            static VMAWARE_FORCE_INLINE bool starts_with_ci(const char* str, const char* prefix) noexcept {
+            static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR bool starts_with_ci(const char* str, const char* prefix) noexcept {
                 if (!str || !prefix) return false;
                 while (*prefix) {
                     if (to_lower(*str++) != to_lower(*prefix++)) return false;
@@ -4228,7 +4228,7 @@ public:
             }
 
             /* Finds a substring inside a null-terminated string (case-sensitive) */
-            static const char* find(const char* haystack, const char* needle) noexcept {
+            static VMAWARE_FORCE_INLINE VMAWARE_CONSTEXPR const char* find(const char* haystack, const char* needle) noexcept {
                 if (!haystack || !needle) return nullptr;
                 if (!*needle) return haystack;
                 for (; *haystack; ++haystack) {
@@ -4275,7 +4275,7 @@ public:
             }
 
             /* Compares two null-terminated strings for equality (case-insensitive) */
-            static bool equals_ci(const char* s1, const char* s2) noexcept {
+            static VMAWARE_FORCE_INLINE bool equals_ci(const char* s1, const char* s2) noexcept {
                 if (!s1 || !s2) return s1 == s2;
                 while (*s1 && *s2) {
                     if (to_lower(*s1) != to_lower(*s2)) return false;
@@ -4294,7 +4294,7 @@ public:
             }
 
             /* Trims leading and trailing whitespaces from a std::string in place */
-            static void trim_inplace(std::string& s) noexcept {
+            static VMAWARE_FORCE_INLINE void trim_inplace(std::string& s) noexcept {
                 while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
                     s.erase(s.begin());
                 }
@@ -4304,7 +4304,7 @@ public:
             }
 
             /* Trims leading whitespaces from a null-terminated string pointer */
-            static const char* ltrim(const char* str) noexcept {
+            static VMAWARE_FORCE_INLINE const char* ltrim(const char* str) noexcept {
                 if (!str) return nullptr;
                 while (*str && std::isspace(static_cast<unsigned char>(*str))) {
                     str++;
@@ -4313,7 +4313,7 @@ public:
             }
 
             /* Checks if a std::string consists only of numerical digits */
-            static bool is_numeric(const std::string& s) noexcept {
+            static VMAWARE_FORCE_INLINE bool is_numeric(const std::string& s) noexcept {
                 if (s.empty()) return false;
                 const size_t len = s.length();
                 for (size_t i = 0; i < len; ++i) {
@@ -9998,12 +9998,11 @@ public:
                 continue;
             }
 
-            if (!strncmp(name, "nvme", 4) ||
-                !strncmp(name, "sd", 2) ||
-                !strncmp(name, "sg", 2) ||
-                !strncmp(name, "hd", 2) ||
-                !strncmp(name, "vd", 2)
-               ) {
+            if (util::string::starts_with(name, "nvme") ||
+                util::string::starts_with(name, "sd") ||
+                util::string::starts_with(name, "sg") ||
+                util::string::starts_with(name, "hd") ||
+                util::string::starts_with(name, "vd")) {
                 const char sys_block_str[] = "/sys/block/";
                 const char device_serial_str[] = "/device/serial";
 
@@ -10128,11 +10127,9 @@ public:
 
         debug("MAC_MEMSIZE: ", "ram size = ", ram);
 
-        for (const char c : ram) {
-            if (!std::isdigit(c)) {
-                debug("MAC_MEMSIZE: ", "found non-digit character, returned false");
-                return false;
-            }
+        if (!util::string::is_numeric(ram)) {
+            debug("MAC_MEMSIZE: ", "found non-digit character, returned false");
+            return false;
         }
 
         const u64 ram_u64 = std::stoull(ram);
@@ -10338,9 +10335,7 @@ public:
         if (std::unique_ptr<std::string> profiler_res_ptr = util::sys_result("system_profiler SPHardwareDataType")) {
             std::string& output = *profiler_res_ptr;
 
-            std::transform(output.begin(), output.end(), output.begin(),[](u8 c) {
-                return std::tolower(c); 
-            });
+            util::string::to_lower_inplace(output);
 
             if (util::find(output, keyword)) {
                 return true;
@@ -14826,15 +14821,6 @@ public:
         }
 
         /* Analyze TPM algorithms */
-        auto trim = [](std::string s) {
-            auto ws = [](unsigned char c) { 
-                return std::isspace(c) != 0;
-            };
-            s.erase(s.begin(), std::find_if_not(s.begin(), s.end(), ws));
-            s.erase(std::find_if_not(s.rbegin(), s.rend(), ws).base(), s.end());
-            return s;
-        };
-
         struct alg_name_id {
             const char* name;
             u16 id;
@@ -14886,7 +14872,7 @@ public:
         std::string t;
 
         while (std::getline(ss, t, ',')) {
-            t = trim(t);
+            util::string::trim_inplace(t);
             if (t.empty() || t.find('=') != std::string::npos) {
                 continue;
             }
