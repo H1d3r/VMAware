@@ -5190,7 +5190,10 @@ public:
                                 for (size_t i = 0; i <= event_size - len; i += 1) {
                                     bool match = true;
                                     for (size_t j = 0; j < target_len; ++j) {
-                                        wchar_t log_char = static_cast<wchar_t>(event_data[i + (j * 2)] | (event_data[i + (j * 2) + 1] << 8));
+                                        const unsigned char low_byte = static_cast<unsigned char>(event_data[i + (j * 2)]);
+                                        const unsigned char high_byte = static_cast<unsigned char>(event_data[i + (j * 2) + 1]);
+
+                                        wchar_t log_char = static_cast<wchar_t>(low_byte | (high_byte << 8));
                                         wchar_t target_char = target[j];
 
                                         if (log_char >= L'A' && log_char <= L'Z') {
