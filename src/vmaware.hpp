@@ -12111,6 +12111,14 @@ public:
                     ep->ContextRecord->EFlags &= ~0x100; /* clear TF to resume execution */
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
+
+                /* On a VM it might crash if they dont intercept cpuid but the VM doesnt emulate RDPRU */
+                if (code == EXCEPTION_ILLEGAL_INSTRUCTION ||
+                    code == EXCEPTION_PRIV_INSTRUCTION ||
+                    code == EXCEPTION_ACCESS_VIOLATION) {
+                    return EXCEPTION_EXECUTE_HANDLER;
+                }
+
                 return EXCEPTION_CONTINUE_SEARCH;
             }
         };
