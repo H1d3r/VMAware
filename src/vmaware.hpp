@@ -195,10 +195,10 @@
 #ifndef VMAWARE_HEADER
 #define VMAWARE_HEADER
 
-#ifndef __VMAWARE_DEBUG__
+#ifndef VMAWARE_DEBUG
     #if defined(_DEBUG)    /* MSVC Debug */       \
     || defined(DEBUG)     /* user or build-system */
-        #define __VMAWARE_DEBUG__
+        #define VMAWARE_DEBUG
     #endif
 #endif
 
@@ -235,22 +235,22 @@
 #endif
 
 #if VMAWARE_CPLUSPLUS >= 202302L
-    #define VMA_CPP 23
+    #define VMAWARE_CPP 23
 #elif VMAWARE_CPLUSPLUS >= 202002L
-    #define VMA_CPP 20
+    #define VMAWARE_CPP 20
 #elif VMAWARE_CPLUSPLUS >= 201703L
-    #define VMA_CPP 17
+    #define VMAWARE_CPP 17
 #elif VMAWARE_CPLUSPLUS >= 201402L
-    #define VMA_CPP 14
+    #define VMAWARE_CPP 14
 #elif VMAWARE_CPLUSPLUS >= 201103L
-    #define VMA_CPP 11
+    #define VMAWARE_CPP 11
 #elif VMAWARE_CPLUSPLUS >= 199711L
-    #define VMA_CPP 98 /* C++98 or C++03 */
+    #define VMAWARE_CPP 98 /* C++98 or C++03 */
 #else
     #error "Unsupported C++ standard (pre-C++98 or unknown)."
 #endif
     
-#if (VMA_CPP < 11 && !WINDOWS)
+#if (VMAWARE_CPP < 11 && !WINDOWS)
     #error "VMAware only supports C++11 or above, set your compiler flag to '-std=c++20' for gcc/clang, or '/std:c++20' for MSVC"
 #endif
         
@@ -272,7 +272,7 @@
     #define x86 0
 #endif
     
-#if defined(__aarch64__) || defined(_M_ARM64) || defined(__ARM_LINUX_COMPILER__)
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(__ARM_LINUX_COMPILER__) || defined(__arm64__)
     #define ARM64 1
 #else
     #define ARM64 0
@@ -290,12 +290,6 @@
     #define ARM 0
 #endif
 
-#if (!APPLE && (VMA_CPP >= 20) && (!CLANG || __clang_major__ >= 16))
-    #define VMAWARE_SOURCE_LOCATION_SUPPORTED 1
-#else
-    #define VMAWARE_SOURCE_LOCATION_SUPPORTED 0
-#endif
-
 #if defined(__clang__)
     #define GCC 0
     #define CLANG 1
@@ -307,11 +301,17 @@
     #define CLANG 0
 #endif
 
-#if !(defined(WINDOWS) || defined(LINUX) || defined(APPLE))
+#if !(WINDOWS || LINUX || APPLE)
     #warning "Unknown OS detected, tests will be severely limited"
 #endif
 
-#if (VMA_CPP >= 14)
+#if (!APPLE && (VMAWARE_CPP >= 20) && (!CLANG || __clang_major__ >= 16))
+    #define VMAWARE_SOURCE_LOCATION_SUPPORTED 1
+#else
+    #define VMAWARE_SOURCE_LOCATION_SUPPORTED 0
+#endif
+
+#if (VMAWARE_CPP >= 14)
     #define VMAWARE_DEPRECATED(msg) [[deprecated(msg)]]
 #elif (MSVC)
     #define VMAWARE_DEPRECATED(msg) __declspec(deprecated(msg))
@@ -321,13 +321,29 @@
     #define VMAWARE_DEPRECATED(msg)
 #endif
 
-#if (VMA_CPP >= 17)
+#if defined(VMAWARE_SHARED)
+    #if (VMAWARE_MSVC)
+        #ifdef VMAWARE_DLL_EXPORT
+            #define VMAWARE_API __declspec(dllexport)
+        #else
+            #define VMAWARE_API __declspec(dllimport)
+        #endif
+    #elif (VMAWARE_GCC || VMAWARE_CLANG)
+        #define VMAWARE_API __attribute__((visibility("default")))
+    #else
+        #define VMAWARE_API
+    #endif
+#else
+    #define VMAWARE_API
+#endif
+
+#if (VMAWARE_CPP >= 17)
     #define VMAWARE_CONSTEXPR constexpr
 #else
     #define VMAWARE_CONSTEXPR
 #endif
 
-#if (VMA_CPP >= 20)
+#if (VMAWARE_CPP >= 20)
     #define VMAWARE_CONSTEXPR_20 constexpr
 #else
     #define VMAWARE_CONSTEXPR_20
@@ -357,11 +373,13 @@
     #define VMAWARE_RESTRICT
 #endif
 
-#if (CLANG)
+#if (VMAWARE_CPP >= 23)
+    #define VMAWARE_ASSUME(cond) [[assume(cond)]]
+#elif (VMAWARE_CLANG)
     #define VMAWARE_ASSUME(cond) __builtin_assume(cond)
-#elif (MSVC)
+#elif (VMAWARE_MSVC)
     #define VMAWARE_ASSUME(cond) __assume(cond)
-#elif (GCC)
+#elif (VMAWARE_GCC)
     #define VMAWARE_ASSUME(cond) do { if (!(cond)) __builtin_unreachable(); } while(0)
 #else
     #define VMAWARE_ASSUME(cond) do { (void)(cond); } while(0)
@@ -393,14 +411,12 @@
     #if (MSVC) || defined(__vectorcall)
         #define VMAWARE_VECTORCALL __vectorcall
     #elif (GCC || CLANG)
-        #if (x86)
-            #define VMAWARE_VECTORCALL __attribute__((vectorcall))
-        #else
-            #define VMAWARE_VECTORCALL
-        #endif
+        #define VMAWARE_VECTORCALL __attribute__((vectorcall))
     #else
         #define VMAWARE_VECTORCALL
     #endif
+#else
+    #define VMAWARE_VECTORCALL
 #endif
 
 #if (GCC || CLANG)
@@ -427,28 +443,25 @@
     #pragma clang diagnostic ignored "-Wunused-local-typedef"
 #endif
 
-#if (VMA_CPP >= 23)
-    #include <limits>
+#if (VMAWARE_SOURCE_LOCATION_SUPPORTED)
+    #include <source_location>
 #endif
-#if (VMA_CPP >= 20)
+#if (VMAWARE_CPP >= 20)
     #include <bit>
-    #include <cstddef>
-#include <ranges>
-    #if (VMAWARE_SOURCE_LOCATION_SUPPORTED)
-        #include <source_location>
-    #endif
 #endif
-#if (VMA_CPP >= 17)
+#if (VMAWARE_CPP >= 17)
     #include <filesystem>
-    #include <system_error>
 #endif
-#ifdef __VMAWARE_DEBUG__
+#ifdef VMAWARE_DEBUG
     #include <iomanip>
     #include <ios>
     #include <locale>
     #include <codecvt>
 #endif
-
+#include <limits>
+#include <cstddef>
+#include <system_error>
+#include <ranges>
 #include <cstdio>
 #include <functional>
 #include <cstring>
@@ -473,7 +486,14 @@
 
 #if (WINDOWS)
     #include <windows.h>
-    #include <intrin.h>
+    #if (MSVC) /* Targets clang-cl too */
+        #include <intrin.h>
+    #elif (GCC || CLANG)
+        #if (x86)
+            #include <x86intrin.h> /* Although Clang provides a compatibility header for it when targeting Windows environments */
+            #include <immintrin.h>
+        #endif
+    #endif
     #include <winioctl.h>
     #include <winternl.h>
     #include <powerbase.h>
@@ -527,7 +547,7 @@
     #include <chrono>
 #endif
 
-#ifdef __VMAWARE_DEBUG__
+#ifdef VMAWARE_DEBUG
     #define debug(...) VM::util::debug_msg(__VA_ARGS__)
 #else
     #define debug(...)
@@ -4485,9 +4505,9 @@ public:
         }
 
         [[nodiscard]] static bool exists(const char* path) {
-        #if (VMA_CPP >= 17)
+        #if (VMAWARE_CPP >= 17)
             return std::filesystem::exists(path);
-        #elif (VMA_CPP >= 11)
+        #elif (VMAWARE_CPP >= 11)
             struct stat buffer;
             return (stat(path, &buffer) == 0);
         #endif
@@ -4529,7 +4549,7 @@ public:
         /* Wrapper for std::make_unique because it's not available for C++11 */
         template<typename T, typename... Args>
         [[nodiscard]] static std::unique_ptr<T> make_unique(Args&&... args) {
-        #if (VMA_CPP < 14)
+        #if (VMAWARE_CPP < 14)
             return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
         #else
             return std::make_unique<T>(std::forward<Args>(args)...);
@@ -4706,7 +4726,7 @@ public:
         }
 
         [[nodiscard]] static std::unique_ptr<std::string> sys_result(const char* cmd) {
-        #if (VMA_CPP < 14)
+        #if (VMAWARE_CPP < 14)
             VMAWARE_UNUSED(cmd);
             return util::make_unique<std::string>();
         #else
@@ -4747,7 +4767,7 @@ public:
         [[nodiscard]] static bool is_proc_running(const char* executable) {
         #if (LINUX)
             VMAWARE_ASSUME(executable != nullptr);
-            #if (VMA_CPP >= 17)
+            #if (VMAWARE_CPP >= 17)
             for (const auto& entry : std::filesystem::directory_iterator("/proc")) {
                 if (!entry.is_directory()) {
                     continue;
@@ -6447,7 +6467,7 @@ public:
         #endif
         };
 
-    #if (WINDOWS && defined __VMAWARE_DEBUG__)
+    #if (WINDOWS && defined VMAWARE_DEBUG)
         const char* manufacturer = "";
         const char* device_model = "";
         if (util::get_manufacturer_model(&manufacturer, &device_model)) {
@@ -7242,7 +7262,7 @@ public:
                 hypervisor_detected = true;
             }
 
-            const double exception_ratio = best_db_l ? (double)best_api_l / (double)best_db_l : 0.0;
+            const double exception_ratio = best_db_l ? (double)best_db_l / (double)best_api_l : 0.0;
             debug("TIMER: Exception > VMM -> ", best_db_l, " | nVMM -> ", best_api_l, " | Ratio -> ", exception_ratio);
 
             if (exception_ratio >= 4.0) {
@@ -7493,7 +7513,7 @@ public:
             debug("MAC: ", "not successful");
         }
 
-    #ifdef __VMAWARE_DEBUG__
+    #ifdef VMAWARE_DEBUG
         {
             std::stringstream ss;
             ss << std::hex << std::setw(2) << std::setfill('0')
@@ -7546,7 +7566,7 @@ public:
      * @implements VM::DMESG
      */
     [[nodiscard]] static bool dmesg() {
-    #if (VMA_CPP <= 11)
+    #if (VMAWARE_CPP <= 11)
         return false;
     #else
         if (!util::is_admin()) {
@@ -8384,7 +8404,7 @@ public:
             /* 64-bit Linux: IDT descriptor is 10 bytes (2-byte limit + 8-byte base) */
             __asm__ __volatile__("sidt %0" : "=m"(values));
 
-        #ifdef __VMAWARE_DEBUG__
+        #ifdef VMAWARE_DEBUG
             debug("SIDT: values = ");
             for (u8 i = 0; i < 10; ++i) {
                 debug(std::hex, std::setw(2), std::setfill('0'), static_cast<u32>(values[i]));
@@ -8401,7 +8421,7 @@ public:
             /* 32-bit Linux: IDT descriptor is 6 bytes (2-byte limit + 4-byte base) */
             __asm__ __volatile__("sidt %0" : "=m"(values));
 
-        #ifdef __VMAWARE_DEBUG__
+        #ifdef VMAWARE_DEBUG
             debug("SIDT: values = ");
             for (u8 i = 0; i < 6; ++i) {
                 debug(std::hex, std::setw(2), std::setfill('0'), static_cast<u32>(values[i]));
@@ -9323,7 +9343,7 @@ public:
 
         #if (LINUX)
             const std::string pci_path = "/sys/bus/pci/devices";
-            #if (VMA_CPP >= 17)
+            #if (VMAWARE_CPP >= 17)
                 /* Std::filesystem throws exceptions when directories don't exist (SIGSEGV) */
                 std::error_code ec;
                 auto dir_iter = std::filesystem::directory_iterator(pci_path, ec);
@@ -11864,7 +11884,7 @@ public:
 
         /* Static struct for SEH filtering to avoid release-mode lambda optimizations */
         struct exception_handler {
-            static LONG execute(const u32 code, EXCEPTION_POINTERS* info, trap_context* ctx) noexcept {
+            static VMAWARE_NOINLINE LONG execute(const u32 code, EXCEPTION_POINTERS* info, trap_context* ctx) noexcept {
                 if (!info || !info->ExceptionRecord || !info->ContextRecord) {
                     return EXCEPTION_CONTINUE_SEARCH;
                 }
@@ -11962,7 +11982,7 @@ public:
         }
 
         struct exception_handler {
-            static int execute(const unsigned int code, struct _EXCEPTION_POINTERS* ep, volatile ULONG_PTR* out_trap_ip, volatile bool* out_anomaly) {
+            static VMAWARE_NOINLINE int execute(const unsigned int code, struct _EXCEPTION_POINTERS* ep, volatile ULONG_PTR* out_trap_ip, volatile bool* out_anomaly) {
                 if (code == EXCEPTION_SINGLE_STEP && ep && ep->ContextRecord) {
                 #if (x86_64)
                     *out_trap_ip = ep->ContextRecord->Rip;
@@ -12190,9 +12210,8 @@ public:
             bool step_triggered = false;
             const u64 stub_base = reinterpret_cast<u64>(dbvm_icebp_stub);
 
-            /* Local helper struct to evaluate exception parameters across compilers */
-            struct icebp_handler {
-                static LONG execute(
+            struct exception_handler {
+                static VMAWARE_NOINLINE LONG execute(
                     const EXCEPTION_POINTERS* ep,
                     DWORD exception_code,
                     bool* rip_failed,
@@ -12220,7 +12239,7 @@ public:
             __try {
                 memory::execute(dbvm_icebp_stub);
             }
-            __except (icebp_handler::execute(
+            __except (exception_handler::execute(
                 GetExceptionInformation(),
                 GetExceptionCode(),
                 &rip_failed,
@@ -13630,6 +13649,11 @@ public:
                 continue;
             }
 
+            #define DWORD_MAX 4294967295
+            if (needed > (DWORD_MAX - sizeof(wchar_t))) {
+                continue;
+            }
+
             if (needed + sizeof(wchar_t) > buffer_size) {
                 DWORD new_size = needed + sizeof(wchar_t);
                 BYTE* new_buffer = static_cast<BYTE*>(realloc(buffer, new_size));
@@ -13654,7 +13678,9 @@ public:
                 continue;
             }
 
-            reinterpret_cast<wchar_t*>(buffer)[needed / sizeof(wchar_t)] = L'\0';
+            if (buffer != nullptr) {
+                reinterpret_cast<wchar_t*>(buffer)[needed / sizeof(wchar_t)] = L'\0';
+            }
 
             const wchar_t* const buffer_start = reinterpret_cast<const wchar_t*>(buffer);
             const wchar_t* const buffer_end = buffer_start + (needed / sizeof(wchar_t));
@@ -13875,6 +13901,11 @@ public:
     #if (!x86)
         return false;
     #else
+        #if (defined VMAWARE_DEBUG)
+            if (IsDebuggerPresent()) {
+                return false; /* To not hit the debugger breakpoint, making the debugger impossible to advance*/
+            }
+        #endif  
         if (util::is_x86_process_on_arm()) {
             return false;
         }
@@ -14100,8 +14131,8 @@ public:
         thread_local static volatile bool ermsb_trap_detected = false;
         ermsb_trap_detected = false;
 
-        struct handler {
-            static LONG __stdcall execute(const PEXCEPTION_POINTERS ctx) {
+        struct exception_handler {
+            static VMAWARE_NOINLINE LONG __stdcall execute(const PEXCEPTION_POINTERS ctx) {
                 if (ctx->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
                     ermsb_trap_detected = true;
                     return EXCEPTION_CONTINUE_EXECUTION;
@@ -14110,7 +14141,7 @@ public:
             }
         };
 
-        const PVOID veh_handle = rtl_add_vectored_exception_handler(1, handler::execute);
+        const PVOID veh_handle = rtl_add_vectored_exception_handler(1, exception_handler::execute);
         if (!veh_handle) {
             SIZE_T free_size = 0;
             nt_free_virtual_memory(current_process, &src_page, &free_size, MEM_RELEASE);
@@ -14187,8 +14218,8 @@ public:
             return false;
         }
 
-        struct handler {
-            static LONG execute(const EXCEPTION_POINTERS* info, DWORD* exceptionCode) {
+        struct exception_handler {
+            static VMAWARE_NOINLINE LONG execute(const EXCEPTION_POINTERS* info, DWORD* exceptionCode) {
                 *exceptionCode = info->ExceptionRecord->ExceptionCode;
             #if (x86_64)
                 info->ContextRecord->Rbx = info->ContextRecord->R8;
@@ -14206,7 +14237,7 @@ public:
             memory::execute(cpuid_singlestep_stub);
             /* If the hypervisor completely swallows all exceptions, is_vm still remains true */
         }
-        __except (handler::execute(GetExceptionInformation(), &exc_code_cpuid)) {
+        __except (exception_handler::execute(GetExceptionInformation(), &exc_code_cpuid)) {
             /*
              * If the exception doesnt reach this block, hypervisor delayed the trap flag over cpuid, execution fell through into
              * the bad bytes (C7 B2) causing STATUS_ILLEGAL_INSTRUCTION
@@ -14235,7 +14266,7 @@ public:
             __try {
                 memory::execute(rdpru_singlestep_stub);
             }
-            __except (handler::execute(GetExceptionInformation(), &exc_code_rdpru)) {
+            __except (exception_handler::execute(GetExceptionInformation(), &exc_code_rdpru)) {
                 if (exc_code_rdpru == EXCEPTION_SINGLE_STEP) {
                     rdpru_is_vm = false;
                 }

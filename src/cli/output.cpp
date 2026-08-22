@@ -616,7 +616,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     const VM::vmaware vm(VM::MULTIPLE, high_thresh_arg, all_arg, dynamic_arg);
     std::vector<std::string> summary;
 
-#if defined(__VMAWARE_DEBUG__)
+#if defined(VMAWARE_DEBUG)
     bool print_sha = true;
 
     #if (CLI_WINDOWS && !CLI_ARM)
@@ -819,7 +819,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     }
     std::cout << "\n";
 
-    #if defined(__VMAWARE_DEBUG__)
+    #if defined(VMAWARE_DEBUG)
         std::cout << grey << "SHA-256: " << white << compute_self_sha256() << ansi_exit << "\n";
     #endif
 
