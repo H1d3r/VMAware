@@ -334,6 +334,14 @@
 #endif
 
 #if (MSVC)
+    #define VMAWARE_NOINLINE __declspec(noinline)
+#elif (CLANG || GCC)
+    #define VMAWARE_NOINLINE __attribute__((noinline))
+#else
+    #define VMAWARE_NOINLINE
+#endif
+
+#if (MSVC)
     #define VMAWARE_FORCE_INLINE __forceinline
 #elif (CLANG || GCC)
     #define VMAWARE_FORCE_INLINE inline __attribute__((always_inline))
@@ -403,6 +411,12 @@
     #define TARGET_AVX
     #define TARGET_AVX2
     #define TARGET_AVX512
+#endif
+
+#if (GCC || CLANG)
+    #define VMAWARE_SERIALIZE __attribute__((__target__("serialize")))
+#else
+    #define VMAWARE_SERIALIZE
 #endif
 
 #define VMAWARE_UNUSED(x) ((void)(x))
@@ -3845,10 +3859,7 @@ public:
         };
 
         struct engine {
-            #if ((CLANG || GCC))
-                __attribute__((__target__("serialize")))
-            #endif
-                static VMAWARE_FORCE_INLINE void warmup_cpu(const bool serialize_available) noexcept {
+                VMAWARE_SERIALIZE static VMAWARE_FORCE_INLINE void warmup_cpu(const bool serialize_available) noexcept {
                 /* Signal Intel Speed Shift / AMD CPPC to force maximum non-AVX Turbo/P-state frequency transition */
                 u64 val = 0x5a5a5a5a5a5a5a5aULL;
                 for (u32 i = 0; i < 2'000'000; ++i) {
@@ -6752,11 +6763,7 @@ public:
      * @category Windows, x86
      * @implements VM::TIMER
      */
-    [[nodiscard]] static bool timer() 
-    #if ((CLANG || GCC))
-        __attribute__((__target__("serialize")))
-    #endif
-    {
+    [[nodiscard]] static bool timer() VMAWARE_SERIALIZE {
     #if (x86 && WINDOWS)
         if (util::is_x86_process_on_arm()) {
             debug("TIMER: Running inside a binary translation layer");
@@ -6837,6 +6844,7 @@ public:
         }
 
         /* Prepare threads for check */
+        debug("TIMER: CPU supports SERIALIZE: ", serialize_available);
         GROUP_AFFINITY old_affinity{};
         const DWORD old_process_priority = GetPriorityClass(current_process);
         const int old_thread_priority = GetThreadPriority(current_thread);
@@ -6848,20 +6856,153 @@ public:
         VMAWARE_CONSTEXPR const u32 ct_seed = timer::config::get_seed();
         const size_t batch_size = timer::config::generate_batch_size(ct_seed);
 
+        const HMODULE ntdll = memory::get_module(true);
+        if (!ntdll) {
+            return false;
+        }
+
+        constexpr const char* function_names[] = {
+            "ZwRaiseException"
+        };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
+        using zw_raise_exception_fn = NTSTATUS(__stdcall*)(PEXCEPTION_RECORD, PCONTEXT, BOOLEAN);
+        zw_raise_exception_fn zw_raise_exception = reinterpret_cast<zw_raise_exception_fn>(functions[0]);
+        if (!zw_raise_exception) {
+            return false;
+        }
+
         std::vector<timer::timer_tick_t> vm_samples(batch_size), ref_samples(batch_size); /* pre page-fault MMU, we won't warm-up cpuid samples for the P-states intentionally */
+        std::vector<timer::timer_tick_t> api_samples(batch_size), db_samples(batch_size);
+
         /* Lock the memory for the samples to prevent soft #PF during timing if permissions are enough */
         const bool vm_samples_locked = VirtualLock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t));
         const bool ref_samples_locked = VirtualLock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+        const bool api_samples_locked = VirtualLock(api_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+        const bool db_samples_locked = VirtualLock(db_samples.data(), batch_size * sizeof(timer::timer_tick_t));
 
         /* Independent multi-trial state initialization */
         constexpr int trials = 5;
         constexpr size_t local_max_attempts = 1000 * trials;
         timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
         timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+        timer::timer_tick_t best_api_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+        timer::timer_tick_t best_db_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+
+        /* To isolate the SEH frame from C++ unwinding scopes */
+        struct exception_handler {
+            static VMAWARE_NOINLINE void execute_db() noexcept {
+                __try {
+                #if (MSVC)
+                    const auto eflags = __readeflags();
+                    __writeeflags(eflags | 0x100);
+                    __nop();
+                #elif (x86_64)
+                    __asm__ volatile (
+                        "pushfq \n\t"
+                        "orq $0x100, (%%rsp) \n\t"
+                        "popfq \n\t"
+                        "nop \n\t"
+                        :
+                    :
+                        : "cc", "memory"
+                    );
+                    #else
+                    __asm__ volatile (
+                        "pushfl \n\t"
+                        "orl $0x100, (%%esp) \n\t"
+                        "popfl \n\t"
+                        "nop \n\t"
+                        :
+                    :
+                        : "cc", "memory"
+                    );
+                #endif
+                }
+                __except (
+                    GetExceptionCode() == EXCEPTION_SINGLE_STEP
+                    ? (GetExceptionInformation()->ContextRecord->EFlags &= ~0x100U, EXCEPTION_CONTINUE_EXECUTION)
+                    : EXCEPTION_CONTINUE_SEARCH
+                    ) {
+                }
+            }
+
+            /* decltype to resolve the local function pointer type without template keywords */
+            static VMAWARE_NO_CFG void nt_raise_exception(
+                decltype(zw_raise_exception) zw_raise,
+                EXCEPTION_RECORD* er,
+                CONTEXT* ctx,
+                volatile bool* flag
+            ) noexcept {
+                __try {
+                #if (x86_64)
+                    RtlCaptureContext(ctx);
+                #else
+                    /* On x86_32, RtlCaptureContext is unreliable under clang-cl with FPO */
+                    ctx->ContextFlags = CONTEXT_CONTROL;
+                    uintptr_t current_esp = 0;
+                    uintptr_t current_ebp = 0;
+                    uintptr_t current_eip = 0;
+                    u32 current_cs = 0;
+                    u32 current_ss = 0;
+                    u32 current_eflags = 0;
+
+                #if (MSVC) /* This matches clang-cl on purpose */
+                    __asm {
+                        mov current_esp, esp
+                        mov current_ebp, ebp
+
+                        xor eax, eax
+                        mov ax, cs
+                        mov current_cs, eax
+
+                        xor eax, eax
+                        mov ax, ss
+                        mov current_ss, eax
+
+                        call get_eip
+                        get_eip :
+                        pop eax
+                            mov current_eip, eax
+                    }
+                    current_eflags = static_cast<u32>(__readeflags());
+                #else
+                    __asm__ volatile(
+                        "movl %%esp, %0 \n\t"
+                        "movl %%ebp, %1 \n\t"
+                        "mov %%cs, %2 \n\t"
+                        "mov %%ss, %3 \n\t"
+                        "pushfl \n\t"
+                        "popl %4 \n\t"
+                        "call 1f \n\t"
+                        "1: \n\t"
+                        "popl %5 \n\t"
+                        : "=r"(current_esp), "=r"(current_ebp), "=r"(current_cs), "=r"(current_ss), "=r"(current_eflags), "=r"(current_eip)
+                    );
+                #endif
+
+                    ctx->Esp = current_esp;
+                    ctx->Ebp = current_ebp;
+                    ctx->Eip = current_eip;
+                    ctx->SegCs = current_cs;
+                    ctx->SegSs = current_ss;
+                    ctx->EFlags = current_eflags;
+                #endif
+                    * flag = true;
+                    zw_raise(er, ctx, 1);
+                }
+                __except (
+                    GetExceptionCode() == EXCEPTION_SINGLE_STEP
+                    ? EXCEPTION_EXECUTE_HANDLER
+                    : EXCEPTION_CONTINUE_SEARCH
+                    ) {
+                }
+            }
+        };
 
         std::thread t1(counter_thread);
         state.start_test.store(true, std::memory_order_release);
-        SleepEx(0, FALSE); /* end of setup phase, try to get fresh quantum and give time to counter thread and kernel to setup priorities */
 
         /* Cache and CPU scheduler warm-up won't affect anything in the measurement loop, so ramp up frequency/P-states to a high non-AVX Turbo/P-state without vmexits */
         timer::engine::warmup_cpu(serialize_available);
@@ -7007,12 +7148,83 @@ public:
                     best_ref_l = ref_l;
                 }
             }
+
+            size_t exc_valid = 0;
+            size_t exc_invalid = 0;
+
+            /* 
+             * I choose #DB because it forces a L0 to L1 nested vmexit when Hyper-V is running
+             * L0 must sync the exception bitmap with L1 in order for this to receive pending events, as the CPU always jumps to the hv running on the metal
+             * VMCB/VMCS public dumps shows Hyper-V intercepts #DB, #AC and #MC
+             */
+            while (exc_valid < batch_size && exc_invalid < local_max_attempts) {
+                timer::timer_tick_t db_pre, db_post, api_pre, api_post, sync;
+
+                sync = *counter_ptr;
+                while (*counter_ptr == sync);
+                sync = *counter_ptr;
+                VMAWARE_PREFETCH(counter_ptr, _MM_HINT_T0);
+                while (*counter_ptr == sync);
+
+                db_pre = *counter_ptr;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                exception_handler::execute_db();
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                db_post = *counter_ptr;
+
+                sync = *counter_ptr;
+                while (*counter_ptr == sync);
+                sync = *counter_ptr;
+                VMAWARE_PREFETCH(counter_ptr, _MM_HINT_T0);
+                while (*counter_ptr == sync);
+
+                volatile bool flag = false;
+                CONTEXT ctx{};
+                ctx.ContextFlags = CONTEXT_FULL;
+
+                EXCEPTION_RECORD er{};
+                er.ExceptionCode = EXCEPTION_SINGLE_STEP;
+                er.ExceptionFlags = 0;
+
+                api_pre = *counter_ptr;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                exception_handler::nt_raise_exception(zw_raise_exception, &er, &ctx, &flag);
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                api_post = *counter_ptr;
+
+                if (api_post > api_pre && db_post > db_pre) {
+                    api_samples[exc_valid] = api_post - api_pre;
+                    db_samples[exc_valid] = db_post - db_pre;
+                    exc_valid++;
+                }
+                else {
+                    exc_invalid++;
+                }
+
+                timer::engine::burn_random_cycles(ct_seed, api_post, db_post);
+            }
+
+            if (exc_valid > 0) {
+                std::vector<timer::timer_tick_t> active_api_samples(api_samples.begin(), api_samples.begin() + exc_valid);
+                std::vector<timer::timer_tick_t> active_db_samples(db_samples.begin(), db_samples.begin() + exc_valid);
+
+                const timer::timer_tick_t api_l = timer::engine::calculate_latency(active_api_samples);
+                const timer::timer_tick_t db_l = timer::engine::calculate_latency(active_db_samples);
+
+                if (api_l < best_api_l) {
+                    best_api_l = api_l;
+                }
+                if (db_l < best_db_l) {
+                    best_db_l = db_l;
+                }
+            }
         }
 
         state.test_done.store(true, std::memory_order_release);
         t1.join();
 
-        const bool invalid_measurement = (best_ref_l == (std::numeric_limits<timer::timer_tick_t>::max)()) && (best_cpuid_l == (std::numeric_limits<timer::timer_tick_t>::max)());
+        constexpr auto uninitialized_tick = (std::numeric_limits<timer::timer_tick_t>::max)();
+        const bool invalid_measurement = (best_ref_l == uninitialized_tick && best_cpuid_l == uninitialized_tick) || (best_db_l == uninitialized_tick && best_api_l == uninitialized_tick);
 
         /* Analyze instruction latency results and report exactly what VMAware found */
         if (!invalid_measurement) {
@@ -7029,6 +7241,15 @@ public:
                 debug("TIMER: Detected artificial IPI delivery to timing threads");
                 hypervisor_detected = true;
             }
+
+            const double exception_ratio = best_db_l ? (double)best_api_l / (double)best_db_l : 0.0;
+            debug("TIMER: Exception > VMM -> ", best_db_l, " | nVMM -> ", best_api_l, " | Ratio -> ", exception_ratio);
+
+            if (exception_ratio >= 4.0) {
+                debug("TIMER: Detected #DB interception latency");
+                debug("TIMER: If you have #DB interception disabled, it means you're running under nested");
+                hypervisor_detected = true;
+            }
         }
         else {
             /* 
@@ -7037,7 +7258,7 @@ public:
              * If there's no single valid reference, it means that the two threads were running in the same physical core, even if the kernel (and thus, VMAware) believes they were on different cores 
              * This is proof that there's another OS scheduler running on top of the current guest OS
              */
-            debug("TIMER: Detected hypervisor with no 1:1 vCPU pinning");
+            debug("TIMER: Detected hypervisor with no 1:1 vCPU pinning (timing desynchronization)");
             hypervisor_detected = true;
         }
 
@@ -7050,6 +7271,12 @@ public:
         }
         if (ref_samples_locked) {
             VirtualUnlock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+        }
+        if (api_samples_locked) {
+            VirtualUnlock(api_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+        }
+        if (db_samples_locked) {
+            VirtualUnlock(db_samples.data(), batch_size * sizeof(timer::timer_tick_t));
         }
 
         return hypervisor_detected;
@@ -8343,26 +8570,11 @@ public:
 
 
     /**
-     * @brief Check for default Azure hostname format (Azure uses Hyper-V as their base VM brand)
+     * @brief Check for default Azure hostname format
      * @category Windows, Linux
      * @implements VM::AZURE
      */
     [[nodiscard]] static bool azure() noexcept {
-        /*
-         * Returns 1u if alphanumeric, 0u if not. Here we use unsigned integers
-         * instead of booleans to avoid static analysis warnings
-         * about bitwise operations on boolean types
-         */
-        auto is_alnum_ascii = [](const char c) noexcept -> unsigned int {
-            const auto l = static_cast<unsigned char>(c | 0x20);
-            const auto d = static_cast<unsigned char>(c);
-
-            const unsigned int is_letter = (static_cast<unsigned char>(l - 'a') < 26) ? 1u : 0u;
-            const unsigned int is_digit = (static_cast<unsigned char>(d - '0') < 10) ? 1u : 0u;
-
-            return is_letter | is_digit;
-        };
-
     #if (WINDOWS)
         char buf[MAX_COMPUTERNAME_LENGTH + 1];
         DWORD len = sizeof(buf);
