@@ -465,33 +465,17 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: vmaware-linux-amd64
-          path: build/release
+          path: build
 
-      - name: Download amd64 debug binary
-        uses: actions/download-artifact@v4
-        with:
-          name: vmaware-linux-amd64-debug
-          path: build/debug
-
-      - name: Full CLI output (Release)
+      - name: Full CLI output
         run: |
-          chmod +x build/release/vmaware
-          build/release/vmaware || true
+          chmod +x build/vmaware
+          build/vmaware || true
 
-      - name: Run CLI test suite (Release)
+      - name: Run CLI test suite
         run: |
-          chmod +x build/release/vmaware
-          bash auxiliary/test_cli.sh build/release/vmaware
-
-      - name: Full CLI output (Debug)
-        run: |
-          chmod +x build/debug/vmaware
-          build/debug/vmaware || true
-
-      - name: Run CLI test suite (Debug)
-        run: |
-          chmod +x build/debug/vmaware
-          bash auxiliary/test_cli.sh build/debug/vmaware
+          chmod +x build/vmaware
+          bash auxiliary/test_cli.sh build/vmaware
 
   cli-test-macos:
     needs: [macos]
@@ -504,65 +488,33 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: vmaware-macos-aarch64
-          path: build/aarch64-release
-
-      - name: Download macOS aarch64 debug binary
-        uses: actions/download-artifact@v4
-        with:
-          name: vmaware-macos-aarch64-debug
-          path: build/aarch64-debug
+          path: build/aarch64
 
       - name: Download macOS x86_64 binary
         uses: actions/download-artifact@v4
         with:
           name: vmaware-macos-x86_64
-          path: build/x86_64-release
+          path: build/x86_64
 
-      - name: Download macOS x86_64 debug binary
-        uses: actions/download-artifact@v4
-        with:
-          name: vmaware-macos-x86_64-debug
-          path: build/x86_64-debug
-
-      - name: Full CLI output (aarch64 Release)
+      - name: Full CLI output (aarch64)
         run: |
-          chmod +x build/aarch64-release/vmaware
-          build/aarch64-release/vmaware || true
+          chmod +x build/aarch64/vmaware
+          build/aarch64/vmaware || true
 
-      - name: Run CLI test suite (aarch64 Release)
+      - name: Run CLI test suite (aarch64)
         run: |
-          chmod +x build/aarch64-release/vmaware
-          bash auxiliary/test_cli.sh build/aarch64-release/vmaware
+          chmod +x build/aarch64/vmaware
+          bash auxiliary/test_cli.sh build/aarch64/vmaware
 
-      - name: Full CLI output (aarch64 Debug)
+      - name: Full CLI output (x86_64)
         run: |
-          chmod +x build/aarch64-debug/vmaware
-          build/aarch64-debug/vmaware || true
+          chmod +x build/x86_64/vmaware
+          build/x86_64/vmaware || true
 
-      - name: Run CLI test suite (aarch64 Debug)
+      - name: Run CLI test suite (x86_64)
         run: |
-          chmod +x build/aarch64-debug/vmaware
-          bash auxiliary/test_cli.sh build/aarch64-debug/vmaware
-
-      - name: Full CLI output (x86_64 Release)
-        run: |
-          chmod +x build/x86_64-release/vmaware
-          build/x86_64-release/vmaware || true
-
-      - name: Run CLI test suite (x86_64 Release)
-        run: |
-          chmod +x build/x86_64-release/vmaware
-          bash auxiliary/test_cli.sh build/x86_64-release/vmaware
-
-      - name: Full CLI output (x86_64 Debug)
-        run: |
-          chmod +x build/x86_64-debug/vmaware
-          build/x86_64-debug/vmaware || true
-
-      - name: Run CLI test suite (x86_64 Debug)
-        run: |
-          chmod +x build/x86_64-debug/vmaware
-          bash auxiliary/test_cli.sh build/x86_64-debug/vmaware
+          chmod +x build/x86_64/vmaware
+          bash auxiliary/test_cli.sh build/x86_64/vmaware
 
   cli-test-windows:
     needs: [windows]
