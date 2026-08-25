@@ -75,6 +75,59 @@ jobs:
             compiler: s390x-linux-gnu-g++
             package: g++-s390x-linux-gnu
             processor: s390x
+          # Additional Linux active upstream CPU architectures
+          - arch: alpha
+            compiler: alpha-linux-gnu-g++
+            package: g++-alpha-linux-gnu
+            processor: alpha
+          - arch: hppa
+            compiler: hppa-linux-gnu-g++
+            package: g++-hppa-linux-gnu
+            processor: hppa
+          - arch: loongarch64
+            compiler: loongarch64-linux-gnu-g++
+            package: g++-loongarch64-linux-gnu
+            processor: loongarch64
+          - arch: m68k
+            compiler: m68k-linux-gnu-g++
+            package: g++-m68k-linux-gnu
+            processor: m68k
+          - arch: mips
+            compiler: mips-linux-gnu-g++
+            package: g++-mips-linux-gnu
+            processor: mips
+          - arch: mipsel
+            compiler: mipsel-linux-gnu-g++
+            package: g++-mipsel-linux-gnu
+            processor: mipsel
+          - arch: mips64
+            compiler: mips64-linux-gnuabi64-g++
+            package: g++-mips64-linux-gnuabi64
+            processor: mips64
+          - arch: or1k
+            compiler: or1k-linux-gnu-g++
+            package: g++-or1k-linux-gnu
+            processor: or1k
+          - arch: powerpc
+            compiler: powerpc-linux-gnu-g++
+            package: g++-powerpc-linux-gnu
+            processor: powerpc
+          - arch: ppc64
+            compiler: powerpc64-linux-gnu-g++
+            package: g++-powerpc64-linux-gnu
+            processor: ppc64
+          - arch: sh4
+            compiler: sh4-linux-gnu-g++
+            package: g++-sh4-linux-gnu
+            processor: sh4
+          - arch: sparc64
+            compiler: sparc64-linux-gnu-g++
+            package: g++-sparc64-linux-gnu
+            processor: sparc64
+          - arch: x32
+            compiler: x86_64-linux-gnux32-g++
+            package: g++-x86-64-linux-gnux32
+            processor: x86_64
 
     steps:
       - uses: actions/checkout@v4
@@ -188,6 +241,14 @@ jobs:
             build_type: Debug
             build_config: Debug
             debug_output: ON
+          # macOS Universal fat binary configurations
+          - arch: universal
+            cmake_arch: "arm64;x86_64"
+          - arch: universal-debug
+            cmake_arch: "arm64;x86_64"
+            build_type: Debug
+            build_config: Debug
+            debug_output: ON
 
     steps:
       - uses: actions/checkout@v4
@@ -197,7 +258,7 @@ jobs:
           cmake -B build \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type || 'Dev_Release' }} \
             -DDEBUG_OUTPUT=${{ matrix.debug_output || 'OFF' }} \
-            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} \
+            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.cmake_arch }}" \
             -S ${{ github.workspace }}
 
       - name: Build
@@ -309,6 +370,19 @@ jobs:
             build_config: Release
             debug_output: OFF
             artifact: vmaware-arm32_release.exe
+
+          # Windows 11 ARM64EC (Emulation Compatible)
+          - config: arm64ec-debug
+            platform: ARM64EC
+            build_config: Debug
+            debug_output: ON
+            artifact: vmaware-arm64ec_debug.exe
+
+          - config: arm64ec-release
+            platform: ARM64EC
+            build_config: Release
+            debug_output: OFF
+            artifact: vmaware-arm64ec_release.exe
 
     steps:
       - uses: actions/checkout@v4
