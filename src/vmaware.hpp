@@ -16584,19 +16584,11 @@ public:
         return "Running on bare metal";
     }
 
-
-    VMAWARE_DEPRECATED("is_hardened() is scheduled for removal in post-2.8.1. Use detect() instead.")
-    static bool is_hardened(const flagset& flags = core::generate_default()) noexcept {
-        VMAWARE_UNUSED(flags);
-        return false;
-    }
-
     struct vmaware {
         std::string brand;
         std::string type;
         std::string conclusion;
         bool is_vm = false;
-        bool is_hardened = false;
         u8 percentage = 0;
         u8 detected_count = 0;
         u16 technique_count = 0;
@@ -16620,7 +16612,6 @@ public:
             type = VM::type(flags);
             conclusion = VM::conclusion(flags);
             is_vm = VM::detect(flags);
-            is_hardened = false;
             percentage = VM::percentage(flags);
             detected_count = VM::detected_count(flags);
             technique_count = VM::technique_count;
