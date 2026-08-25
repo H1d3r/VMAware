@@ -2819,10 +2819,20 @@ public:
                 { "a8-8600p", 4, false },
                 { "a8-8650b", 4, false },
 
-                /* AI Series (Strix Point) - Hybrid, but both Zen 5 and Zen 5c support SMT */
-                { "365", 20, true }, /* Ryzen AI 7 365 */
-                { "370", 24, true }, /* Ryzen AI 9 HX 370 */
-                { "375", 24, true }, /* Ryzen AI 9 HX 375 */
+                /* AI Series (Strix Point) */
+                { "365", 20, true },
+                { "370", 24, true }, 
+                { "375", 24, true }, 
+                { "350", 16, true },
+                { "340", 12, true },
+
+                /* Ryzen AI PRO 300 Series (Enterprise Strix/Krackan Point) */
+                { "pro-340", 12, true },
+                { "pro-350", 16, true },
+                { "pro-360", 16, true },
+                { "pro-365", 20, true },
+                { "pro-370", 24, true },
+                { "pro-375", 24, true },
 
                 /* Athlon */
                 { "3050c", 2, false },
@@ -3205,6 +3215,7 @@ public:
                 { "9950x", 32, true },
                 { "9950x3d", 32, true },
                 { "9955hx", 32, true },
+                { "9600x3d", 12, true },
                 { "5945", 24, true },
                 { "6950h", 16, true },
                 { "6950hs", 16, true },
@@ -4854,25 +4865,33 @@ public:
         #if (LINUX)
             VMAWARE_ASSUME(executable != nullptr);
             #if (VMAWARE_CPP >= 17)
-            for (const auto& entry : std::filesystem::directory_iterator("/proc")) {
-                if (!entry.is_directory()) {
-                    continue;
-                }
-
-                const std::string filename = entry.path().filename().string();
-            #else
-            std::unique_ptr<DIR, decltype(&closedir)> dir(opendir("/proc"), closedir);
-            if (!dir) {
-                debug("util::is_proc_running: ", "failed to open /proc directory");
+            std::error_code ec;
+            auto dir_iter = std::filesystem::directory_iterator("/proc", ec);
+            if (ec) {
                 return false;
             }
 
-            struct dirent* entry;
-            while ((entry = readdir(dir.get())) != nullptr) {
-                std::string filename(entry->d_name);
-                if (filename == "." || filename == "..") {
-                    continue;
+            try {
+                for (const auto& entry : dir_iter) {
+                    std::error_code file_ec;
+                    if (!entry.is_directory(file_ec)) {
+                        continue;
+                    }
+
+                    const std::string filename = entry.path().filename().string();
+            #else
+                std::unique_ptr<DIR, decltype(&closedir)> dir(opendir("/proc"), closedir);
+                if (!dir) {
+                    debug("util::is_proc_running: ", "failed to open /proc directory");
+                    return false;
                 }
+
+                struct dirent* entry;
+                while ((entry = readdir(dir.get())) != nullptr) {
+                    std::string filename(entry->d_name);
+                    if (filename == "." || filename == "..") {
+                        continue;
+                    }
             #endif
                 if (!string::is_numeric(filename)) {
                     continue;
@@ -4916,11 +4935,15 @@ public:
                 return true;
             }
 
+        #if (VMAWARE_CPP >= 17)
+            } catch (...) {}
+        #endif
+
             return false;
         #else
             VMAWARE_UNUSED(executable);
             return false;
-        #endif
+        #endif  
         }
 
 
@@ -7255,15 +7278,15 @@ public:
                 }
             }
 
-            size_t exc_valid = 0;
-            size_t exc_invalid = 0;
+            valid = 0;
+            invalid = 0;
 
             /* 
              * I choose #DB because it forces a L0 to L1 nested vmexit when Hyper-V is running
              * L0 must sync the exception bitmap with L1 in order for this to receive pending events, as the CPU always jumps to the hv running on the metal
              * VMCB/VMCS public dumps shows Hyper-V intercepts #DB, #AC and #MC
              */
-            while (exc_valid < batch_size && exc_invalid < local_max_attempts) {
+            while (valid < batch_size && invalid < local_max_attempts) {
                 timer::timer_tick_t db_pre, db_post, api_pre, api_post, sync;
 
                 sync = *counter_ptr;
@@ -7299,20 +7322,20 @@ public:
                 api_post = *counter_ptr;
 
                 if (api_post > api_pre && db_post > db_pre) {
-                    api_samples[exc_valid] = api_post - api_pre;
-                    db_samples[exc_valid] = db_post - db_pre;
-                    exc_valid++;
+                    api_samples[valid] = api_post - api_pre;
+                    db_samples[valid] = db_post - db_pre;
+                    valid++;
                 }
                 else {
-                    exc_invalid++;
+                    invalid++;
                 }
 
                 timer::engine::burn_random_cycles(ct_seed, api_post, db_post);
             }
 
-            if (exc_valid > 0) {
-                std::vector<timer::timer_tick_t> active_api_samples(api_samples.begin(), api_samples.begin() + exc_valid);
-                std::vector<timer::timer_tick_t> active_db_samples(db_samples.begin(), db_samples.begin() + exc_valid);
+            if (valid > 0) {
+                std::vector<timer::timer_tick_t> active_api_samples(api_samples.begin(), api_samples.begin() + valid);
+                std::vector<timer::timer_tick_t> active_db_samples(db_samples.begin(), db_samples.begin() + valid);
 
                 const timer::timer_tick_t api_l = timer::engine::calculate_latency(active_api_samples);
                 const timer::timer_tick_t db_l = timer::engine::calculate_latency(active_db_samples);
@@ -9371,40 +9394,61 @@ public:
                 continue;
             }
             const long file_size = statbuf.st_size;
-            if (file_size <= 0) {
-                debug("FIRMWARE: file empty or error ", entry->d_name);
-                continue;
-            }
-
-            if (file_size > MAX_TABLE_SIZE) {
-                debug("FIRMWARE: table too large, skipping ", entry->d_name);
-                continue;
-            }
-
-            const size_t file_size_u = static_cast<size_t>(file_size);
 
             std::vector<u8> buffer;
-            try {
-                buffer.resize(file_size_u);
-            }
-            catch (...) {
-                debug("FIRMWARE: failed to allocate memory for buffer");
-                continue;
-            }
+            size_t file_size_u = 0;
 
-            size_t total = 0;
-            while (total < file_size_u) {
-                const ssize_t n = read(fdguard.fd, buffer.data() + total, file_size_u - total);
-                if (n <= 0) {
-                    break;
+            if (file_size <= 0) {
+                constexpr size_t chunk_size = 4096;
+                u8 chunk[chunk_size];
+                while (true) {
+                    const ssize_t n = read(fdguard.fd, chunk, chunk_size);
+                    if (n < 0) {
+                        break;
+                    }
+                    if (n == 0) {
+                        break;
+                    }
+                    buffer.insert(buffer.end(), chunk, chunk + n);
+                    if (buffer.size() > MAX_TABLE_SIZE) {
+                        debug("FIRMWARE: table size exceeds maximum limit, truncating");
+                        break;
+                    }
+                }
+                file_size_u = buffer.size();
+                if (file_size_u == 0) {
+                    debug("FIRMWARE: file empty or read error ", entry->d_name);
+                    continue;
+                }
+            }
+            else {
+                if (file_size > MAX_TABLE_SIZE) {
+                    debug("FIRMWARE: table too large, skipping ", entry->d_name);
+                    continue;
                 }
 
-                total += static_cast<size_t>(n);
-            }
+                file_size_u = static_cast<size_t>(file_size);
+                try {
+                    buffer.resize(file_size_u);
+                }
+                catch (...) {
+                    debug("FIRMWARE: failed to allocate memory for buffer");
+                    continue;
+                }
 
-            if (total != file_size_u) {
-                debug("FIRMWARE: could not read full table ", entry->d_name);
-                continue;
+                size_t total = 0;
+                while (total < file_size_u) {
+                    const ssize_t n = read(fdguard.fd, buffer.data() + total, file_size_u - total);
+                    if (n <= 0) {
+                        break;
+                    }
+                    total += static_cast<size_t>(n);
+                }
+
+                if (total != file_size_u) {
+                    debug("FIRMWARE: could not read full table ", entry->d_name);
+                    continue;
+                }
             }
 
             if (scan_buffer(buffer.data(), file_size_u, true)) {
