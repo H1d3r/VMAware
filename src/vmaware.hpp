@@ -852,7 +852,6 @@ public:
     };
 
     enum class brand_enum : u8 {
-        INVALID,
         VBOX,
         VMWARE,
         VMWARE_EXPRESS,
@@ -928,7 +927,6 @@ public:
 
     static constexpr u8 enum_size = MULTIPLE; /* get enum size through value of last element */
     static constexpr u8 settings_count = static_cast<u8>(MULTIPLE - HIGH_THRESHOLD + 1); /* get number of settings technique flags */
-    static constexpr u8 INVALID = 255; /* explicit invalid technique macro */
     static constexpr u16 base_technique_count = HIGH_THRESHOLD; /* original technique count, constant on purpose (can also be used as a base count value if custom techniques are added) */
     static constexpr u16 threshold_score = 150; /* standard threshold score */
     static constexpr u16 high_threshold_score = 300; /* new threshold score from 150 to 300 if VM::HIGH_THRESHOLD flag is enabled */
@@ -5947,7 +5945,6 @@ public:
             if (active_brands.size() > 1) {
                 remove(brand_enum::HYPERV_ROOT);
                 remove(brand_enum::NULL_BRAND);
-                remove(brand_enum::INVALID);
             }
 
             /* If filtering emptied the vector, fall back to NULL_BRAND */
@@ -5964,52 +5961,52 @@ public:
             struct rule {
                 brand_enum a;
                 brand_enum b;
-                brand_enum c; /* brand_enum::INVALID if unused (double merge) */
+                brand_enum c; /* brand_enum::NULL_BRAND if unused (double merge) */
                 brand_enum result;
             };
 
             static constexpr rule merge_rules[] = {
                 /* Double merges */
-                { brand_enum::VPC, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::HYPERV_VPC },
+                { brand_enum::VPC, brand_enum::HYPERV, brand_enum::NULL_BRAND, brand_enum::HYPERV_VPC },
 
-                { brand_enum::AZURE_HYPERV, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::AZURE_HYPERV },
-                { brand_enum::AZURE_HYPERV, brand_enum::VPC, brand_enum::INVALID, brand_enum::AZURE_HYPERV },
-                { brand_enum::AZURE_HYPERV, brand_enum::HYPERV_VPC, brand_enum::INVALID, brand_enum::AZURE_HYPERV },
+                { brand_enum::AZURE_HYPERV, brand_enum::HYPERV, brand_enum::NULL_BRAND, brand_enum::AZURE_HYPERV },
+                { brand_enum::AZURE_HYPERV, brand_enum::VPC, brand_enum::NULL_BRAND, brand_enum::AZURE_HYPERV },
+                { brand_enum::AZURE_HYPERV, brand_enum::HYPERV_VPC, brand_enum::NULL_BRAND, brand_enum::AZURE_HYPERV },
 
-                { brand_enum::QEMU, brand_enum::KVM, brand_enum::INVALID, brand_enum::QEMU_KVM },
-                { brand_enum::KVM, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::KVM_HYPERV },
-                { brand_enum::QEMU, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
-                { brand_enum::QEMU_KVM, brand_enum::HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::QEMU, brand_enum::KVM, brand_enum::NULL_BRAND, brand_enum::QEMU_KVM },
+                { brand_enum::KVM, brand_enum::HYPERV, brand_enum::NULL_BRAND, brand_enum::KVM_HYPERV },
+                { brand_enum::QEMU, brand_enum::HYPERV, brand_enum::NULL_BRAND, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::QEMU_KVM, brand_enum::HYPERV, brand_enum::NULL_BRAND, brand_enum::QEMU_KVM_HYPERV },
 
-                { brand_enum::KVM, brand_enum::HYPERV_VPC, brand_enum::INVALID, brand_enum::KVM_HYPERV },
-                { brand_enum::QEMU, brand_enum::HYPERV_VPC, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
-                { brand_enum::QEMU_KVM, brand_enum::HYPERV_VPC, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::KVM, brand_enum::HYPERV_VPC, brand_enum::NULL_BRAND, brand_enum::KVM_HYPERV },
+                { brand_enum::QEMU, brand_enum::HYPERV_VPC, brand_enum::NULL_BRAND, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::QEMU_KVM, brand_enum::HYPERV_VPC, brand_enum::NULL_BRAND, brand_enum::QEMU_KVM_HYPERV },
 
-                { brand_enum::KVM, brand_enum::KVM_HYPERV, brand_enum::INVALID, brand_enum::KVM_HYPERV },
-                { brand_enum::QEMU, brand_enum::KVM_HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
-                { brand_enum::QEMU_KVM, brand_enum::KVM_HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::KVM, brand_enum::KVM_HYPERV, brand_enum::NULL_BRAND, brand_enum::KVM_HYPERV },
+                { brand_enum::QEMU, brand_enum::KVM_HYPERV, brand_enum::NULL_BRAND, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::QEMU_KVM, brand_enum::KVM_HYPERV, brand_enum::NULL_BRAND, brand_enum::QEMU_KVM_HYPERV },
 
-                { brand_enum::HYPERV_VPC, brand_enum::KVM_HYPERV, brand_enum::INVALID, brand_enum::KVM_HYPERV },
-                { brand_enum::HYPERV, brand_enum::KVM_HYPERV, brand_enum::INVALID, brand_enum::KVM_HYPERV },
-                { brand_enum::HYPERV_VPC, brand_enum::QEMU_KVM_HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
-                { brand_enum::HYPERV, brand_enum::QEMU_KVM_HYPERV, brand_enum::INVALID, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::HYPERV_VPC, brand_enum::KVM_HYPERV, brand_enum::NULL_BRAND, brand_enum::KVM_HYPERV },
+                { brand_enum::HYPERV, brand_enum::KVM_HYPERV, brand_enum::NULL_BRAND, brand_enum::KVM_HYPERV },
+                { brand_enum::HYPERV_VPC, brand_enum::QEMU_KVM_HYPERV, brand_enum::NULL_BRAND, brand_enum::QEMU_KVM_HYPERV },
+                { brand_enum::HYPERV, brand_enum::QEMU_KVM_HYPERV, brand_enum::NULL_BRAND, brand_enum::QEMU_KVM_HYPERV },
 
-                /* Triple merge */
+                /* Triple merge (retains third brand) */
                 { brand_enum::QEMU, brand_enum::KVM, brand_enum::KVM_HYPERV, brand_enum::QEMU_KVM_HYPERV },
 
                 /* VMware merges */
-                { brand_enum::VMWARE, brand_enum::VMWARE_FUSION, brand_enum::INVALID, brand_enum::VMWARE_FUSION },
-                { brand_enum::VMWARE, brand_enum::VMWARE_EXPRESS, brand_enum::INVALID, brand_enum::VMWARE_EXPRESS },
-                { brand_enum::VMWARE, brand_enum::VMWARE_ESX, brand_enum::INVALID, brand_enum::VMWARE_ESX },
-                { brand_enum::VMWARE, brand_enum::VMWARE_GSX, brand_enum::INVALID, brand_enum::VMWARE_GSX },
-                { brand_enum::VMWARE, brand_enum::VMWARE_WORKSTATION, brand_enum::INVALID, brand_enum::VMWARE_WORKSTATION },
+                { brand_enum::VMWARE, brand_enum::VMWARE_FUSION, brand_enum::NULL_BRAND, brand_enum::VMWARE_FUSION },
+                { brand_enum::VMWARE, brand_enum::VMWARE_EXPRESS, brand_enum::NULL_BRAND, brand_enum::VMWARE_EXPRESS },
+                { brand_enum::VMWARE, brand_enum::VMWARE_ESX, brand_enum::NULL_BRAND, brand_enum::VMWARE_ESX },
+                { brand_enum::VMWARE, brand_enum::VMWARE_GSX, brand_enum::NULL_BRAND, brand_enum::VMWARE_GSX },
+                { brand_enum::VMWARE, brand_enum::VMWARE_WORKSTATION, brand_enum::NULL_BRAND, brand_enum::VMWARE_WORKSTATION },
 
-                { brand_enum::VMWARE_HARD, brand_enum::VMWARE, brand_enum::INVALID, brand_enum::VMWARE_HARD },
-                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_FUSION, brand_enum::INVALID, brand_enum::VMWARE_HARD },
-                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_EXPRESS, brand_enum::INVALID, brand_enum::VMWARE_HARD },
-                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_ESX, brand_enum::INVALID, brand_enum::VMWARE_HARD },
-                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_GSX, brand_enum::INVALID, brand_enum::VMWARE_HARD },
-                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_WORKSTATION, brand_enum::INVALID, brand_enum::VMWARE_HARD }
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE, brand_enum::NULL_BRAND, brand_enum::VMWARE_HARD },
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_FUSION, brand_enum::NULL_BRAND, brand_enum::VMWARE_HARD },
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_EXPRESS, brand_enum::NULL_BRAND, brand_enum::VMWARE_HARD },
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_ESX, brand_enum::NULL_BRAND, brand_enum::VMWARE_HARD },
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_GSX, brand_enum::NULL_BRAND, brand_enum::VMWARE_HARD },
+                { brand_enum::VMWARE_HARD, brand_enum::VMWARE_WORKSTATION, brand_enum::NULL_BRAND, brand_enum::VMWARE_HARD }
             };
 
             std::bitset<MAX_BRANDS> current_active = brand_hits;
@@ -6028,12 +6025,13 @@ public:
 
                 const bool a_hit = brand_hits.test(a_idx);
                 const bool b_hit = brand_hits.test(b_idx);
-                const bool c_hit = (rule.c == brand_enum::INVALID) || brand_hits.test(c_idx);
+
+                const bool c_hit = (rule.c == brand_enum::NULL_BRAND) || brand_hits.test(c_idx);
 
                 if (a_hit && b_hit && c_hit) {
                     current_active.reset(a_idx);
                     current_active.reset(b_idx);
-                    if (rule.c != brand_enum::INVALID) {
+                    if (rule.c != brand_enum::NULL_BRAND) {
                         current_active.reset(c_idx);
                     }
                     current_active.set(res_idx);
@@ -6064,7 +6062,6 @@ public:
 
         static VMAWARE_CONSTEXPR const char* brand_enum_to_string(const brand_enum brand) noexcept {
             switch (brand) {
-                case brand_enum::INVALID:               return "Invalid";
                 case brand_enum::VBOX:                  return VM::brands::VBOX;
                 case brand_enum::VMWARE:                return VM::brands::VMWARE;
                 case brand_enum::VMWARE_EXPRESS:        return VM::brands::VMWARE_EXPRESS;
@@ -16615,9 +16612,8 @@ public:
             case brand_enum::BAREVISOR: return "Hypervisor (Type 1)";
             case brand_enum::HYPERPLATFORM: return "Hypervisor (Type 1)";
             case brand_enum::MINIVISOR: return "Hypervisor (Type 1)";
-            case brand_enum::HYPERV_ROOT: return "Host machine"; /* this refers to the type 1 hypervisor where Windows normally runs under, we put "Host machine" to clarify you're not running under a traditional VM if this is detected */
+            case brand_enum::HYPERV_ROOT: return "Host machine"; /* This refers to the type 1 hypervisor where Windows normally runs under, we put "Host machine" to clarify you're not running under a traditional VM if this is detected */
             case brand_enum::NULL_BRAND: return "Unknown";
-            case brand_enum::INVALID: return "Invalid";
         }
 
         return "Invalid";
