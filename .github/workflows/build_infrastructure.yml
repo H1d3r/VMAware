@@ -75,7 +75,7 @@ jobs:
             compiler: s390x-linux-gnu-g++
             package: g++-s390x-linux-gnu
             processor: s390x
-          # Additional Linux active upstream CPU architectures
+          # Additional fully-supported Linux cross-compilers
           - arch: alpha
             compiler: alpha-linux-gnu-g++
             package: g++-alpha-linux-gnu
@@ -84,10 +84,6 @@ jobs:
             compiler: hppa-linux-gnu-g++
             package: g++-hppa-linux-gnu
             processor: hppa
-          - arch: loongarch64
-            compiler: loongarch64-linux-gnu-g++
-            package: g++-loongarch64-linux-gnu
-            processor: loongarch64
           - arch: m68k
             compiler: m68k-linux-gnu-g++
             package: g++-m68k-linux-gnu
@@ -104,10 +100,6 @@ jobs:
             compiler: mips64-linux-gnuabi64-g++
             package: g++-mips64-linux-gnuabi64
             processor: mips64
-          - arch: or1k
-            compiler: or1k-linux-gnu-g++
-            package: g++-or1k-linux-gnu
-            processor: or1k
           - arch: powerpc
             compiler: powerpc-linux-gnu-g++
             package: g++-powerpc-linux-gnu

@@ -254,7 +254,13 @@
     #error "VMAware only supports C++11 or above, set your compiler flag to '-std=c++20' for gcc/clang, or '/std:c++20' for MSVC"
 #endif
         
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(_M_ARM64EC) || defined(__arm64ec__)
+    #define ARM64EC 1
+#else
+    #define ARM64EC 0
+#endif
+
+#if (defined(__x86_64__) || defined(_M_X64)) && !ARM64EC
     #define x86_64 1
 #else
     #define x86_64 0
@@ -272,7 +278,7 @@
     #define x86 0
 #endif
     
-#if defined(__aarch64__) || defined(_M_ARM64) || defined(__ARM_LINUX_COMPILER__) || defined(__arm64__)
+#if (defined(__aarch64__) || defined(_M_ARM64) || defined(__ARM_LINUX_COMPILER__) || defined(__arm64__)) && !ARM64EC
     #define ARM64 1
 #else
     #define ARM64 0
