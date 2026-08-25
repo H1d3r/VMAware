@@ -15,7 +15,7 @@
 The library is:
 - Very easy to use
 - Cross-platform (Windows + MacOS + Linux)
-- Multi-architecture compatible (amd64, arm64, armhf, armel, i386, mips64el, ppc64el, riscv64, s390x)
+- Multi-architecture compatible (alpha, amd64, arm64, arm64ec, armel, armhf, hppa, i386, m68k, mips, mipsel, mips64, mips64el, powerpc, ppc64, ppc64el, riscv64, s390x, sh4, sparc64, x32)
 - Equipped with around 90 unique VM detection techniques [[list](https://github.com/NotRequiem/VMAware/blob/main/docs/documentation.md#flag-table)]
 - Built with the most cutting-edge techniques
 - Capable of detecting around 70 VM brands, including VMware, VirtualBox, QEMU, Hyper-V, and many more [[list](https://github.com/NotRequiem/VMAware/blob/main/docs/documentation.md#brand-table)]
