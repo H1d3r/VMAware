@@ -3507,13 +3507,18 @@ public:
             }
 
             static VMAWARE_CONSTEXPR void store_manufacturer(const char* VMAWARE_RESTRICT s) noexcept {
-                if (!s) { 
-                    manufacturer[0] = '\0'; 
-                    return; 
+                if (!s) {
+                    manufacturer[0] = '\0';
+                    return;
                 }
-                const size_t n = strlen(s);
                 const size_t cap = sizeof(manufacturer) - 1;
-                const size_t tocopy = (n > cap) ? cap : n;
+
+                size_t n = 0;
+                while (n < cap && s[n] != '\0') {
+                    n++;
+                }
+
+                const size_t tocopy = n;
                 for (size_t i = 0; i < tocopy; ++i) {
                     manufacturer[i] = s[i];
                 }
@@ -3526,9 +3531,14 @@ public:
                     model[0] = '\0';
                     return; 
                 }
-                const size_t n = strlen(s);
-                const size_t cap = sizeof(model) - 1;
-                const size_t tocopy = (n > cap) ? cap : n;
+                const size_t cap = sizeof(manufacturer) - 1;
+
+                size_t n = 0;
+                while (n < cap && s[n] != '\0') {
+                    n++;
+                }
+
+                const size_t tocopy = n;
                 for (size_t i = 0; i < tocopy; ++i) {
                     model[i] = s[i];
                 }
@@ -5367,7 +5377,11 @@ public:
 
                             size_t temp = offset + 12;
                             bool alg_error = false;
-                            for (u32 i = 0; i < digest_count && temp + 2 <= log_size; ++i) {
+                            for (u32 i = 0; i < digest_count; ++i) {
+                                if (log_size - temp < 2) {
+                                    alg_error = true;
+                                    break;
+                                }
                                 const u16 alg_id = *reinterpret_cast<const u16*>(log_buffer + temp);
                                 u16 digest_size = 0;
                                 bool alg_found = false;
@@ -5379,6 +5393,10 @@ public:
                                     }
                                 }
                                 if (!alg_found || digest_size == 0) {
+                                    alg_error = true;
+                                    break;
+                                }
+                                if (log_size - temp - 2 < digest_size) {
                                     alg_error = true;
                                     break;
                                 }
@@ -11318,25 +11336,28 @@ public:
             return false;
         }
 
-        for (ULONG i = 0; i < system_module_info_ex->NumberOfModules; ++i) {
-            const char* driverPath = reinterpret_cast<const char*>(system_module_info_ex->Module[i].ImageName);
+        const size_t max_modules = (ul_size - offsetof(_SYSTEM_MODULE_INFORMATION_EX, Module)) / sizeof(_SYSTEM_MODULE_INFORMATION);
+        const ULONG number_of_modules = (system_module_info_ex->NumberOfModules < max_modules) ? system_module_info_ex->NumberOfModules : static_cast<ULONG>(max_modules);
+
+        for (ULONG i = 0; i < number_of_modules; ++i) {
+            const char* driver_path = reinterpret_cast<const char*>(system_module_info_ex->Module[i].ImageName);
             if (
-                strstr(driverPath, "VBoxGuest") || /* only installed after vbox guest additions */
-                strstr(driverPath, "VBoxMouse") ||
-                strstr(driverPath, "VBoxSF")
+                strstr(driver_path, "VBoxGuest") || /* Only installed after vbox guest additions */
+                strstr(driver_path, "VBoxMouse") ||
+                strstr(driver_path, "VBoxSF")
                ) {
-                debug("DRIVERS: Detected VBox driver: ", driverPath);
+                debug("DRIVERS: Detected VBox driver: ", driver_path);
                 region_size = 0;
                 nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
                 return core::add(brand_enum::VBOX);
             }
 
             if (
-                strstr(driverPath, "vmusbmouse") ||
-                strstr(driverPath, "vmmouse") ||
-                strstr(driverPath, "vmmemctl")
+                strstr(driver_path, "vmusbmouse") ||
+                strstr(driver_path, "vmmouse") ||
+                strstr(driver_path, "vmmemctl")
                ) {
-                debug("DRIVERS: Detected VMware driver: ", driverPath);
+                debug("DRIVERS: Detected VMware driver: ", driver_path);
                 region_size = 0;
                 nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
                 return core::add(brand_enum::VMWARE);
@@ -14775,7 +14796,9 @@ public:
 
                 bool parse_error = false;
                 for (u32 i = 0; i < digest_count; ++i) {
-                    if (current_offset + local_offset > total_size || total_size - (current_offset + local_offset) < 2) {
+                    const size_t remaining_space = total_size - current_offset;
+
+                    if (local_offset > remaining_space || remaining_space - local_offset < 2) {
                         parse_error = true;
                         break;
                     }
@@ -14788,7 +14811,7 @@ public:
                         break;
                     }
 
-                    if (total_size - (current_offset + local_offset) < digest_size) {
+                    if (total_size - current_offset - local_offset < digest_size) {
                         parse_error = true;
                         break;
                     }
@@ -14799,13 +14822,13 @@ public:
                     break;
                 }
 
-                if (total_size - (current_offset + local_offset) < 4) {
+                if (total_size - current_offset - local_offset < 4) {
                     break;
                 }
                 const u32 event_size = read_u32(event_ptr + local_offset);
                 local_offset += 4;
 
-                if (total_size - (current_offset + local_offset) < event_size) {
+                if (total_size - current_offset - local_offset < event_size) {
                     break;
                 }
 
