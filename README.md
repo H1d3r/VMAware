@@ -46,7 +46,6 @@ int main() {
     std::cout << "VM name: " << VM::brand() << "\n";
     std::cout << "VM type: " << VM::type() << "\n";
     std::cout << "VM certainty: " << (int)VM::percentage() << "%" << "\n";
-    std::cout << "VM hardening: " << (VM::is_hardened() ? "likely" : "not found") << "\n";
 }
 ```
 
@@ -56,7 +55,6 @@ Virtual machine detected!
 VM name: VirtualBox
 VM type: Hypervisor (type 2)
 VM certainty: 100%
-VM hardening: not found
 ```
 
 <br>
