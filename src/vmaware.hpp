@@ -7389,7 +7389,7 @@ public:
             const double exception_ratio = best_db_l ? (double)best_db_l / (double)best_api_l : 0.0;
             debug("TIMER: Exception > VMM -> ", best_db_l, " | nVMM -> ", best_api_l, " | Ratio -> ", exception_ratio);
 
-            if (exception_ratio >= 4.0) {
+            if (exception_ratio >= 2.5) {
                 debug("TIMER: Detected #DB interception latency");
                 debug("TIMER: If you have #DB interception disabled, it means you're running under nested");
                 hypervisor_detected = true;
