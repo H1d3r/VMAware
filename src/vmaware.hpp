@@ -13257,58 +13257,6 @@ public:
             }
         }
 
-        const bool rdrand_support = ((c >> 30) & 1u) != 0;
-
-        auto is_rdrand_spoofed = [&]() noexcept -> bool {
-        #if (MSVC) && !(CLANG)
-            unsigned int v = 0;
-
-            __try {
-                const int ok = _rdrand32_step(&v);
-                if (ok && !rdrand_support) {
-                    debug("CPU_HEURISTIC: Hypervisor detected hiding RDRAND capabilities");
-                    return true;
-                }
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER) {
-                if (rdrand_support) {
-                    debug("CPU_HEURISTIC: Hypervisor did not handle RDRAND correctly");
-                    return true;
-                }
-            }
-        #else
-            unsigned int v = 0;
-            unsigned char ok = 0;
-
-            __try {
-                asm volatile("rdrand %0\n\tsetc %1"
-                    : "=r"(v), "=qm"(ok)
-                    :
-                    : "cc"
-                );
-
-                if (ok && !rdrand_support) {
-                    debug("CPU_HEURISTIC: Hypervisor detected hiding RDRAND capabilities");
-                    return true;
-                }
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER) {
-                if (rdrand_support) {
-                    debug("CPU_HEURISTIC: Hypervisor did not handle RDRAND correctly");
-                    return true;
-                }
-            }
-        #endif
-
-            return false;
-        };
-
-        if (!is_spoofed) {
-            if (is_rdrand_spoofed()) {
-                is_spoofed = true;
-            }
-        }
-
         if (old_affinity != 0) {
             SetThreadAffinityMask(current_thread, old_affinity);
         }
@@ -13528,190 +13476,84 @@ public:
             return spoofed;
         }
 
-        /*
-         * Ok so if the CPU is intel, the motherboard should be intel aswell (and same with AMD)
-         * this doesnt happen in most public hardened configs out there so lets abuse it
-         */
-        static constexpr unsigned int VID_INTEL = 0x8086;
-        static constexpr unsigned int VID_AMD_ATI = 0x1002;
-        static constexpr unsigned int VID_AMD_MICRO = 0x1022;
+        /* So if the CPU is Intel, the motherboard should be Intel aswell (and same with AMD) */
+        static constexpr u32 VID_INTEL = 0x8086;
+        static constexpr u32 VID_AMD_MICRO = 0x1022; /* AMD Core Motherboard / Chipset / Root Complex / PSP */
+        static constexpr u32 VID_AMD_ATI = 0x1002; /* AMD / ATI Graphics & legacy display controllers */
 
         enum class motherboard_vendor { Unknown = 0, Intel = 1, AMD = 2 };
 
         auto detect_motherboard = []() noexcept -> motherboard_vendor {
-            static constexpr const wchar_t* TOKENS[] = {
-                L"host bridge", L"northbridge", L"southbridge", L"pci bridge", L"chipset", L"pch", L"fch",
-                L"platform controller", L"lpc", L"sata controller", L"ahci", L"ide controller", L"usb controller",
-                L"xhci", L"usb3", L"usb 3.0", L"usb 3", L"pcie root", L"pci express", L" sata", nullptr
-            };
+            HDEVINFO handle_dev_info = SetupDiGetClassDevsW(
+                nullptr,
+                L"PCI",
+                nullptr,
+                DIGCF_ALLCLASSES | DIGCF_PRESENT
+            );
 
-            auto contains_token = [](const wchar_t* haystack) noexcept -> bool {
-                if (!haystack) {
-                    return false;
-                }
+            if (handle_dev_info == INVALID_HANDLE_VALUE) {
+                return motherboard_vendor::Unknown;
+            }
 
-                for (const wchar_t* const* t = TOKENS; *t; ++t) {
-                    const wchar_t* needle = *t;
-                    const wchar_t* h = haystack;
-
-                    /* Naive scan is faster than BM/KMP for very short needles/haystacks */
-                    while (*h) {
-                        const wchar_t* h_iter = h;
-                        const wchar_t* n_iter = needle;
-
-                        while (*n_iter) {
-                            wchar_t hc = *h_iter;
-                            if (hc >= L'A' && hc <= L'Z') {
-                                hc += 32;
-                            }
-                            if (hc != *n_iter) {
-                                break;
-                            }
-
-                            h_iter++;
-                            n_iter++;
-                        }
-
-                        if (!*n_iter) {
-                            return true;
-                        }
-                        h++;
+            auto parse_hex4 = [](const wchar_t* p) noexcept -> u32 {
+                u32 val = 0;
+                for (int i = 0; i < 4; ++i) {
+                    const wchar_t c = p[i];
+                    u32 nib;
+                    if (c >= L'0' && c <= L'9') {
+                        nib = static_cast<u32>(c - L'0');
                     }
-                }
-
-                return false;
-            };
-
-            auto find_vendor_hex = [](const wchar_t* wptr) noexcept -> u32 {
-                if (!wptr) {
-                    return 0;
-                }
-
-                const wchar_t* p = wptr;
-                while (*p) {
-                    /* Check for "VEN_" (case-insensitive) */
-                    if (p[0] != L'\0' && p[1] != L'\0' && p[2] != L'\0' && p[3] != L'\0') {
-                        if (((p[0] | 0x20) == L'v') &&
-                            ((p[1] | 0x20) == L'e') &&
-                            ((p[2] | 0x20) == L'n') &&
-                            (p[3] == L'_')) {
-
-                            const wchar_t* q = p + 4;
-                            u32 val = 0;
-                            int got = 0;
-
-                            while (got < 4 && *q) {
-                                const wchar_t c = *q;
-                                u32 nib = 0;
-                                if (c >= L'0' && c <= L'9') {
-                                    nib = static_cast<u32>(c - L'0');
-                                }
-                                else if ((c | 0x20) >= L'a' && (c | 0x20) <= L'f') {
-                                    nib = static_cast<u32>((c | 0x20) - L'a' + 10);
-                                }
-                                else {
-                                    break;
-                                }
-
-                                val = (val << 4) | nib;
-                                ++got; ++q;
-                            }
-
-                            if (got == 4) {
-                                return val;
-                            }
-                        }
+                    else if ((c | 0x20) >= L'a' && (c | 0x20) <= L'f') {
+                        nib = static_cast<u32>((c | 0x20) - L'a' + 10);
                     }
-                    ++p;
+                    else {
+                        return 0;
+                    }
+                    val = (val << 4) | nib;
                 }
-
-                return 0;
+                return val;
             };
 
-            /* SetupAPI stuff */
+            SP_DEVINFO_DATA dev_info_data{};
+            dev_info_data.cbSize = sizeof(SP_DEVINFO_DATA);
+
+            wchar_t instance_id[256];
             int intel_hits = 0;
             int amd_hits = 0;
 
-            wchar_t stack_buf[1024]{};
-            stack_buf[ARRAYSIZE(stack_buf) - 1] = L'\0';
-            std::vector<BYTE> heap_buf; /* fallback for rare huge strings */
-            heap_buf.push_back(0);
+            for (DWORD i = 0; SetupDiEnumDeviceInfo(handle_dev_info, i, &dev_info_data); ++i) {
+                if (SetupDiGetDeviceInstanceIdW(handle_dev_info, &dev_info_data, instance_id, ARRAYSIZE(instance_id), nullptr)) {
+                    if (((instance_id[0] | 0x20) == L'p') &&
+                        ((instance_id[1] | 0x20) == L'c') &&
+                        ((instance_id[2] | 0x20) == L'i') &&
+                        (instance_id[3] == L'\\') &&
+                        ((instance_id[4] | 0x20) == L'v') &&
+                        ((instance_id[5] | 0x20) == L'e') &&
+                        ((instance_id[6] | 0x20) == L'n') &&
+                        (instance_id[7] == L'_')) {
 
-            auto scan_devices = [&](const GUID* classGuid, DWORD flags) noexcept {
-                HDEVINFO handle_dev_info = SetupDiGetClassDevsW(classGuid, nullptr, nullptr, flags);
-                if (handle_dev_info == INVALID_HANDLE_VALUE) {
-                    return;
-                }
-
-                SP_DEVINFO_DATA dev_info_data{};
-                dev_info_data.cbSize = sizeof(SP_DEVINFO_DATA);
-
-                for (DWORD i = 0; SetupDiEnumDeviceInfo(handle_dev_info, i, &dev_info_data); ++i) {
-                    const wchar_t* w_desc = nullptr;
-                    DWORD req_size = 0;
-                    DWORD prop_type = 0;
-
-                    if (SetupDiGetDeviceRegistryPropertyW(handle_dev_info, &dev_info_data, SPDRP_DEVICEDESC, &prop_type, reinterpret_cast<PBYTE>(stack_buf), sizeof(stack_buf), &req_size)) {
-                        w_desc = stack_buf;
-                    }
-                    else if (GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
-                        if (heap_buf.size() < req_size) {
-                            heap_buf.resize(req_size);
+                        const u32 vid = parse_hex4(instance_id + 8);
+                        if (vid == VID_INTEL) {
+                            intel_hits++;
                         }
-                        if (SetupDiGetDeviceRegistryPropertyW(handle_dev_info, &dev_info_data, SPDRP_DEVICEDESC, &prop_type, heap_buf.data(), req_size, nullptr)) {
-                            w_desc = reinterpret_cast<const wchar_t*>(heap_buf.data());
+                        else if (vid == VID_AMD_MICRO) {
+                            amd_hits += 2;
                         }
-                    }
-
-                    /* Check if the description contains any interesting stuff */
-                    if (w_desc && contains_token(w_desc)) {
-                        /* If interesting get hwid to get vendor */
-                        const wchar_t* w_hardware_id = nullptr;
-
-                        if (SetupDiGetDeviceRegistryPropertyW(handle_dev_info, &dev_info_data, SPDRP_HARDWAREID, &prop_type, reinterpret_cast<PBYTE>(stack_buf), sizeof(stack_buf), &req_size)) {
-                            w_hardware_id = stack_buf;
-                        }
-                        else if (GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
-                            if (heap_buf.size() < req_size) heap_buf.resize(req_size);
-                            if (SetupDiGetDeviceRegistryPropertyW(handle_dev_info, &dev_info_data, SPDRP_HARDWAREID, &prop_type, heap_buf.data(), req_size, nullptr)) {
-                                w_hardware_id = reinterpret_cast<const wchar_t*>(heap_buf.data());
-                            }
-                        }
-
-                        if (w_hardware_id) {
-                            const u32 vid = find_vendor_hex(w_hardware_id);
-                            if (vid == VID_INTEL) {
-                                intel_hits++;
-                            }
-                            else if (vid == VID_AMD_ATI || vid == VID_AMD_MICRO) {
-                                amd_hits++;
-                            }
+                        else if (vid == VID_AMD_ATI) {
+                            amd_hits += 1;
                         }
                     }
                 }
-                SetupDiDestroyDeviceInfoList(handle_dev_info);
-            };
-
-            /*
-             * GUID_DEVCLASS_SYSTEM covers Host Bridges, LPC, PCI bridges Chipset/CPU etc
-             * GUID_DEVCLASS_USB covers USB controller stuff
-             * GUID_DEVCLASS_HDC covers SATA/IDE
-             */
-            const GUID* interesting_classes[] = {
-                &GUID_DEVCLASS_SYSTEM,
-                &GUID_DEVCLASS_USB,
-                &GUID_DEVCLASS_HDC
-            };
-
-            for (const GUID* guid : interesting_classes) {
-                scan_devices(guid, DIGCF_PRESENT);
             }
 
-            /* If no stuff then maybe query all devices in the system with DIGCF_ALLCLASSES | DIGCF_PRESENT? */
-            if (intel_hits > amd_hits) {
+            SetupDiDestroyDeviceInfoList(handle_dev_info);
+
+            /* Motherboard chipsets provide 10-40+ integrated PCI devices */
+            /* Add-in cards (like Intel Wi-Fi on AMD board, or AMD GPU on Intel board) should only provide like 1-3 devices */
+            if (intel_hits >= 3 && intel_hits > amd_hits * 2) {
                 return motherboard_vendor::Intel;
             }
-            if (amd_hits > intel_hits) {
+            if (amd_hits >= 3 && amd_hits > intel_hits * 2) {
                 return motherboard_vendor::AMD;
             }
 
@@ -13721,23 +13563,23 @@ public:
         const motherboard_vendor vendor = detect_motherboard();
 
         switch (vendor) {
-            case motherboard_vendor::Intel:
-                if (claimed_amd && !claimed_intel) {
-                    debug("CPU_HEURISTIC: CPU reports AMD but chipset looks Intel");
-                    spoofed = true;
-                }
-                break;
-            case motherboard_vendor::AMD:
-                if (claimed_intel && !claimed_amd) {
-                    debug("CPU_HEURISTIC: CPU reports Intel but chipset looks AMD");
-                    spoofed = true;
-                }
-                break;
-            case motherboard_vendor::Unknown:
-                debug("CPU_HEURISTIC: Could not determine chipset vendor");
-                break;
-            default:
-                VMAWARE_ASSUME(0);
+        case motherboard_vendor::Intel:
+            if (claimed_amd && !claimed_intel) {
+                debug("CPU_HEURISTIC: CPU reports AMD but chipset looks Intel");
+                spoofed = true;
+            }
+            break;
+        case motherboard_vendor::AMD:
+            if (claimed_intel && !claimed_amd) {
+                debug("CPU_HEURISTIC: CPU reports Intel but chipset looks AMD");
+                spoofed = true;
+            }
+            break;
+        case motherboard_vendor::Unknown:
+            debug("CPU_HEURISTIC: Could not determine chipset vendor");
+            break;
+        default:
+            VMAWARE_ASSUME(0);
         }
     #endif
         return spoofed;
