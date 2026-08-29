@@ -3970,7 +3970,7 @@ public:
         };
 
         struct engine {
-                VMAWARE_SERIALIZE static VMAWARE_FORCE_INLINE void warmup_cpu(const bool serialize_available) noexcept {
+             VMAWARE_SERIALIZE static VMAWARE_FORCE_INLINE void warmup_cpu(const bool serialize_available) noexcept {
                 /* Signal Intel Speed Shift / AMD CPPC to force maximum non-AVX Turbo/P-state frequency transition */
                 u64 val = 0x5a5a5a5a5a5a5a5aULL;
                 for (u32 i = 0; i < 2'000'000; ++i) {
@@ -3992,7 +3992,7 @@ public:
                         std::atomic_signal_fence(std::memory_order_seq_cst);
                     }
                 }
-            }
+             }
 
             [[nodiscard]] static timer_tick_t calculate_latency(const std::vector<timer_tick_t>& samples_in) {
                 if (samples_in.empty()) {

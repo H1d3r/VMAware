@@ -2,7 +2,6 @@
    <img src="assets/banner.jpg" width="500" title="VMAware">
    <br>
    <img src="https://img.shields.io/github/actions/workflow/status/NotRequiem/VMAware/build_infrastructure.yml">
-   <img src="https://img.shields.io/github/downloads/NotRequiem/VMAware/total">
    <img src="https://img.shields.io/badge/License-MIT-yellow.svg">
    <br><br>
    <b>VMAware</b> (VM + Aware) is a cross-platform C++ framework for virtual machine detection.
