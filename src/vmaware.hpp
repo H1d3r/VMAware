@@ -1043,36 +1043,33 @@ public:
                 amd_easter_egg = 0x8fffffff;
         };
 
-        static void cpuid_count (
-            unsigned leaf, 
-            unsigned subleaf, 
-            unsigned* VMAWARE_RESTRICT a, 
-            unsigned* VMAWARE_RESTRICT b, 
-            unsigned* VMAWARE_RESTRICT c, 
-            unsigned* VMAWARE_RESTRICT d
+        /* Internal helper using C++ references */
+        static void cpuid_count(
+            const u32 leaf,
+            const u32 subleaf,
+            u32& a,
+            u32& b,
+            u32& c,
+            u32& d
         ) noexcept {
-            VMAWARE_ASSUME(a != nullptr);
-            VMAWARE_ASSUME(b != nullptr);
-            VMAWARE_ASSUME(c != nullptr);
-            VMAWARE_ASSUME(d != nullptr);
         #if (x86)
             #if (MSVC)
-                int regs[4];
+                int regs[4] = { 0 };
                 __cpuidex(regs, static_cast<int>(leaf), static_cast<int>(subleaf));
-                *a = static_cast<unsigned int>(regs[0]);
-                *b = static_cast<unsigned int>(regs[1]);
-                *c = static_cast<unsigned int>(regs[2]);
-                *d = static_cast<unsigned int>(regs[3]);
-            #elif (x86)
-                __get_cpuid_count(leaf, subleaf, a, b, c, d);
+                a = static_cast<u32>(regs[0]);
+                b = static_cast<u32>(regs[1]);
+                c = static_cast<u32>(regs[2]);
+                d = static_cast<u32>(regs[3]);
             #else
-                VMAWARE_UNUSED(leaf); 
-                VMAWARE_UNUSED(subleaf); 
-                VMAWARE_UNUSED(a); 
-                VMAWARE_UNUSED(b); 
-                VMAWARE_UNUSED(c); 
-                VMAWARE_UNUSED(d);
-            #endif
+                __cpuid_count(leaf, subleaf, a, b, c, d);
+            #endif  
+        #else
+            VMAWARE_UNUSED(leaf);
+            VMAWARE_UNUSED(subleaf);
+            VMAWARE_UNUSED(a);
+            VMAWARE_UNUSED(b);
+            VMAWARE_UNUSED(c);
+            VMAWARE_UNUSED(d);
         #endif
         }
 
@@ -1085,18 +1082,16 @@ public:
             c = 0;
             d = 0;
 
-            u32 aa = 0u;
-            u32 bb = 0u;
-            u32 cc = 0u;
-            u32 dd = 0u;
-            cpuid_count(a_leaf, c_leaf, &aa, &bb, &cc, &dd);
-
-            a = aa;
-            b = bb;
-            c = cc;
-            d = dd;
+            cpuid_count(a_leaf, c_leaf, a, b, c, d);
+        #else
+            VMAWARE_UNUSED(a);
+            VMAWARE_UNUSED(b);
+            VMAWARE_UNUSED(c);
+            VMAWARE_UNUSED(d);
+            VMAWARE_UNUSED(a_leaf);
+            VMAWARE_UNUSED(c_leaf);
         #endif
-        };
+        }
 
         /* Same as above but for array type parameters (MSVC specific) */
         static void cpuid(i32 x[4], const u32 a_leaf, const u32 c_leaf = 0xFF) noexcept {
@@ -1107,18 +1102,19 @@ public:
             x[2] = 0;
             x[3] = 0;
 
-            u32 aa = 0u;
-            u32 bb = 0u;
-            u32 cc = 0u;
-            u32 dd = 0u;
-            cpuid_count(a_leaf, c_leaf, &aa, &bb, &cc, &dd);
+            u32 a = 0u, b = 0u, c = 0u, d = 0u;
+            cpuid_count(a_leaf, c_leaf, a, b, c, d);
 
-            x[0] = static_cast<i32>(aa);
-            x[1] = static_cast<i32>(bb);
-            x[2] = static_cast<i32>(cc);
-            x[3] = static_cast<i32>(dd);
+            x[0] = static_cast<i32>(a);
+            x[1] = static_cast<i32>(b);
+            x[2] = static_cast<i32>(c);
+            x[3] = static_cast<i32>(d);
+        #else
+            VMAWARE_UNUSED(x);
+            VMAWARE_UNUSED(a_leaf);
+            VMAWARE_UNUSED(c_leaf);
         #endif
-        };
+        }
 
         [[nodiscard]] static bool is_leaf_supported(const u32 p_leaf) noexcept {
         #if (APPLE) 
@@ -3261,19 +3257,20 @@ public:
         }
     };
 
-    static VMAWARE_CONSTEXPR void str_copy(char* VMAWARE_RESTRICT dest, const char* VMAWARE_RESTRICT src, const size_t max_len) noexcept {
-        VMAWARE_ASSUME(dest != nullptr);
-        VMAWARE_ASSUME(src != nullptr);
+    template <std::size_t N>
+    static inline void str_copy(char(&dest)[N], const char* VMAWARE_RESTRICT src) noexcept {
+        static_assert(N > 0, "Destination buffer must have non-zero size");
 
-        size_t i = 0;
-        if (max_len == 0) return;
-
-        while (src[i] != '\0' && i < max_len - 1) {
-            dest[i] = src[i];
-            i++;
+        if (!src) {
+            dest[0] = '\0';
+            return;
         }
 
-        dest[i] = '\0';
+        const char* const end = static_cast<const char*>(memchr(src, '\0', N));
+        const std::size_t copy_len = end ? static_cast<std::size_t>(end - src) : (N - 1);
+
+        memcpy(dest, src, copy_len);
+        dest[copy_len] = '\0';
     }
 
     /* Memoization */
@@ -3385,7 +3382,7 @@ public:
             static bool cached;
 
             static void store(const char* s, const flagset& flags) noexcept {
-                str_copy(cache, s, sizeof(cache));
+                str_copy(cache, s);
                 cached_flags = flags;
                 cached = true;
             }
@@ -3404,7 +3401,7 @@ public:
             static bool cached;
 
             static void store(const char* s) noexcept {
-                str_copy(brand_cache, s, sizeof(brand_cache));
+                str_copy(brand_cache, s); 
                 cached = true;
             }
 
@@ -4088,25 +4085,29 @@ public:
         static void get_function(const HMODULE module, const char* const VMAWARE_RESTRICT names[], void** const VMAWARE_RESTRICT functions, const size_t count, const bool cache_result = true) {
             VMAWARE_ASSUME(names != nullptr);
             VMAWARE_ASSUME(functions != nullptr);
+
             using func_map = std::unordered_map<std::string, void*>;
             static std::unordered_map<HMODULE, func_map> function_cache;
 
-            for (size_t i = 0; i < count; ++i) functions[i] = nullptr;
+            if (VMAWARE_UNLIKELY(!functions || !names || count == 0)) {
+                return;
+            }
+
+            memset(functions, 0, count * sizeof(void*));
+
             if (!module) {
                 return;
             }
 
             BYTE* base = reinterpret_cast<BYTE*>(module);
 
-            size_t module_size = 0;
-            {
-                MEMORY_BASIC_INFORMATION mbi = {};
-                if (VirtualQuery(base, &mbi, sizeof(mbi))) {
-                    module_size = static_cast<size_t>(mbi.RegionSize);
-                }
-                else {
-                    return;
-                }
+            size_t module_size = 0;        
+            MEMORY_BASIC_INFORMATION mbi = {};
+            if (VirtualQuery(base, &mbi, sizeof(mbi))) {
+                module_size = static_cast<size_t>(mbi.RegionSize);
+            }
+            else {
+                return;
             }
 
             auto valid_range = [&](size_t offset, size_t sz) noexcept -> bool {
@@ -4121,7 +4122,7 @@ public:
                 const char* start = reinterpret_cast<const char*>(base + rva);
                 const size_t remaining = module_size - static_cast<size_t>(rva);
 
-                if (std::memchr(start, '\0', remaining)) {
+                if (memchr(start, '\0', remaining)) {
                     return start;
                 }
 
@@ -5721,18 +5722,43 @@ public:
                 return supported;
             }
 
+            /* Table generator for CRC32-C */
+            struct crc32c_table {
+                u32 table[256];
+                crc32c_table() noexcept {
+                    for (u32 i = 0; i < 256; ++i) {
+                        u32 c = i;
+                        for (int j = 0; j < 8; ++j) {
+                            c = (c >> 1) ^ ((c & 1) ? 0x82F63B78u : 0);
+                        }
+                        table[i] = c;
+                    }
+                }
+            };
+
             /* Software fallback CRC32-C (Castagnoli) of a block of memory */
             static u32 crc32c_sw(u32 crc, const void* VMAWARE_RESTRICT data, const size_t len) noexcept {
-                if (len > 0) {
-                    VMAWARE_ASSUME(data != nullptr);
+                if (VMAWARE_UNLIKELY(!data || len == 0)) {
+                    return crc;
                 }
-                const u8* ptr = reinterpret_cast<const u8*>(data);
 
-                for (size_t i = 0; i < len; ++i) {
-                    crc ^= ptr[i];
-                    for (int j = 0; j < 8; ++j) {
-                        crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
-                    }
+                static const crc32c_table instance;
+                const u32* const table = instance.table;
+                const u8* const ptr = static_cast<const u8*>(data);
+
+                size_t i = 0;
+
+                while (i + 4 <= len) {
+                    crc = (crc >> 8) ^ table[(crc ^ ptr[i]) & 0xFF];
+                    crc = (crc >> 8) ^ table[(crc ^ ptr[i + 1]) & 0xFF];
+                    crc = (crc >> 8) ^ table[(crc ^ ptr[i + 2]) & 0xFF];
+                    crc = (crc >> 8) ^ table[(crc ^ ptr[i + 3]) & 0xFF];
+                    i += 4;
+                }
+
+                while (i < len) {
+                    crc = (crc >> 8) ^ table[(crc ^ ptr[i]) & 0xFF];
+                    ++i;
                 }
 
                 return crc;
@@ -15559,13 +15585,16 @@ public:
         static bool add_score(const brand_enum p_brand, const brand_enum extra_brand, const u8 score) noexcept {
             last_detected_brand = p_brand;
             last_detected_score = score; /* Store for the engine to read */
-            VMAWARE_ASSUME(p_brand <= brand_enum::NULL_BRAND); /* If we maintain the invariant that the parameters are always valid brand_enum values */
+
+            constexpr size_t max_brands = sizeof(brand_scoreboard) / sizeof(brand_scoreboard[0]);
 
             const u8 p_idx = static_cast<u8>(p_brand);
-            brand_scoreboard[p_idx].score++;
-            
+            if (VMAWARE_LIKELY(p_idx < max_brands && p_brand != brand_enum::NULL_BRAND)) {
+                brand_scoreboard[p_idx].score++;
+            }
+
             const u8 e_idx = static_cast<u8>(extra_brand);
-            if (extra_brand != brand_enum::NULL_BRAND) {
+            if (extra_brand != brand_enum::NULL_BRAND && e_idx < max_brands) {
                 brand_scoreboard[e_idx].score++;
             }
 
