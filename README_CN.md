@@ -23,7 +23,7 @@
 - 能够检测各种虚拟机和半虚拟机技术，包括虚拟机监控程序（Hypervisor）、模拟器、容器、沙箱等
 - 具备记忆功能（Memoized），即缓存过往结果并在再次运行时直接获取以提升性能
 - 支持 C++11 及以上版本
-- 拥有向其他语言（JavaScript 和 Ruby）移植的生态系统支持
+- 拥有向其他语言（如 Rust、JavaScript 和 Ruby）移植的生态系统支持
 - 纯头文件（Header-only）
 - 无任何外部依赖
 - 完全采用 MIT 许可证，允许不受限制地使用和分发
@@ -148,6 +148,7 @@ VMAware 还支持多种语言，如果 C++ 不是您要找的语言，请参考�
 |:---------|:---------------:|:--------:|:------:|
 | <img src="assets/language_icons/8172-ruby-programming-language.webp" width="20"> Ruby | [链接](https://github.com/NotRequiem/VMAware/tree/main/gem) | 嵌入在 VMAware 仓库中的官方 Ruby 移植版本。不支持 Windows。 | [Adam Ruman](https://github.com/addam128) |
 | <img src="assets/language_icons/js.png" width="20"> JS | [链接](https://github.com/Kyun-J/node-vm-detect) | 非常优秀的 API，维护活跃。 | [Kyun-J](https://github.com/Kyun-J) |
+| <img src="assets/language_icons/rust-logo-512x512.png" width="20"> Rust | [链接](https://github.com/btwmarcel/vmaware-rs) | 非常优秀的 API，经过良好测试，维护活跃 | [Marcel](https://github.com/btwmarcel) |
 
 > [!WARNING]
 > 尽管存在非官方移植版本，但与官方版本相比，它们未经充分测试。使用它们需自行承担风险。

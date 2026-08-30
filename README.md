@@ -23,7 +23,7 @@ The library is:
 - Capable of detecting various VM and semi-VM technologies, including hypervisors, emulators, containers, sandboxes, and more
 - Memoized, meaning past results are cached and retrieved if ran again for performance benefits 
 - Available with C++11 and above
-- Backed by an ecosystem of ports to other languages such as JavaScript, and Ruby
+- Backed by an ecosystem of ports to other languages such as Rust, JavaScript, and Ruby
 - Header-only
 - Free of any external dependencies
 - Fully MIT-licensed, allowing unrestricted use and distribution
@@ -149,7 +149,8 @@ VMAware also has support for a variety of languages, if C++ isn't the language y
 | Language | Repository | Details | Author |
 |:---------|:---------------:|:--------:|:------:|
 | <img src="assets/language_icons/8172-ruby-programming-language.webp" width="20"> Ruby | [link](https://github.com/NotRequiem/VMAware/tree/main/gem) | Official Ruby port embedded in the VMAware repository. Windows is not supported. | [Adam Ruman](https://github.com/addam128) |
-| <img src="assets/language_icons/js.png" width="20"> JS | [link](https://github.com/Kyun-J/node-vm-detect) | Very good API, actively maintained. | [Kyun-J](https://github.com/Kyun-J) |
+| <img src="assets/language_icons/js.png" width="20"> JS | [link](https://github.com/Kyun-J/node-vm-detect) | Same API as VMAware. Support for 64-bit only. Actively maintained. | [Kyun-J](https://github.com/Kyun-J) |
+| <img src="assets/language_icons/rust-logo-512x512.png" width="20"> Rust | [link](https://github.com/btwmarcel/vmaware-rs) | Binding. Same API as VMAware. Actively maintained | [Marcel](https://github.com/btwmarcel) |
 
 > [!WARNING]
 > Although unofficial ports exists, they are not tested compared to our official ones. Use them at your own risk.
