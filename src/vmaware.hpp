@@ -1197,7 +1197,7 @@ public:
             cpu::cpuid(regs[8], regs[9], regs[10], regs[11], cpu::leaf::brand3);
 
             static char buffer[49];
-            memcpy(buffer, regs, sizeof(regs));
+            std::memcpy(buffer, regs, sizeof(regs));
             buffer[48] = '\0';
 
             /*
@@ -1251,7 +1251,7 @@ public:
 
             u32 regs[3] = { ebx, ecx, edx };
 
-            memcpy(buffers[index], regs, sizeof(regs));
+            std::memcpy(buffers[index], regs, sizeof(regs));
             buffers[index][12] = '\0';
 
             *cache = buffers[index];
@@ -3266,10 +3266,10 @@ public:
             return;
         }
 
-        const char* const end = static_cast<const char*>(memchr(src, '\0', N));
+        const char* const end = static_cast<const char*>(std::memchr(src, '\0', N));
         const std::size_t copy_len = end ? static_cast<std::size_t>(end - src) : (N - 1);
 
-        memcpy(dest, src, copy_len);
+        std::memcpy(dest, src, copy_len);
         dest[copy_len] = '\0';
     }
 
@@ -4093,7 +4093,7 @@ public:
                 return;
             }
 
-            memset(functions, 0, count * sizeof(void*));
+            std::memset(functions, 0, count * sizeof(void*));
 
             if (!module) {
                 return;
@@ -4122,7 +4122,7 @@ public:
                 const char* start = reinterpret_cast<const char*>(base + rva);
                 const size_t remaining = module_size - static_cast<size_t>(rva);
 
-                if (memchr(start, '\0', remaining)) {
+                if (std::memchr(start, '\0', remaining)) {
                     return start;
                 }
 
@@ -5253,7 +5253,7 @@ public:
                         break;
                     }
                     const size_t first_event_size = static_cast<size_t>(32) + first_event->event_data_size;
-                    const bool crypto_agile = (first_event->event_data_size >= 16 && memcmp(first_event->event_data, "Spec ID Event03", 15) == 0);
+                    const bool crypto_agile = (first_event->event_data_size >= 16 && std::memcmp(first_event->event_data, "Spec ID Event03", 15) == 0);
 
                     struct alg_size_pair {
                         u16 alg_id;
@@ -7617,7 +7617,7 @@ public:
 
         for (; it != end; ++it) {
             std::size_t const name_len = std::min<std::size_t>(sizeof(ifr.ifr_name) - 1, strnlen(it->ifr_name, sizeof(it->ifr_name)));
-            memcpy(ifr.ifr_name, it->ifr_name, name_len);
+            std::memcpy(ifr.ifr_name, it->ifr_name, name_len);
             *(ifr.ifr_name + name_len) = '\0';
 
             if (ioctl(sock_guard.get(), SIOCGIFFLAGS, &ifr) != 0) {
@@ -7633,7 +7633,7 @@ public:
         }
 
         if (success) {
-            memcpy(mac, ifr.ifr_hwaddr.sa_data, 6);
+            std::memcpy(mac, ifr.ifr_hwaddr.sa_data, 6);
         }
         else {
             debug("MAC: ", "not successful");
@@ -8599,13 +8599,13 @@ public:
                                 } _gdtr = {};
                                 #pragma pack(pop)
                                 _sgdt(&_gdtr);
-                                memcpy(gdtr, &_gdtr, sizeof(_gdtr));
+                                std::memcpy(gdtr, &_gdtr, sizeof(_gdtr));
                             #endif
                             }
                             __except (EXCEPTION_EXECUTE_HANDLER) {}
 
                             ULONG_PTR gdt_base = 0;
-                            memcpy(&gdt_base, &gdtr[2], sizeof(gdt_base));
+                            std::memcpy(&gdt_base, &gdtr[2], sizeof(gdt_base));
 
                             if ((gdt_base >> 24) == 0xFF) {
                                 debug("SGDT: 0xFF signature detected on core ", i);
@@ -8631,7 +8631,7 @@ public:
                             }
                             __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-                            memcpy(&ldt_val, ldtr_buf, sizeof(ldt_val));
+                            std::memcpy(&ldt_val, ldtr_buf, sizeof(ldt_val));
                             if (ldtr_buf[0] != 0x00 && ldtr_buf[1] != 0x00) {
                                 debug("SLDT: ldtr_buf signature detected");
                                 found = true;
@@ -8664,13 +8664,13 @@ public:
                                 } idtr;
                                 #pragma pack(pop)
                                 __sidt(&idtr);
-                                memcpy(idtr_buffer, &idtr, sizeof(idtr));
+                                std::memcpy(idtr_buffer, &idtr, sizeof(idtr));
                             #endif
                             }
                             __except (EXCEPTION_EXECUTE_HANDLER) {}
 
                             ULONG_PTR idt_base = 0;
-                            memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
+                            std::memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
 
                             if ((idt_base >> 24) == 0xE8) {
                                 debug("SIDT: VPC/Hyper-V signature detected on core ", i);
@@ -8868,7 +8868,7 @@ public:
 
                 while (remaining_bytes >= pattern_len) {
                     VMAWARE_PREFETCH(search_ptr + 64, _MM_HINT_T0);
-                    const void* match = memchr(search_ptr, first_byte, remaining_bytes);
+                    const void* match = std::memchr(search_ptr, first_byte, remaining_bytes);
                     if (!match) {
                         return false;
                     }
@@ -8877,7 +8877,7 @@ public:
                     if (index + pattern_len > buffer_len) {
                         return false;
                     }
-                    if (memcmp(match_ptr, pattern, pattern_len) == 0) {
+                    if (std::memcmp(match_ptr, pattern, pattern_len) == 0) {
                         return true;
                     }
                     search_ptr = match_ptr + 1;
@@ -8895,12 +8895,12 @@ public:
                 if (buffer_len < sizeof(acpi_header)) {
                     return false;
                 }
-                memcpy(&header, buffer, sizeof(header));
+                std::memcpy(&header, buffer, sizeof(header));
 
                 /* Identify and record DSDT size and OEM details */
-                if (memcmp(header.signature, "DSDT", 4) == 0) {
+                if (std::memcmp(header.signature, "DSDT", 4) == 0) {
                     dsdt_scanned = true;
-                    memcpy(dsdt_oem_id, header.oem_id, 6);
+                    std::memcpy(dsdt_oem_id, header.oem_id, 6);
                     dsdt_oem_id[6] = '\0';
                 }
 
@@ -8955,7 +8955,7 @@ public:
                         auto find_eisa = [&]() noexcept -> const u8* {
                             if (buffer_len < sizeof(pnp0a06_eisa)) return nullptr;
                             for (size_t i = 0; i <= buffer_len - sizeof(pnp0a06_eisa); ++i) {
-                                if (memcmp(buffer + i, pnp0a06_eisa, sizeof(pnp0a06_eisa)) == 0) {
+                                if (std::memcmp(buffer + i, pnp0a06_eisa, sizeof(pnp0a06_eisa)) == 0) {
                                     return buffer + i;
                                 }
                             }
@@ -8970,7 +8970,7 @@ public:
                             const size_t search_end = pnp_offset + 64 <= buffer_len ? pnp_offset + 64 : buffer_len;
 
                             for (size_t i = search_start; i + 8 < search_end; ++i) {
-                                if (memcmp(buffer + i, uid_signature, sizeof(uid_signature)) == 0) {
+                                if (std::memcmp(buffer + i, uid_signature, sizeof(uid_signature)) == 0) {
                                     /* Check if the _UID value is a string (represented by 0x0D StringPrefix in AML) starting with "SM" */
                                     if (buffer[i + 5] == 0x0D && buffer[i + 6] == 'S' && buffer[i + 7] == 'M') {
                                         debug("FIRMWARE: Detected QEMU generic device containing SMI string unique identifier");
@@ -8994,10 +8994,10 @@ public:
                     /* PRTP and PRTA variable-size relative symmetry check (replaces old exact-128 check) */
                     {
                         auto get_package_size = [&](const char* name) noexcept -> u8 {
-                            const u8* name_ptr = static_cast<const u8*>(memchr(buffer, name[0], buffer_len));
+                            const u8* name_ptr = static_cast<const u8*>(std::memchr(buffer, name[0], buffer_len));
                             while (name_ptr) {
                                 const size_t offset = static_cast<size_t>(name_ptr - buffer);
-                                if (offset + 10 <= buffer_len && memcmp(name_ptr, name, 4) == 0) {
+                                if (offset + 10 <= buffer_len && std::memcmp(name_ptr, name, 4) == 0) {
                                     /* Confirm it represents NameOp (0x08) and PackageOp (0x12) */
                                     if (offset >= 1 && *(name_ptr - 1) == 0x08 && name_ptr[4] == 0x12) {
                                         /* Scan a small window following the PackageOp for a realistic element count (32 to 255) */
@@ -9009,7 +9009,7 @@ public:
                                     }
                                 }
                                 if (offset + 1 < buffer_len) {
-                                    name_ptr = static_cast<const u8*>(memchr(name_ptr + 1, name[0], buffer_len - (offset + 1)));
+                                    name_ptr = static_cast<const u8*>(std::memchr(name_ptr + 1, name[0], buffer_len - (offset + 1)));
                                 }
                                 else {
                                     name_ptr = nullptr;
@@ -9041,7 +9041,7 @@ public:
                             const size_t end_offset = buffer_len - sizeof(qemu_hpet_signature);
 
                             for (size_t i = 0; i <= end_offset; ++i) {
-                                if (memcmp(&ptr[i], qemu_hpet_signature, sizeof(qemu_hpet_signature)) == 0) {
+                                if (std::memcmp(&ptr[i], qemu_hpet_signature, sizeof(qemu_hpet_signature)) == 0) {
                                     debug("FIRMWARE: Detected QEMU HPET period-validation signature");
                                     return core::add(brand_enum::QEMU);
                                 }
@@ -9118,9 +9118,9 @@ public:
 
                 if (buffer_len >= 36) {
                     char oem_id[7] = { 0 };
-                    memcpy(oem_id, buffer + 10, 6);
+                    std::memcpy(oem_id, buffer + 10, 6);
                     char oem_table_id[9] = { 0 };
-                    memcpy(oem_table_id, buffer + 16, 8);
+                    std::memcpy(oem_table_id, buffer + 16, 8);
 
                     if (strstr(oem_id, marker) != nullptr) {
                         debug("FIRMWARE: VMWareHardenedLoader found in OEMID -> '", oem_id, "'");
@@ -9135,7 +9135,7 @@ public:
 
             if (is_acpi) {
                 /* 4) FADT structure limits validation */
-                if (memcmp(header.signature, "FACP", 4) == 0) {
+                if (std::memcmp(header.signature, "FACP", 4) == 0) {
                     if (header.length > buffer_len) {
                         debug("FIRMWARE: declared header length larger than fetched length (declared ", header.length, ", fetched ", buffer_len, ")");
                         return true;
@@ -9146,7 +9146,7 @@ public:
                     }
 
                     fadt_table fadt;
-                    memcpy(&fadt, buffer, sizeof(fadt_table));
+                    std::memcpy(&fadt, buffer, sizeof(fadt_table));
 
                     if (fadt.p_lvl2_lat == 0x0FFF || fadt.p_lvl3_lat == 0x0FFF) {
                         debug("FIRMWARE: C2 and C3 latencies indicate VM");
@@ -9155,13 +9155,13 @@ public:
                 }
 
                 /* 5) DMA Remapping table validation */
-                if (memcmp(header.signature, "DMAR", 4) == 0) {
+                if (std::memcmp(header.signature, "DMAR", 4) == 0) {
                     size_t offset = 48; /* Subtables start at offset 48 (0x30) */
                     while (offset + 4 <= buffer_len) {
                         u16 subtable_type = 0;
                         u16 subtable_len = 0;
-                        memcpy(&subtable_type, buffer + offset, sizeof(u16));
-                        memcpy(&subtable_len, buffer + offset + 2, sizeof(u16));
+                        std::memcpy(&subtable_type, buffer + offset, sizeof(u16));
+                        std::memcpy(&subtable_len, buffer + offset + 2, sizeof(u16));
 
                         if (subtable_len < 4 || offset + subtable_len > buffer_len) {
                             break;
@@ -9206,7 +9206,7 @@ public:
                 }
 
                 /* 6) APIC/MADT table validation */
-                if (memcmp(header.signature, "APIC", 4) == 0) {
+                if (std::memcmp(header.signature, "APIC", 4) == 0) {
                     size_t offset = 44; /* MADT subtables start at offset 44 (0x2C) */
                     u8 qemu_override_mask = 0;
 
@@ -9225,8 +9225,8 @@ public:
                             u32 global_system_interrupt = 0;
                             u16 flags = 0;
 
-                            memcpy(&global_system_interrupt, buffer + offset + 4, sizeof(u32));
-                            memcpy(&flags, buffer + offset + 8, sizeof(u16));
+                            std::memcpy(&global_system_interrupt, buffer + offset + 4, sizeof(u32));
+                            std::memcpy(&flags, buffer + offset + 8, sizeof(u16));
 
                             u8 source_mask = 0;
                             switch (source) {
@@ -9970,7 +9970,7 @@ public:
         #endif
 
         auto strnlen = [](const char* s, const size_t max) noexcept -> size_t {
-            const void* p = memchr(s, 0, max);
+            const void* p = std::memchr(s, 0, max);
             if (!p) {
                 return max;
             }
@@ -10070,7 +10070,7 @@ public:
                 if (NT_SUCCESS(query_st)) {
                     BYTE* payload = reinterpret_cast<BYTE*>(allocation_base) + header_size;
                     if (query_iosb.Information >= header_size + out_size) {
-                        memcpy(out_buf, payload, out_size);
+                        std::memcpy(out_buf, payload, out_size);
                         success = true;
                     }   
                 }
@@ -10899,7 +10899,7 @@ public:
 
         const size_t copyLen = (actual_data_len < (sizeof(product_id) - 1)) ? actual_data_len : (sizeof(product_id) - 1);
 
-        memcpy(product_id, kv->Data, copyLen);
+        std::memcpy(product_id, kv->Data, copyLen);
         product_id[copyLen] = '\0';
 
         /* A list of known Product IDs associated with public malware analysis sandboxes */
@@ -10924,7 +10924,7 @@ public:
          * if a match is found, we identify the specific sandbox environment and flag it
          */
         for (const auto& target : targets) {
-            if (memcmp(product_id, target.product_id, target_length) == 0) {
+            if (std::memcmp(product_id, target.product_id, target_length) == 0) {
                 debug("GAMARUE: Detected ", target.product_id);
                 return core::add(target.brand);
             }
@@ -11064,11 +11064,11 @@ public:
             wchar_t full_path[260];
 
             /* Memcpy as it is faster than wcscpy/wcscat */
-            memcpy(full_path, prefix, sizeof(prefix)); 
+            std::memcpy(full_path, prefix, sizeof(prefix)); 
 
             const size_t name_len = wcslen(base_name);
             if (prefix_len + name_len < 260) {
-                memcpy(full_path + prefix_len, base_name, (name_len + 1) * sizeof(wchar_t));
+                std::memcpy(full_path + prefix_len, base_name, (name_len + 1) * sizeof(wchar_t));
             }
             else {
                 /* Should not happen for standard VM artifacts */
@@ -11084,7 +11084,7 @@ public:
                 rtl_init_unicode_string(&u_name, path);
 
                 OBJECT_ATTRIBUTES obj_attr;
-                memset(&obj_attr, 0, sizeof(obj_attr));
+                std::memset(&obj_attr, 0, sizeof(obj_attr));
                 obj_attr.Length = sizeof(obj_attr);
                 obj_attr.ObjectName = &u_name;
                 obj_attr.Attributes = OBJ_CASE_INSENSITIVE;
@@ -11706,7 +11706,7 @@ public:
         const bool mismatch = 
             (object_name->Name.Length != expected_name.Length) ||
             (object_name->Name.Buffer == nullptr) ||
-            (memcmp(object_name->Name.Buffer, expected_name.Buffer, expected_name.Length) != 0);
+            (std::memcmp(object_name->Name.Buffer, expected_name.Buffer, expected_name.Length) != 0);
 
         return mismatch ? core::add(brand_enum::SANDBOXIE) : false;
     }
@@ -11818,7 +11818,7 @@ public:
             constexpr size_t subkeys_offset = offsetof(KEY_FULL_INFORMATION, SubKeys);
             if (info_buffer.size() >= subkeys_offset + sizeof(ULONG)) {
                 ULONG subkeys_count = 0;
-                memcpy(&subkeys_count, info_buffer.data() + subkeys_offset, sizeof(ULONG));
+                std::memcpy(&subkeys_count, info_buffer.data() + subkeys_offset, sizeof(ULONG));
                 has_subkeys = (subkeys_count > 0);
                 query_successful = true;
             }
@@ -13377,7 +13377,7 @@ public:
             }
             else {
                 amd_target_mem = base;
-                memset(amd_target_mem, 0xA5, target_size);
+                std::memset(amd_target_mem, 0xA5, target_size);
 
                 const std::uintptr_t paddr = reinterpret_cast<std::uintptr_t>(amd_target_mem);
             #if (x86_64)
@@ -13402,7 +13402,7 @@ public:
             NTSTATUS st2 = nt_allocate_virtual_memory(current_process, &base, 0, &sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
             if (NT_SUCCESS(st2) && base != nullptr) {
                 exec_mem = base;
-                memcpy(exec_mem, bytes, code_size);
+                std::memcpy(exec_mem, bytes, code_size);
 
                 /* Change to RX */
                 ULONG old_protection = 0;
@@ -14538,31 +14538,31 @@ public:
         auto parse_log = [](const std::vector<u8>& log_data) noexcept -> bool {
             auto read_u16 = [](const u8* ptr) noexcept -> u16 {
                 u16 val = 0;
-                memcpy(&val, ptr, sizeof(u16));
+                std::memcpy(&val, ptr, sizeof(u16));
                 return val;
             };
 
             auto read_u32 = [](const u8* ptr) noexcept -> u32 {
                 u32 val = 0;
-                memcpy(&val, ptr, sizeof(u32));
+                std::memcpy(&val, ptr, sizeof(u32));
                 return val;
             };
 
             auto read_u64 = [](const u8* ptr) noexcept -> u64 {
                 u64 val = 0;
-                memcpy(&val, ptr, sizeof(u64));
+                std::memcpy(&val, ptr, sizeof(u64));
                 return val;
             };
 
             auto read_alg_size = [](const u8* ptr) noexcept -> alg_size {
                 alg_size val = { 0, 0 };
-                memcpy(&val, ptr, sizeof(alg_size));
+                std::memcpy(&val, ptr, sizeof(alg_size));
                 return val;
             };
 
             auto read_hdr = [](const u8* ptr) noexcept -> TCG_PCR_EVENT_HEADER {
                 TCG_PCR_EVENT_HEADER val = { 0, 0, {0}, 0 };
-                memcpy(&val, ptr, sizeof(TCG_PCR_EVENT_HEADER));
+                std::memcpy(&val, ptr, sizeof(TCG_PCR_EVENT_HEADER));
                 return val;
             };
 
@@ -14587,7 +14587,7 @@ public:
             const u8* spec_id_payload = p_buffer + first_event_data_offset;
             const u32 spec_id_size = first_hdr.eventSize;
 
-            if (spec_id_size < 28 || memcmp(spec_id_payload, "Spec ID Event03", 15) != 0) {
+            if (spec_id_size < 28 || std::memcmp(spec_id_payload, "Spec ID Event03", 15) != 0) {
                 return false;
             }
 
@@ -14603,13 +14603,13 @@ public:
                 active_algs[i] = read_alg_size(alg_ptr + (i * sizeof(alg_size)));
             }
 
-            auto get_digest_size = [&active_algs](u16 algId) noexcept -> u16 {
+            auto get_digest_size = [&active_algs](const u16 algorithm_id) noexcept -> u16 {
                 for (const auto& alg : active_algs) {
-                    if (alg.algId == algId) {
+                    if (alg.algId == algorithm_id) {
                         return alg.digestSize;
                     }
                 }
-                switch (algId) {
+                switch (algorithm_id) {
                     case 0x0004: return 20; /* SHA-1 */
                     case 0x000B: return 32; /* SHA-256 */
                     case 0x000C: return 48; /* SHA-384 */
@@ -14868,13 +14868,13 @@ public:
 
         auto read_u16 = [](const u8* const ptr) noexcept -> u16 {
             u16 val;
-            memcpy(&val, ptr, sizeof(val));
+            std::memcpy(&val, ptr, sizeof(val));
             return val;
         };
 
         auto read_u32 = [](const u8* const ptr) noexcept -> u32 {
             u32 val;
-            memcpy(&val, ptr, sizeof(val));
+            std::memcpy(&val, ptr, sizeof(val));
             return val;
         };
 
@@ -15120,7 +15120,7 @@ public:
             }
 
             if (out_digest) {
-                memcpy(out_digest, resp + offset, digest_size > 32 ? 32 : digest_size);
+                std::memcpy(out_digest, resp + offset, digest_size > 32 ? 32 : digest_size);
             }
             if (out_digest_size) {
                 *out_digest_size = digest_size;
@@ -15341,7 +15341,7 @@ public:
                 offset += first_event_size;
 
                 if (first_event_type == 0x03 && first_event_size >= 24) {
-                    if (memcmp(first_event_data, "Spec ID Event03", 15) == 0) {
+                    if (std::memcmp(first_event_data, "Spec ID Event03", 15) == 0) {
                         const u8 num_algs = first_event_data[23];
                         u32 alg_offset = 24;
                         bool has_sha256 = false;
@@ -15428,7 +15428,7 @@ public:
                 if (temp_digest_count < 16) {
                     temp_digests[temp_digest_count].alg_id = alg_id;
                     temp_digests[temp_digest_count].size = size;
-                    memcpy(temp_digests[temp_digest_count].digest, log_buffer + offset, size);
+                    std::memcpy(temp_digests[temp_digest_count].digest, log_buffer + offset, size);
                     temp_digest_count++;
                 }
                 offset += size;
@@ -15458,7 +15458,7 @@ public:
                     tracked_event ev{};
                     ev.event_type = event_type;
                     ev.digest_size = temp_digests[i].size;
-                    memcpy(ev.digest, temp_digests[i].digest, temp_digests[i].size > 32 ? 32 : temp_digests[i].size);
+                    std::memcpy(ev.digest, temp_digests[i].digest, temp_digests[i].size > 32 ? 32 : temp_digests[i].size);
                     if (!pcr_events[pcr_index].push(ev)) {
                         free_resources();
                         return false;
@@ -15469,7 +15469,7 @@ public:
 
         /* Perform step-by-step state reconstruction */
         u8 reconstructed_pcrs[24][32];
-        memset(reconstructed_pcrs, 0, sizeof(reconstructed_pcrs));
+        std::memset(reconstructed_pcrs, 0, sizeof(reconstructed_pcrs));
 
         for (u32 pcr_idx = 0; pcr_idx < 8; ++pcr_idx) {
             u8 current_pcr[32] = { 0 };
@@ -15479,14 +15479,14 @@ public:
                     continue;
                 }
                 u8 concat[64];
-                memcpy(concat, current_pcr, 32);
-                memcpy(concat + 32, ev.digest, 32);
+                std::memcpy(concat, current_pcr, 32);
+                std::memcpy(concat + 32, ev.digest, 32);
                 if (!calculate_sha256(concat, 64, current_pcr)) {
                     free_resources();
                     return false;
                 }
             }
-            memcpy(reconstructed_pcrs[pcr_idx], current_pcr, 32);
+            std::memcpy(reconstructed_pcrs[pcr_idx], current_pcr, 32);
         }
 
         /* Compare logs with active system registers */
@@ -15494,7 +15494,7 @@ public:
             u8 actual_pcr[32] = { 0 };
             u32 actual_pcr_size = 0;
             if (read_tpm_pcr(h_tbs_context, pcr_idx, 0x000B, actual_pcr, &actual_pcr_size)) {
-                if (actual_pcr_size != 32 || memcmp(actual_pcr, reconstructed_pcrs[pcr_idx], 32) != 0) {
+                if (actual_pcr_size != 32 || std::memcmp(actual_pcr, reconstructed_pcrs[pcr_idx], 32) != 0) {
                     if (pcr_idx != 0 && pcr_idx != 6) {
                         debug("TPM: Detected mismatch on hardware PCR ", pcr_idx);
                         passthrough_detected = true;
