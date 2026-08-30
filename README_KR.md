@@ -23,7 +23,7 @@
 - 하이퍼바이저, 에뮬레이터, 컨테이너, 샌드박스 등 다양한 VM 및 준 VM 기술 감지 가능
 - 메모이제이션(Memoized) 지원으로 이전 결과를 캐싱하여 재실행 시 성능 향상
 - C++11 이상에서 사용 가능
-- Rust, JavaScript, Ruby 등 다른 언어로의 포팅 생태계 지원
+- JavaScript, Ruby 등 다른 언어로의 포팅 생태계 지원
 - 헤더 온리(Header-only)
 - 외부 종속성 없음
 - 완전한 MIT 라이선스로 무제한 사용 및 배포 가능
@@ -148,7 +148,6 @@ VMAware는 다양한 언어를 지원합니다. C++가 찾으시는 언어가 �
 |:---------|:---------------:|:--------:|:------:|
 | <img src="assets/language_icons/8172-ruby-programming-language.webp" width="20"> Ruby | [링크](https://github.com/NotRequiem/VMAware/tree/main/gem) | VMAware 저장소에 내장된 공식 Ruby 포트입니다. Windows는 지원되지 않습니다. | [Adam Ruman](https://github.com/addam128) |
 | <img src="assets/language_icons/js.png" width="20"> JS | [링크](https://github.com/Kyun-J/node-vm-detect) | 훌륭한 API, 활발히 유지 관리됨. | [Kyun-J](https://github.com/Kyun-J) |
-| <img src="assets/language_icons/rust-logo-512x512.png" width="20"> Rust | [링크](https://github.com/MarcelDev/vmaware-rs) | 훌륭한 API, 잘 테스트됨, 활발히 유지 관리됨 | [Marcel](https://github.com/MarcelDev) |
 
 > [!WARNING]
 > 비공식 포트가 존재하지만, 공식 포트에 비해 테스트되지 않았습니다. 사용에 따른 위험은 사용자 본인이 감수해야 합니다.

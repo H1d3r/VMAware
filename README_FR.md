@@ -23,7 +23,7 @@ La bibliothèque est :
 - Capable de détecter diverses technologies de VM et semi-VM, notamment les hyperviseurs, émulateurs, conteneurs, sandboxes, etc.
 - Mémoïsée, ce qui signifie que les résultats passés sont mis en cache et récupérés en cas de nouvelle exécution pour des gains de performances
 - Disponible avec C++11 et versions ultérieures
-- Soutenue par un écosystème de portages vers d'autres langages tels que Rust, JavaScript et Ruby
+- Soutenue par un écosystème de portages vers d'autres langages tels que JavaScript et Ruby
 - Header-only (composée uniquement de fichiers d'en-tête)
 - Sans aucune dépendance externe
 - Entièrement sous licence MIT, permettant une utilisation et une distribution sans restriction
@@ -148,7 +148,6 @@ VMAware prend également en charge une variété de langages. Si C++ n'est pas l
 |:---------|:---------------:|:--------:|:------:|
 | <img src="assets/language_icons/8172-ruby-programming-language.webp" width="20"> Ruby | [lien](https://github.com/NotRequiem/VMAware/tree/main/gem) | Portage Ruby officiel intégré dans le dépôt VMAware. Windows n'est pas pris en charge. | [Adam Ruman](https://github.com/addam128) |
 | <img src="assets/language_icons/js.png" width="20"> JS | [lien](https://github.com/Kyun-J/node-vm-detect) | Très bonne API, activement maintenue. | [Kyun-J](https://github.com/Kyun-J) |
-| <img src="assets/language_icons/rust-logo-512x512.png" width="20"> Rust | [lien](https://github.com/MarcelDev/vmaware-rs) | Très bonne API, bien testée, activement maintenue | [Marcel](https://github.com/MarcelDev) |
 
 > [!WARNING]
 > Bien que des portages non officiels existent, ils ne sont pas testés par rapport à nos portages officiels. Utilisez-les à vos propres risques.
