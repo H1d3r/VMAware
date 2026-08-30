@@ -241,9 +241,10 @@ int main(int argc, char* argv[]) {
             ExitProcess(ERROR_SUCCESS);
         }
 
-        win_ansi_enabler_t ansi_enabler;
         AddVectoredExceptionHandler(1, exception_handler_logger);
     }
+
+    win_ansi_enabler_t ansi_enabler;
 #endif
 
     const std::vector<std::string> args(argv + 1, argv + argc);
