@@ -327,7 +327,7 @@ For email inquiries: `vmaware.support@gmail.com`
 - [Adam Ruman](https://github.com/addam128)
 - [Juan Diego](https://github.com/w451)
 - [Wiisus](https://github.com/wiisus)
-- [Marcel](https://github.com/MarcelDev)
+- [Marcel](https://github.com/btwmarcel)
 - [Max Ufer](https://github.com/Manny684)
 - [Everdox](https://github.com/everdox)
 - [snackapps](https://github.com/snackapps)
