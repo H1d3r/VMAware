@@ -435,7 +435,7 @@
     #define TARGET_AVX512
 #endif
 
-#if (GCC || CLANG)
+#if (x86 && (GCC || CLANG))
     #define VMAWARE_SERIALIZE __attribute__((__target__("serialize")))
 #else
     #define VMAWARE_SERIALIZE
