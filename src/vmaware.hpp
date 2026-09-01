@@ -454,24 +454,25 @@
 /* =========================================================================
  * MEMORY PREFETCH
  * ========================================================================= */
-#if (VMAWARE_GCC || VMAWARE_CLANG)
-    #define VMAWARE_PREFETCH(ptr, hint) \
-                __builtin_prefetch( \
-                    const_cast<const void*>(static_cast<const volatile void*>(ptr)), \
-                    0, \
-                    (hint) \
-                )
-#elif (VMAWARE_MSVC) && (VMAWARE_x86)
-    #include <xmmintrin.h>
-    #define VMAWARE_PREFETCH(ptr, hint) \
-                _mm_prefetch( \
-                    const_cast<const char*>(reinterpret_cast<const volatile char*>(ptr)), \
-                    (hint) \
-                )
-#else
-    #define VMAWARE_PREFETCH(ptr, hint) ((void)(ptr), (void)(hint))
+#if (VMAWARE_x86)
+    #if (VMAWARE_GCC || VMAWARE_CLANG)
+        #define VMAWARE_PREFETCH(ptr, hint) \
+                    __builtin_prefetch( \
+                        const_cast<const void*>(static_cast<const volatile void*>(ptr)), \
+                        0, \
+                        (hint) \
+                    )
+    #elif (VMAWARE_MSVC) && (VMAWARE_x86)
+        #include <xmmintrin.h>
+        #define VMAWARE_PREFETCH(ptr, hint) \
+                    _mm_prefetch( \
+                        const_cast<const char*>(reinterpret_cast<const volatile char*>(ptr)), \
+                        (hint) \
+                    )
+    #else
+        #define VMAWARE_PREFETCH(ptr, hint) ((void)(ptr), (void)(hint))
+    #endif
 #endif
-
 /* =========================================================================
  * ARCHITECTURE-SPECIFIC INTRINSICS
  * ========================================================================= */
