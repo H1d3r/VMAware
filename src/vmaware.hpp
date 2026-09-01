@@ -302,21 +302,21 @@
 #endif
 
 #if (defined(__x86_64__) || defined(_M_X64)) && !VMAWARE_ARM64EC
-    #define VMAWARE_x86_64 1
+    #define VMAWARE_X86_64 1
 #else
-    #define VMAWARE_x86_64 0
+    #define VMAWARE_X86_64 0
 #endif
 
 #if defined(__i386__) || defined(_M_IX86)
-    #define VMAWARE_x86_32 1
+    #define VMAWARE_X86_32 1
 #else
-    #define VMAWARE_x86_32 0
+    #define VMAWARE_X86_32 0
 #endif
 
-#if VMAWARE_x86_32 || VMAWARE_x86_64
-    #define VMAWARE_x86 1
+#if VMAWARE_X86_32 || VMAWARE_X86_64
+    #define VMAWARE_X86 1
 #else
-    #define VMAWARE_x86 0
+    #define VMAWARE_X86 0
 #endif
     
 #if (defined(__aarch64__) || defined(_M_ARM64) || defined(__ARM_LINUX_COMPILER__) || defined(__arm64__)) && !VMAWARE_ARM64EC
@@ -457,7 +457,7 @@
 #if defined(_MSC_VER)
     #include <intrin.h>
 #elif (VMAWARE_GCC || VMAWARE_CLANG)
-    #if (VMAWARE_x86)
+    #if (VMAWARE_X86)
         #include <x86intrin.h>
         #include <immintrin.h>
     #endif
@@ -491,7 +491,7 @@
                     (hint) \
                 )
 #elif defined(_MSC_VER)
-    #if (VMAWARE_x86)
+    #if (VMAWARE_X86)
         #define VMAWARE_PREFETCH(ptr, hint) \
                         _mm_prefetch( \
                             const_cast<const char*>(reinterpret_cast<const volatile char*>(ptr)), \
@@ -507,7 +507,7 @@
 /* =========================================================================
  * ARCHITECTURE-SPECIFIC INTRINSICS
  * ========================================================================= */
-#if (VMAWARE_x86)
+#if (VMAWARE_X86)
     #if (VMAWARE_MSVC) || defined(__vectorcall)
         #define VMAWARE_VECTORCALL __vectorcall
     #elif (VMAWARE_CLANG)
@@ -604,7 +604,7 @@
     #pragma comment(lib, "gdi32.lib")
     #pragma comment(lib, "user32.lib")
 #elif (VMAWARE_LINUX)
-    #if (VMAWARE_x86)
+    #if (VMAWARE_X86)
         #include <cpuid.h>
         #include <x86intrin.h>
         #include <immintrin.h>
@@ -628,7 +628,7 @@
     #include <sched.h>      
     #include <cerrno>   
 #elif (VMAWARE_APPLE)
-    #if (VMAWARE_x86)
+    #if (VMAWARE_X86)
         #include <cpuid.h>
         #include <x86intrin.h>
         #include <immintrin.h>
@@ -659,7 +659,7 @@
         #pragma const_seg(".text")
     #endif
 
-    #if (VMAWARE_x86)
+    #if (VMAWARE_X86)
         static const unsigned char vmload_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xDA, 0xC3 };
         static const unsigned char vmcall_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xC1, 0xC3 };
         static const unsigned char vmmcall_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xD9, 0xC3 };
@@ -698,7 +698,7 @@
         };
         static const unsigned char ud_stub[] VMAWARE_SECTION = { 0x0F, 0x0B, 0xC3 }; /* ud2; ret */
 
-        #if (VMAWARE_x86_64)
+        #if (VMAWARE_X86_64)
             static const unsigned char cpuid_singlestep_stub[] VMAWARE_SECTION = {
                 0x49, 0x89, 0xD8,                         /* mov r8, rbx */
                 0x9C,                                     /* pushfq */
@@ -764,7 +764,7 @@
                 0xF1,                                           /* icebp */
                 0xC3                                            /* ret */
             };
-        #elif (VMAWARE_x86_32)
+        #elif (VMAWARE_X86_32)
             static const unsigned char cpuid_singlestep_stub[] VMAWARE_SECTION = {
                 0x89, 0xDF,                               /* mov edi, ebx */
                 0x9C,                                     /* pushfd */
@@ -1141,7 +1141,7 @@ public:
             u32& c,
             u32& d
         ) noexcept {
-        #if (VMAWARE_x86)
+        #if (VMAWARE_X86)
             #if (VMAWARE_MSVC)
                 int regs[4] = { 0 };
                 __cpuidex(regs, static_cast<int>(leaf), static_cast<int>(subleaf));
@@ -1164,7 +1164,7 @@ public:
 
         /* Cross-platform wrapper for linux and MSVC cpuid */
         static void cpuid(u32& a, u32& b, u32& c, u32& d, const u32 a_leaf, const u32 c_leaf = 0xFF) noexcept {
-        #if (VMAWARE_x86)
+        #if (VMAWARE_X86)
             /* May be unmodified for older 32-bit processors, clearing just in case */
             a = 0;
             b = 0;
@@ -1184,7 +1184,7 @@ public:
 
         /* Same as above but for array type parameters (MSVC specific) */
         static void cpuid(i32 x[4], const u32 a_leaf, const u32 c_leaf = 0xFF) noexcept {
-        #if (VMAWARE_x86)
+        #if (VMAWARE_X86)
             /* May be unmodified for older 32-bit processors, clearing just in case */
             x[0] = 0;
             x[1] = 0;
@@ -1272,7 +1272,7 @@ public:
                 return memo::cpu_brand::fetch();
             }
 
-        #if (!VMAWARE_x86 || VMAWARE_APPLE)
+        #if (!VMAWARE_X86 || VMAWARE_APPLE)
             return "Unknown";
         #else
             if (!cpu::is_leaf_supported(cpu::leaf::brand3)) {
@@ -3663,9 +3663,9 @@ public:
 
 #if (VMAWARE_WINDOWS)
     /* Timing attacks helper functionalities */
-    #if (VMAWARE_x86)
+    #if (VMAWARE_X86)
     struct timer {
-    #if (VMAWARE_x86_64)
+    #if (VMAWARE_X86_64)
         using timer_tick_t = u64;
     #else
         using timer_tick_t = u32;
@@ -4387,13 +4387,13 @@ public:
 
             custom_peb* peb = nullptr;
 
-        #if (VMAWARE_x86_64)
+        #if (VMAWARE_X86_64)
             #if (VMAWARE_MSVC && !VMAWARE_CLANG)
                 peb = reinterpret_cast<custom_peb*>(__readgsqword(0x60));
             #else
                 asm("movq %%gs:0x60, %0" : "=r"(peb));
             #endif
-        #elif (VMAWARE_x86_32)
+        #elif (VMAWARE_X86_32)
             #if (VMAWARE_MSVC && !VMAWARE_CLANG)
                 peb = reinterpret_cast<custom_peb*>(__readfsdword(0x30));
             #else
@@ -4774,12 +4774,12 @@ public:
         #if (VMAWARE_GCC) || (VMAWARE_CLANG)
             return __builtin_popcountll(v);
         #elif (VMAWARE_MSVC)
-            #if (VMAWARE_x86_32)
+            #if (VMAWARE_X86_32)
                 return static_cast<int>(
                     __popcnt(static_cast<unsigned int>(v)) +
                     __popcnt(static_cast<unsigned int>(v >> 32))
                 );
-            #elif (VMAWARE_x86_64)
+            #elif (VMAWARE_X86_64)
                 return static_cast<int>(__popcnt64(static_cast<unsigned long long>(v)));
             #else
                 i32 c = 0;
@@ -5632,7 +5632,7 @@ public:
         }
 
         [[nodiscard]] static bool is_32bit_execution_disabled() noexcept {
-        #if (VMAWARE_x86_64)
+        #if (VMAWARE_X86_64)
             wchar_t wow64_dir[MAX_PATH] = { 0 };
             const UINT ret = GetSystemWow64DirectoryW(wow64_dir, MAX_PATH);
             if (ret == 0) {
@@ -5799,7 +5799,7 @@ public:
         struct hash {
             static bool has_sse42() noexcept {
                 static const bool supported = []() noexcept -> bool {
-                #if (VMAWARE_x86)
+                #if (VMAWARE_X86)
                     i32 regs[4];
                     cpu::cpuid(regs, cpu::leaf::features);
                     return (regs[2] & (1 << 20)) != 0;
@@ -5863,11 +5863,11 @@ public:
             }
 
             /* Native/SSE4.2 hardware assisted or software CRC32C of a single byte */
-       #if (VMAWARE_x86 && (VMAWARE_GCC || VMAWARE_CLANG))
+       #if (VMAWARE_X86 && (VMAWARE_GCC || VMAWARE_CLANG))
             __attribute__((__target__("sse4.2")))
         #endif
             static u32 crc32c_byte(u32 crc, const char data) noexcept {
-                #if (VMAWARE_x86)
+                #if (VMAWARE_X86)
                 if (has_sse42()) {
                     return _mm_crc32_u8(crc, static_cast<u8>(data));
                 }
@@ -5875,7 +5875,7 @@ public:
                 return crc32c_byte_sw(crc, data);
             }
 
-        #if (VMAWARE_x86 && (VMAWARE_GCC || VMAWARE_CLANG))
+        #if (VMAWARE_X86 && (VMAWARE_GCC || VMAWARE_CLANG))
             __attribute__((__target__("sse4.2")))
         #endif
             static u32 crc32c(u32 crc, const void* data, const size_t len) noexcept {
@@ -5883,11 +5883,11 @@ public:
                     return crc32c_sw(crc, data, len);
                 }
 
-            #if (VMAWARE_x86)
+            #if (VMAWARE_X86)
                 const u8* ptr = reinterpret_cast<const u8*>(data);
                 size_t i = 0;
 
-            #if (VMAWARE_x86_64)
+            #if (VMAWARE_X86_64)
                 const size_t qwords = len >> 3;
                 const u64* qptr = reinterpret_cast<const u64*>(data);
                 u64 crc64 = crc;
@@ -6298,7 +6298,7 @@ public:
      * @implements VM::VMID
      */
      [[nodiscard]] static bool vmid() {
-    #if (!VMAWARE_x86)
+    #if (!VMAWARE_X86)
         return false;
     #else
          return (
@@ -6316,7 +6316,7 @@ public:
      * @implements VM::CPU_BRAND
      */
      [[nodiscard]] static bool cpu_brand() {
-     #if (!VMAWARE_x86)
+     #if (!VMAWARE_X86)
          return false;
      #else
          const char* brand = cpu::get_brand();
@@ -6371,7 +6371,7 @@ public:
      * @implements VM::HYPERVISOR_BIT
      */
     [[nodiscard]] static bool hypervisor_bit() {
-    #if (!VMAWARE_x86)
+    #if (!VMAWARE_X86)
         return false;
     #else
         u32 eax = 0;
@@ -6408,7 +6408,7 @@ public:
      * @implements VM::HYPERVISOR_STR
      */
     [[nodiscard]] static bool hypervisor_str() {
-    #if (!VMAWARE_x86)
+    #if (!VMAWARE_X86)
         return false;
     #else
         if (util::hyper_x() == HYPERV_HOST) {
@@ -6436,7 +6436,7 @@ public:
      * @implements VM::BOCHS_CPU
      */
     [[nodiscard]] static bool bochs_cpu() {
-    #if (!VMAWARE_x86)
+    #if (!VMAWARE_X86)
         return false;
     #else
         const bool intel = cpu::is_intel();
@@ -6514,7 +6514,7 @@ public:
      * @implements VM::THREAD_MISMATCH
      */
     [[nodiscard]] static bool thread_mismatch() {
-    #if (!VMAWARE_x86)
+    #if (!VMAWARE_X86)
         return false;
     #else
         auto is_smt_active = []() noexcept -> bool {
@@ -6827,7 +6827,7 @@ public:
      * @implements VM::CPUID_SIGNATURE
      */
     [[nodiscard]] static bool cpuid_signature() {
-    #if (!VMAWARE_x86)
+    #if (!VMAWARE_X86)
         return false;
     #else
         u32 eax = 0;
@@ -6983,7 +6983,7 @@ public:
      * @implements VM::KGT_SIGNATURE
      */
     [[nodiscard]] static bool intel_kgt_signature() {
-    #if (!VMAWARE_x86)
+    #if (!VMAWARE_X86)
         return false;
     #else
         u32 unused = 0;
@@ -7009,7 +7009,7 @@ public:
      * @implements VM::TIMER
      */
     [[nodiscard]] static bool timer() VMAWARE_SERIALIZE {
-    #if (VMAWARE_x86 && VMAWARE_WINDOWS)
+    #if (VMAWARE_X86 && VMAWARE_WINDOWS)
         if (util::is_x86_process_on_arm()) {
             vma_debug("TIMER: Running inside a binary translation layer");
             return false;
@@ -7143,7 +7143,7 @@ public:
                     const auto eflags = __readeflags();
                     __writeeflags(eflags | 0x100);
                     __nop();
-                #elif (VMAWARE_x86_64)
+                #elif (VMAWARE_X86_64)
                     __asm__ volatile (
                         "pushfq \n\t"
                         "orq $0x100, (%%rsp) \n\t"
@@ -7181,7 +7181,7 @@ public:
                 volatile bool* flag
             ) noexcept {
                 __try {
-                #if (VMAWARE_x86_64)
+                #if (VMAWARE_X86_64)
                     RtlCaptureContext(ctx);
                 #else
                     /* On x86_32, RtlCaptureContext is unreliable under clang-cl with FPO */
@@ -7884,7 +7884,7 @@ public:
      * @implements VM::AMD_SEV_MSR
 	 */
 	[[nodiscard]] static bool amd_sev_msr() {
-    #if (VMAWARE_x86 && (VMAWARE_LINUX || VMAWARE_APPLE))
+    #if (VMAWARE_X86 && (VMAWARE_LINUX || VMAWARE_APPLE))
         if (!cpu::is_amd()) {
             return false;
         }
@@ -8610,12 +8610,12 @@ public:
         bool found = false;
 
         /* Linux - SIDT only */
-    #if (VMAWARE_LINUX && (VMAWARE_GCC || VMAWARE_CLANG) && VMAWARE_x86)
+    #if (VMAWARE_LINUX && (VMAWARE_GCC || VMAWARE_CLANG) && VMAWARE_X86)
         u8 values[10] = { 0 }; /* NOLINT(misc-const-correctness) */
 
         fflush(stdout);
 
-        #if (VMAWARE_x86_64)
+        #if (VMAWARE_X86_64)
             /* 64-bit Linux: IDT descriptor is 10 bytes (2-byte limit + 8-byte base) */
             __asm__ __volatile__("sidt %0" : "=m"(values));
 
@@ -8632,7 +8632,7 @@ public:
             if (values[9] == 0x00) {
                 found = true; /* 10th byte in x64 mode */
             }
-        #elif (VMAWARE_x86_32)
+        #elif (VMAWARE_X86_32)
             /* 32-bit Linux: IDT descriptor is 6 bytes (2-byte limit + 4-byte base) */
             __asm__ __volatile__("sidt %0" : "=m"(values));
 
@@ -8652,7 +8652,7 @@ public:
         #endif
 
         /* Windows - SGDT, SLDT, SIDT, SMSW */
-    #elif (VMAWARE_WINDOWS && VMAWARE_x86)
+    #elif (VMAWARE_WINDOWS && VMAWARE_X86)
         SYSTEM_INFO si;
         GetNativeSystemInfo(&si);
         DWORD_PTR original_mask = 0;
@@ -8669,7 +8669,7 @@ public:
                     if (SetThreadGroupAffinity(current_thread, &target_aff, nullptr)) {
                         /* Technique 1: SGDT(x86 & x64) */
                         {
-                        #if (VMAWARE_x86_64)
+                        #if (VMAWARE_X86_64)
                             u8 gdtr[10] = { 0 };
                         #else
                             u8 gdtr[6] = { 0 };
@@ -8678,7 +8678,7 @@ public:
                             __try {
                             #if (VMAWARE_CLANG || VMAWARE_GCC)
                                 __asm__ volatile("sgdt %0" : "=m"(gdtr));
-                            #elif (VMAWARE_MSVC && VMAWARE_x86_32)
+                            #elif (VMAWARE_MSVC && VMAWARE_X86_32)
                                 __asm { sgdt gdtr }
                             #else
                                 #pragma pack(push,1)
@@ -8703,7 +8703,7 @@ public:
                         }
 
                         /* Technique 2: SLDT (x86_32 only) */
-                    #if (VMAWARE_x86_32)
+                    #if (VMAWARE_X86_32)
                         if (!found) {
                             u8 ldtr_buf[4] = { 0xEF, 0xBE, 0xAD, 0xDE };
                             u32 ldt_val = 0;
@@ -8734,7 +8734,7 @@ public:
 
                         /* Technique 3: SIDT(x86 & x64) */
                         if (!found) {
-                        #if (VMAWARE_x86_64)    
+                        #if (VMAWARE_X86_64)    
                             u8 idtr_buffer[10] = { 0 };
                         #else
                             u8 idtr_buffer[6] = { 0 };
@@ -8743,9 +8743,9 @@ public:
                             __try {
                             #if (VMAWARE_CLANG || VMAWARE_GCC)
                                 __asm__ volatile("sidt %0" : "=m"(idtr_buffer));
-                            #elif (VMAWARE_MSVC) && (VMAWARE_x86_32)
+                            #elif (VMAWARE_MSVC) && (VMAWARE_X86_32)
                                 __asm { sidt idtr_buffer }
-                            #elif (VMAWARE_MSVC) && (VMAWARE_x86_64)
+                            #elif (VMAWARE_MSVC) && (VMAWARE_X86_64)
                                 #pragma pack(push, 1)
                                 struct {
                                     USHORT Limit;
@@ -8782,7 +8782,7 @@ public:
         }
 
         /* Technique 4: SMSW (x86_32 only), no affinity pinning needed */
-        #if (VMAWARE_x86_32)
+        #if (VMAWARE_X86_32)
             if (!found) {
                 u32 reax = 0;
                 __asm
@@ -9887,11 +9887,11 @@ public:
      * @implements VM::BOOT_LOGO
      */
     [[nodiscard]] static bool boot_logo()
-    #if (VMAWARE_x86 && (VMAWARE_CLANG || VMAWARE_GCC))
+    #if (VMAWARE_X86 && (VMAWARE_CLANG || VMAWARE_GCC))
         __attribute__((__target__("crc32")))
     #endif
     {
-    #if (VMAWARE_x86_64)       
+    #if (VMAWARE_X86_64)       
         #if (VMAWARE_WINDOWS)
             const HMODULE ntdll = memory::get_module(true);
             if (!ntdll) {
@@ -10437,7 +10437,7 @@ public:
      * @implements VM::THREAD_COUNT
      */
     [[nodiscard]] static bool thread_count() {
-    #if (VMAWARE_x86 && !VMAWARE_APPLE)
+    #if (VMAWARE_X86 && !VMAWARE_APPLE)
         vma_debug("THREAD_COUNT: ", "threads = ", memo::thread_count::fetch());
 
         const struct cpu::stepping_struct steps = cpu::fetch_steppings();
@@ -11014,7 +11014,7 @@ public:
      */
     [[nodiscard]] static bool vpc_invalid() {
         bool rc = false;
-    #if (VMAWARE_x86_32 && !VMAWARE_CLANG)
+    #if (VMAWARE_X86_32 && !VMAWARE_CLANG)
         if (util::is_x86_process_on_arm()) {
             return false;
         }
@@ -11080,7 +11080,7 @@ public:
      * @implements VM::VMWARE_STR
      */
     [[nodiscard]] static bool vmware_str() {
-    #if (VMAWARE_x86_32)
+    #if (VMAWARE_X86_32)
         if (util::is_x86_process_on_arm()) {
             return false;
         }
@@ -11653,7 +11653,7 @@ public:
      * @implements VM::VIRTUAL_PROCESSORS
      */
     [[nodiscard]] static bool virtual_processors() {
-    #if (VMAWARE_x86)
+    #if (VMAWARE_X86)
         int regs[4];
         __cpuid(regs, cpu::leaf::hypervisor);
 
@@ -12030,7 +12030,7 @@ public:
         }
 
         bool hypervisor_caught = false;
-    #if (VMAWARE_x86_64)
+    #if (VMAWARE_X86_64)
         /*
          * When a single-step (TF) and hardware breakpoint (DR0) collide, Intel CPUs set both DR6.BS and DR6.B0.
          * AMD CPUs prioritize the breakpoint, setting only its corresponding bit in DR6.
@@ -12172,7 +12172,7 @@ public:
      * @implements VM::UD
      */
     [[nodiscard]] static bool ud() {
-    #if (VMAWARE_x86) || (VMAWARE_ARM32) || (VMAWARE_ARM64)
+    #if (VMAWARE_X86) || (VMAWARE_ARM32) || (VMAWARE_ARM64)
         bool saw_ud = false;
 
         __try {
@@ -12195,7 +12195,7 @@ public:
      * @implements VM::INTERRUPT_SHADOW
      */
     [[nodiscard]] static bool interrupt_shadow() {
-    #if (VMAWARE_x86)
+    #if (VMAWARE_X86)
         if (util::hyper_x() == HYPERV_HOST) {
             return false;
         }
@@ -12206,7 +12206,7 @@ public:
         struct exception_handler {
             static VMAWARE_NOINLINE int execute(const unsigned int code, struct _EXCEPTION_POINTERS* ep, volatile ULONG_PTR* out_trap_ip, volatile bool* out_anomaly) {
                 if (code == EXCEPTION_SINGLE_STEP && ep && ep->ContextRecord) {
-                #if (VMAWARE_x86_64)
+                #if (VMAWARE_X86_64)
                     *out_trap_ip = ep->ContextRecord->Rip;
                 #else
                     * out_trap_ip = ep->ContextRecord->Eip;
@@ -12232,7 +12232,7 @@ public:
         }
     #endif
 
-    #if (VMAWARE_x86_32) && !(VMAWARE_CLANG || VMAWARE_GCC)
+    #if (VMAWARE_X86_32) && !(VMAWARE_CLANG || VMAWARE_GCC)
         bool hypervisor_detected = false;
         ULONG_PTR baremetal_target_ip = 0;
 
@@ -12297,7 +12297,7 @@ public:
 
         return hypervisor_detected;
 
-    #elif (VMAWARE_x86_64) || ((VMAWARE_x86_32) && (VMAWARE_CLANG || VMAWARE_GCC))
+    #elif (VMAWARE_X86_64) || ((VMAWARE_X86_32) && (VMAWARE_CLANG || VMAWARE_GCC))
         bool hypervisor_detected = false;
         ULONG_PTR baremetal_target_ip = 0;
 
@@ -12340,7 +12340,7 @@ public:
      * @implements VM::DBVM
      */
     [[nodiscard]] static bool dbvm() {
-    #if (!VMAWARE_x86_64)
+    #if (!VMAWARE_X86_64)
         return false;
     #else
         if (util::is_x86_process_on_arm()) {
@@ -13106,7 +13106,7 @@ public:
      */
     [[nodiscard]] static bool cpu_heuristic() {
         bool spoofed = false;
-    #if (VMAWARE_x86)
+    #if (VMAWARE_X86)
         if (util::is_x86_process_on_arm()) {
             return false;
         }
@@ -13357,7 +13357,7 @@ public:
             So for example, if the CPU reports being Intel, and succesfully runs CLZERO without a NOP, then it's not an Intel CPU.
         */
 
-    #if (VMAWARE_x86_64)
+    #if (VMAWARE_X86_64)
         /* Mov rax, imm64 (10 bytes) + clzero (3 bytes) + ret (1 byte) */
         u8 amd_bytes[] = {
             0x48, 0xB8,                 /* mov rax, imm64 */
@@ -13452,7 +13452,7 @@ public:
                 std::memset(amd_target_mem, 0xA5, target_size);
 
                 const std::uintptr_t paddr = reinterpret_cast<std::uintptr_t>(amd_target_mem);
-            #if (VMAWARE_x86_64)
+            #if (VMAWARE_X86_64)
                 const u64 addr = static_cast<u64>(paddr);
                 for (u8 i = 0; i < 8; ++i) {
                     amd_bytes[2 + i] = static_cast<u8>((addr >> (i * 8)) & 0xFF);
@@ -13775,7 +13775,7 @@ public:
      * @implements VM::MSR
      */
     [[nodiscard]] static bool msr() {
-    #if (!VMAWARE_x86)
+    #if (!VMAWARE_X86)
         return false;
     #else
         if (util::is_x86_process_on_arm()) {
@@ -13825,7 +13825,7 @@ public:
                 if (info->ExceptionRecord->ExceptionCode == EXCEPTION_PRIV_INSTRUCTION) {
                     g_msr_faulted = true;
                     /* Skip the 'rdmsr' instruction (2 bytes: 0F 32) */
-                #if (VMAWARE_x86_64)
+                #if (VMAWARE_X86_64)
                     info->ContextRecord->Rip += 2;
                 #else
                     info->ContextRecord->Eip += 2;
@@ -13867,7 +13867,7 @@ public:
                 if (info->ExceptionRecord->ExceptionCode == EXCEPTION_PRIV_INSTRUCTION) {
                     g_msr_write_faulted = true;
                     /* Skip the 'wrmsr' instruction (2 bytes: 0F 30) */
-                #if (VMAWARE_x86_64)
+                #if (VMAWARE_X86_64)
                     info->ContextRecord->Rip += 2;
                 #else
                     info->ContextRecord->Eip += 2;
@@ -13915,7 +13915,7 @@ public:
      * @implements VM::KVM_INTERCEPTION
      */
     [[nodiscard]] static bool kvm_interception() {
-    #if (!VMAWARE_x86)
+    #if (!VMAWARE_X86)
         return false;
     #else
         if (util::is_x86_process_on_arm()) {
@@ -13962,7 +13962,7 @@ public:
      * @implements VM::HYPERVISOR_HOOK
      */
     [[nodiscard]] static bool hypervisor_hook() {
-    #if (!VMAWARE_x86)
+    #if (!VMAWARE_X86)
         return false;
     #else
         #if (defined VMAWARE_DEBUG)
@@ -14272,7 +14272,7 @@ public:
      * @implements VM::SINGLE_STEP
      */
     [[nodiscard]] static bool single_step() {
-    #if (!VMAWARE_x86)
+    #if (!VMAWARE_X86)
         return false;
     #else
         if (util::hyper_x() == HYPERV_HOST) {
@@ -14285,9 +14285,9 @@ public:
         struct exception_handler {
             static VMAWARE_NOINLINE LONG execute(const EXCEPTION_POINTERS* info, DWORD* exceptionCode) {
                 *exceptionCode = info->ExceptionRecord->ExceptionCode;
-            #if (VMAWARE_x86_64)
+            #if (VMAWARE_X86_64)
                 info->ContextRecord->Rbx = info->ContextRecord->R8;
-            #elif (VMAWARE_x86_32)
+            #elif (VMAWARE_X86_32)
                 info->ContextRecord->Ebx = info->ContextRecord->Edi;
             #endif
                 return EXCEPTION_EXECUTE_HANDLER;
@@ -14349,7 +14349,7 @@ public:
      * @implements VM::EIP_OVERFLOW
      */
     [[nodiscard]] static bool eip_overflow() {
-    #if (!VMAWARE_x86_64) 
+    #if (!VMAWARE_X86_64) 
         /*
          * This requires mapping executable memory at the end of the 4GB address space (0xFFFF0000) so an instruction can wrap the 32 bit boundary
          * because NtAllocateVirtualMemory will always return 0xC0000018 (STATUS_CONFLICTING_ADDRESSES) we physically cannot place an instruction at 0xFFFFFFFE
@@ -14526,7 +14526,7 @@ public:
      * @implements VM::SVM_EXCEPTIONS
      */
     [[nodiscard]] static bool svm_exceptions() {
-    #if (VMAWARE_x86)   
+    #if (VMAWARE_X86)   
         if (!cpu::is_amd()) {
             vma_debug("SVM_EXCEPTIONS: AMD CPU not detected");
             return false;
