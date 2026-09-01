@@ -178,16 +178,16 @@ constexpr const char* date = "August 2026";
     std::exit(0);
 }
 
-#if (CLI_WINDOWS && defined VMAWARE_DEBUG)
-    static void enable_crt_leak_check()
-    {
-        int flags = _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG);
-        flags |= _CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF;
-        _CrtSetDbgFlag(flags);
+#if (CLI_WINDOWS && defined VMAWARE_DEBUG && !CLI_ARM)
+static void enable_crt_leak_check()
+{
+    int flags = _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG);
+    flags |= _CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF;
+    _CrtSetDbgFlag(flags);
 
-        _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
-        _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
-    }
+    _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+}
 #endif
 
 int main(int argc, char* argv[]) {

@@ -452,29 +452,58 @@
 #endif
 
 /* =========================================================================
+ * INTRINSIC HEADERS
+ * ========================================================================= */
+#if defined(_MSC_VER)
+    #include <intrin.h>
+#elif (VMAWARE_GCC || VMAWARE_CLANG)
+    #if (VMAWARE_x86)
+        #include <x86intrin.h>
+        #include <immintrin.h>
+    #endif
+#endif
+
+/* =========================================================================
+ * PREFETCH CONSTANTS
+ * ========================================================================= */
+#ifndef _MM_HINT_NTA
+    #define _MM_HINT_NTA 0
+#endif
+    #ifndef _MM_HINT_T0
+    #define _MM_HINT_T0 1
+#endif
+    #ifndef _MM_HINT_T1
+    #define _MM_HINT_T1 2
+#endif
+    #ifndef _MM_HINT_T2
+    #define _MM_HINT_T2 3
+#endif
+
+/* =========================================================================
  * MEMORY PREFETCH
  * ========================================================================= */
-#if (VMAWARE_x86)
-    #if (VMAWARE_GCC || VMAWARE_CLANG)
+#if (VMAWARE_GCC || VMAWARE_CLANG)
+     /* Should work for both x86 and ARM without an x86 guard */
+    #define VMAWARE_PREFETCH(ptr, hint) \
+                __builtin_prefetch( \
+                    const_cast<const void*>(static_cast<const volatile void*>(ptr)), \
+                    0, \
+                    (hint) \
+                )
+#elif defined(_MSC_VER)
+    #if (VMAWARE_x86)
         #define VMAWARE_PREFETCH(ptr, hint) \
-                    __builtin_prefetch( \
-                        const_cast<const void*>(static_cast<const volatile void*>(ptr)), \
-                        0, \
-                        (hint) \
-                    )
-    #elif (VMAWARE_MSVC) && (VMAWARE_x86)
-        #include <xmmintrin.h>
-        #define VMAWARE_PREFETCH(ptr, hint) \
-                    _mm_prefetch( \
-                        const_cast<const char*>(reinterpret_cast<const volatile char*>(ptr)), \
-                        (hint) \
-                    )
+                        _mm_prefetch( \
+                            const_cast<const char*>(reinterpret_cast<const volatile char*>(ptr)), \
+                            (hint) \
+                        )
     #else
         #define VMAWARE_PREFETCH(ptr, hint) ((void)(ptr), (void)(hint))
     #endif
 #else
     #define VMAWARE_PREFETCH(ptr, hint) ((void)(ptr), (void)(hint))
 #endif
+
 /* =========================================================================
  * ARCHITECTURE-SPECIFIC INTRINSICS
  * ========================================================================= */
@@ -560,14 +589,6 @@
 
 #if (VMAWARE_WINDOWS)
     #include <windows.h>
-    #if (VMAWARE_MSVC) /* Targets clang-cl too */
-        #include <intrin.h>
-    #elif (VMAWARE_GCC || VMAWARE_CLANG)
-        #if (VMAWARE_x86)
-            #include <x86intrin.h> /* Although Clang provides a compatibility header for it when targeting Windows environments */
-            #include <immintrin.h>
-        #endif
-    #endif
     #include <winioctl.h>
     #include <winternl.h>
     #include <powerbase.h>
