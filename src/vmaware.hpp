@@ -7019,7 +7019,7 @@ public:
         double threshold = 2.5;
         if (util::hyper_x() == HYPERV_HOST) {
             vma_debug("TIMER: Hyper-V detected, running nested checks");
-            threshold = 15.0;
+            threshold = 100.0;
         }
 
         static timer::cache_state state;
@@ -10875,23 +10875,7 @@ public:
             return true;
         }
 
-        const char* manufacturer = nullptr;
-        const char* model = nullptr;
-
-        /* Some devices like Latitude 5440 and Lenovo 11BES09T00 do not expose thermal control */
-        if (util::get_manufacturer_model(&manufacturer, &model)) {
-            const bool is_lenovo = string::contains_ci(manufacturer, "LENOVO");
-            const bool is_dell = string::contains_ci(manufacturer, "Dell Inc.");
-            const bool is_qiyida = string::contains_ci(manufacturer, "QIYIDA");
-            const bool is_latitude = string::contains_ci(model, "Latitude");
-
-            if (is_lenovo || is_qiyida || (is_dell && is_latitude)) {
-                vma_debug("Lenovo, Qiyida or Dell device detected, aborting thermal control check");
-                return false;
-            }
-        }
-
-        return (caps.ThermalControl == 0);
+        return false;
     }
 
 
@@ -11442,7 +11426,6 @@ public:
 
             if (
                 strstr(driver_path, "vmusbmouse") ||
-                strstr(driver_path, "vmmouse") ||
                 strstr(driver_path, "vmmemctl")
                ) {
                 vma_debug("DRIVERS: Detected VMware driver: ", driver_path);
