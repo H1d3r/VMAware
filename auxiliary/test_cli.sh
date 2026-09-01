@@ -34,14 +34,18 @@ check_fails() {
     fi
 }
 
+# Uses regex matching to prevent SIGPIPE/Broken pipe with pipefail
+# and suppresses stderr so debug logs don't pollute the return value
 match() {
     local desc="$1" pattern="$2"; shift 2
     local out
-    out=$("$@" 2>&1)
-    if echo "$out" | grep -qE "$pattern"; then
+    out=$("$@" 2>/dev/null) || { fail "$desc (non-zero exit)"; return; }
+    if [[ "$out" =~ $pattern ]]; then
         ok "$desc"
     else
-        fail "$desc  (got: $(echo "$out" | head -1))"
+        local first_line
+        first_line="$(printf '%s\n' "$out" | head -n 1)"
+        fail "$desc  (got: $first_line)"
     fi
 }
 
@@ -97,10 +101,11 @@ match   "--brand outputs a non-empty line" "."             "$BIN" --brand
 match   "--type outputs a non-empty line"  "."             "$BIN" --type
 match   "--conclusion outputs a sentence"  "."             "$BIN" --conclusion
 
-# no-ansi strips escape codes
+# no-ansi strips escape codes (uses portable Bash string comparison without grep -P)
 echo
 echo "no-ansi"
-if "$BIN" --no-ansi 2>&1 | grep -qP '\x1B\['; then
+out=$("$BIN" --no-ansi 2>/dev/null)
+if [[ "$out" == *$'\033['* ]]; then
     fail "--no-ansi still contains ANSI escape codes"
 else
     ok "--no-ansi output contains no ANSI escape codes"
@@ -146,8 +151,8 @@ check_fails "--disable MULTIPLE (setting) fails"  "$BIN" --disable MULTIPLE --de
 # --disable visible in general output
 echo
 echo "--disable reflected in general output"
-out=$("$BIN" --no-ansi --disable HYPERVISOR_BIT 2>&1)
-if echo "$out" | grep -q "Skipped CPUID hypervisor bit"; then
+out=$("$BIN" --no-ansi --disable HYPERVISOR_BIT 2>/dev/null)
+if [[ "$out" == *"Skipped CPUID hypervisor bit"* ]] || [[ "$out" == *"HYPERVISOR_BIT"* && "$out" == *"Skipped"* ]]; then
     ok "--disable HYPERVISOR_BIT shows as skipped in general output"
 else
     fail "--disable HYPERVISOR_BIT not reflected in general output"
@@ -158,7 +163,7 @@ echo
 echo "--high-threshold"
 p_normal=$("$BIN" --percent 2>/dev/null)
 p_high=$(  "$BIN" --percent --high-threshold 2>/dev/null)
-if (( p_normal >= p_high )); then
+if [[ "$p_normal" =~ ^[0-9]+$ ]] && [[ "$p_high" =~ ^[0-9]+$ ]] && (( p_normal >= p_high )); then
     ok "--high-threshold produces equal or lower percentage ($p_normal -> $p_high)"
 else
     fail "--high-threshold produced higher percentage ($p_normal -> $p_high)"
@@ -194,7 +199,7 @@ fi
 # --brand-list
 echo
 echo "--brand-list"
-count=$(  "$BIN" --brand-list 2>/dev/null | wc -l)
+count=$("$BIN" --brand-list 2>/dev/null | wc -l | tr -d ' ')
 if (( count > 5 )); then
     ok "--brand-list returns multiple entries ($count lines)"
 else
