@@ -472,6 +472,8 @@
     #else
         #define VMAWARE_PREFETCH(ptr, hint) ((void)(ptr), (void)(hint))
     #endif
+#else
+    #define VMAWARE_PREFETCH(ptr, hint) ((void)(ptr), (void)(hint))
 #endif
 /* =========================================================================
  * ARCHITECTURE-SPECIFIC INTRINSICS
@@ -8599,7 +8601,7 @@ public:
         #ifdef VMAWARE_DEBUG
             vma_debug("SIDT: values = ");
             for (u8 i = 0; i < 10; ++i) {
-                debug(std::hex, std::setw(2), std::setfill('0'), static_cast<u32>(values[i]));
+                vma_debug(std::hex, std::setw(2), std::setfill('0'), static_cast<u32>(values[i]));
                 if (i < 9) {
                     vma_debug(" ");
                 }
@@ -8616,7 +8618,7 @@ public:
         #ifdef VMAWARE_DEBUG
             vma_debug("SIDT: values = ");
             for (u8 i = 0; i < 6; ++i) {
-                debug(std::hex, std::setw(2), std::setfill('0'), static_cast<u32>(values[i]));
+                vma_debug(std::hex, std::setw(2), std::setfill('0'), static_cast<u32>(values[i]));
                 if (i < 5) {
                     vma_debug(" ");
                 }
