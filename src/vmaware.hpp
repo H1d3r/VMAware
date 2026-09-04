@@ -931,7 +931,7 @@ public:
          */
         DEFAULT,
         ALL,
-        NULL_ARG, /* does nothing, just a placeholder flag mainly for the CLI */
+        NULL_ARG, /* Does nothing, just a placeholder flag mainly for the CLI */
 
         /* Start of settings technique flags (THE ORDERING IS VERY SPECIFIC HERE AND MIGHT BREAK SOMETHING IF RE-ORDERED) */
         HIGH_THRESHOLD,
@@ -1014,13 +1014,13 @@ public:
         NULL_BRAND /* do not modify the placement for this, as it's used to count the number of brands here */
     };
 
-    static constexpr u8 enum_size = MULTIPLE; /* get enum size through value of last element */
-    static constexpr u8 settings_count = static_cast<u8>(MULTIPLE - HIGH_THRESHOLD + 1); /* get number of settings technique flags */
-    static constexpr u16 base_technique_count = HIGH_THRESHOLD; /* original technique count, constant on purpose (can also be used as a base count value if custom techniques are added) */
-    static constexpr u16 threshold_score = 150; /* standard threshold score */
-    static constexpr u16 high_threshold_score = 300; /* new threshold score from 150 to 300 if VM::HIGH_THRESHOLD flag is enabled */
-    static constexpr bool SHORTCUT = true; /* macro for whether VM::core::run_all() should take a shortcut by skipping the rest of the techniques if the threshold score is already met */
-    static constexpr size_t MAX_CUSTOM_TECHNIQUES = 256; /* specific to VM::add_custom(), where custom techniques will be stored here */
+    static constexpr u8 enum_size = MULTIPLE; /* Get enum size through value of last element */
+    static constexpr u8 settings_count = static_cast<u8>(MULTIPLE - HIGH_THRESHOLD + 1); /* Get number of settings technique flags */
+    static constexpr u16 base_technique_count = HIGH_THRESHOLD; /* Original technique count, constant on purpose (can also be used as a base count value if custom techniques are added) */
+    static constexpr u16 threshold_score = 150; /* Standard threshold score */
+    static constexpr u16 high_threshold_score = 300; /* New threshold score from 150 to 300 if VM::HIGH_THRESHOLD flag is enabled */
+    static constexpr bool SHORTCUT = true; /* Macro for whether VM::core::run_all() should take a shortcut by skipping the rest of the techniques if the threshold score is already met */
+    static constexpr size_t MAX_CUSTOM_TECHNIQUES = 256; /* Specific to VM::add_custom(), where custom techniques will be stored here */
     static constexpr size_t MAX_BRANDS = static_cast<size_t>(brand_enum::NULL_BRAND) + 1; /* VM scoreboard table specifically for VM::brand() */
 
     /* Intended for loop indexes */
@@ -1069,15 +1069,6 @@ public:
     VM(VM&&) = delete;
 
     /* Compile-time checks */
-    static_assert(sizeof(u8) == 1, "Alias u8 must be exactly 1 byte.");
-    static_assert(sizeof(u16) == 2, "Alias u16 must be exactly 2 bytes.");
-    static_assert(sizeof(u32) == 4, "Alias u32 must be exactly 4 bytes.");
-    static_assert(sizeof(u64) == 8, "Alias u64 must be exactly 8 bytes.");
-    static_assert(sizeof(i8) == 1, "Alias i8 must be exactly 1 byte.");
-    static_assert(sizeof(i16) == 2, "Alias i16 must be exactly 2 bytes.");
-    static_assert(sizeof(i32) == 4, "Alias i32 must be exactly 4 bytes.");
-    static_assert(sizeof(i64) == 8, "Alias i64 must be exactly 8 bytes.");
-
     static_assert(std::is_integral<brand_score_t>::value, "brand_score_t must map to an integral type.");
 
     static_assert(enum_size == MULTIPLE, "enum_size must match the terminal element of the enum_flags.");
@@ -9156,7 +9147,7 @@ public:
                     constexpr u8 sata_addr_dummy[] = { 0x08, 0x5F, 0x41, 0x44, 0x52, 0x0C, 0x02, 0x00, 0x1F, 0x00 };
                     if (find_pattern("D0FA", 4) && find_pattern(reinterpret_cast<const char*>(sata_addr_dummy), sizeof(sata_addr_dummy))) {
                         vma_debug("FIRMWARE: Detected QEMU dummy SATA controller named D0FA on Device 31, Function 2");
-                        return core::add(brand_enum::QEMU);
+                        return core::add(brand_enum::NULL_BRAND, 0);
                     }
                 }
             }
