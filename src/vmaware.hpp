@@ -247,20 +247,20 @@
  * ========================================================================= */
 #if defined(__clang__)
     #define VMAWARE_CLANG 1
-    #define VMAWARE_GCC   0
-    #define VMAWARE_MSVC  0
-#elif defined(__GNUC__) || defined(__GNUG__)
-    #define VMAWARE_CLANG 0
-    #define VMAWARE_GCC   1
-    #define VMAWARE_MSVC  0
-#elif defined(_MSC_VER)
-    #define VMAWARE_CLANG 0
-    #define VMAWARE_GCC   0
-    #define VMAWARE_MSVC  1
 #else
     #define VMAWARE_CLANG 0
-    #define VMAWARE_GCC   0
-    #define VMAWARE_MSVC  0
+#endif
+
+#if defined(_MSC_VER)
+    #define VMAWARE_MSVC 1
+#else
+    #define VMAWARE_MSVC 0
+#endif
+
+#if (defined(__GNUC__) || defined(__GNUG__)) && !defined(__clang__)
+    #define VMAWARE_GCC 1
+#else
+    #define VMAWARE_GCC 0
 #endif
 
 /* =========================================================================
