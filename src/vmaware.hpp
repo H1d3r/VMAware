@@ -10774,56 +10774,60 @@ public:
      * @implements VM::WINE
      */
     [[nodiscard]] static bool wine() {
+        const HMODULE ntdll = memory::get_module(true);
+        if (ntdll && GetProcAddress(ntdll, "wine_get_version") != nullptr) {
+            vma_debug("WINE: ntdll!wine_get_version detected");
+            return core::add(brand_enum::WINE);
+        }
+
         const HMODULE kernel32 = memory::get_module(false);
+        /* If kernel32 handle could not be obtained for some weird reason, abort to prevent execution from reaching "IsNativeVhdBoot export missing in Win8+ environment" */
         if (!kernel32) {
             return false;
         }
 
-        BOOL is_wow64_process;
-        BOOL ok = IsWow64Process(GetCurrentProcess(), &is_wow64_process);
-        if (!ok) {
-            vma_debug("WINE: IsWow64Process failed");
-            return false;
-        }
-        int expected_value = is_wow64_process ? 2 : -1;
-        if (MulDiv(1,INT_MIN,INT_MIN) != expected_value) {
-            vma_debug("WINE: Unexpected MulDiv result detected");
+        if (GetProcAddress(kernel32, "wine_get_unix_file_name") != nullptr) {
+            vma_debug("WINE: kernel32!wine_get_unix_file_name detected");
             return core::add(brand_enum::WINE);
         }
 
-        using wine_get_unix_file_name_fn = char* (__stdcall*)(const wchar_t*, char*, DWORD);
-        auto wine_get_unix_file = reinterpret_cast<wine_get_unix_file_name_fn>(GetProcAddress(kernel32, "wine_get_unix_file_name"));
-        if (wine_get_unix_file != nullptr) {
-            vma_debug("WINE: wine_get_unix_file_name detected");
+        /* Genuine Windows returns - 1 (x64, ARM64) or 2 (x86 / SysWOW64), so we don't need IsWow64Process runtime checks */
+        if (MulDiv(1, INT_MIN, INT_MIN) == 0) {
+            vma_debug("WINE: MulDiv zero-result quirk detected");
             return core::add(brand_enum::WINE);
         }
 
-    #if (_WIN32_WINNT > _WIN32_WINNT_WIN8)
         if (util::is_windows_8_or_newer()) {
             using is_native_vhd_boot_fn = BOOL(__stdcall*)(PBOOL);
-            auto is_native_vhd_boot = reinterpret_cast<is_native_vhd_boot_fn>(GetProcAddress(kernel32, "IsNativeVhdBoot"));
+            auto is_native_vhd_boot = reinterpret_cast<is_native_vhd_boot_fn>(
+                GetProcAddress(kernel32, "IsNativeVhdBoot")
+            );
 
-            if (is_native_vhd_boot) {
-                BOOL is_vhd = FALSE;
-                __try {
-                    /*
-                     * We dont call NtQuerySystemInformation with SystemPrefetchPathInformation | SystemHandleInformation
-                     * the point is to check if this kernel32.dll function throws an exception
-                     */
-                    is_native_vhd_boot(&is_vhd);
-                    return is_vhd;
-                }
-                __except (EXCEPTION_EXECUTE_HANDLER) {
-                    vma_debug("WINE: IsNativeVhdBoot threw an exception (Wine stub behavior)");
-                    return core::add(brand_enum::WINE);
-                }
-            }
-            else {
+            if (!is_native_vhd_boot) {
                 vma_debug("WINE: IsNativeVhdBoot export missing in Win8+ environment");
                 return core::add(brand_enum::WINE);
             }
+
+            /* If Wine implements it as an unhandled stub in spec files, it raises EXCEPTION_WINE_STUB */
+            bool threw_exception = false;
+            __try {
+                /*
+                 * We dont call NtQuerySystemInformation with SystemPrefetchPathInformation | SystemHandleInformation
+                 * the point is to check if this kernel32.dll function throws an exception
+                 * Also, we do not return here so that the compiler doesn't need to generate a local unwind runtime thunk
+                 */
+                BOOL is_vhd = FALSE;
+                is_native_vhd_boot(&is_vhd);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                threw_exception = true;
+            }
+
+            if (threw_exception) {
+                vma_debug("WINE: IsNativeVhdBoot threw an exception (Wine stub behavior)");
+                return core::add(brand_enum::WINE);
+            }
         }
-    #endif
 
         return false;
     }
