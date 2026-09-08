@@ -9171,6 +9171,7 @@ public:
                         constexpr char pxen[] = "PXEN";
                         constexpr size_t pxen_len = sizeof(pxen) - 1;
                         if (!find_pattern(pxen, pxen_len)) {
+                            vma_debug("FIRMWARE: XEN detected");
                             return core::add(brand_enum::XEN);
                         }
                         else {
@@ -9183,6 +9184,7 @@ public:
                         constexpr char bochs[] = "BOCHS";
                         constexpr size_t bochs_len = sizeof(bochs) - 1;
                         if (!find_pattern(bochs, bochs_len)) {
+                            vma_debug("FIRMWARE: BOCHS detected");
                             return core::add(brand_enum::BOCHS);
                         }
                         else {
