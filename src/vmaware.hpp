@@ -7007,7 +7007,7 @@ public:
         }
 
         /* Calculation of minimum threshold for instrution latency */
-        double threshold = 2.5;
+        double threshold = 2.75;
         bool check_nested = false;
         if (util::hyper_x() == HYPERV_HOST) {
             vma_debug("TIMER: Hyper-V detected, running nested checks");
