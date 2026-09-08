@@ -8902,26 +8902,26 @@ public:
         };
     #pragma pack(pop)
 
-        constexpr std::array<const char*, 24> targets = { {
+        constexpr std::array<const char*, 23> targets = { {
             "Parallels Software", "Parallels(R)",
             "innotek",            "Oracle",   "VirtualBox", "vbox", "VBOX",
             "VMware, Inc.",       "VMware",   "VMWARE",     "VMW0003",
             "QEMU",               "pc-q35",   "Q35 +",      "FWCF",     "BOCHS",
-            "ovmf",               "edk ii unknown", "WAET", "S3 Corp.", "Virtual Machine", "VS2005R2",
+            "ovmf",               "edk ii unknown", "WAET", "S3 Corp.", "VS2005R2",
             "BXPC",               "Xen"
         } };
 
-        constexpr std::array<brand_enum, 24> brands_map = { {
+        constexpr std::array<brand_enum, 23> brands_map = { {
             brand_enum::PARALLELS,  brand_enum::PARALLELS,
             brand_enum::VBOX,       brand_enum::VBOX,       brand_enum::VBOX,       brand_enum::VBOX,       brand_enum::VBOX,
             brand_enum::VMWARE,     brand_enum::VMWARE,     brand_enum::VMWARE,     brand_enum::VMWARE,
             brand_enum::QEMU,       brand_enum::QEMU,       brand_enum::QEMU,       brand_enum::QEMU,       brand_enum::BOCHS,
-            brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND,
+            brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND, brand_enum::NULL_BRAND,
             brand_enum::BOCHS,      brand_enum::XEN
         } };
 
         struct array_validator {
-            static constexpr bool verify_no_nulls(const std::array<const char*, 24>& arr, size_t i) {
+            static constexpr bool verify_no_nulls(const std::array<const char*, 23>& arr, size_t i) {
                 return (i == arr.size())
                     ? true
                     : (arr[i] != nullptr && verify_no_nulls(arr, i + 1));
