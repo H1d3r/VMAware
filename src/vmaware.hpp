@@ -15701,11 +15701,15 @@ public:
         }
 
         static bool add_score(const brand_enum p_brand, const brand_enum extra_brand, const u8 score) noexcept {
-            last_detected_brand = p_brand;
+            if (p_brand != brand_enum::NULL_BRAND) {
+                last_detected_brand = p_brand;
+            }
+            else if (extra_brand != brand_enum::NULL_BRAND) {
+                last_detected_brand = extra_brand;
+            }
 
-            /* Only overwrite if an explicit score is provided, preserving earlier custom scores */
             if (score > 0) {
-                last_detected_score = score;
+                last_detected_score = score; /* Store for the engine to read */
             }
 
             constexpr size_t max_brands = sizeof(brand_scoreboard) / sizeof(brand_scoreboard[0]);
@@ -15803,10 +15807,6 @@ public:
 
                     if (data.result) {
                         points += data.points;
-                        /*
-                         * This is specific to VM::detected_count() which
-                         * returns the number of techniques that found a VM.
-                         */
                         detected_count_num++;
 
                         if (data.brand_name != brand_enum::NULL_BRAND) {
@@ -15814,6 +15814,13 @@ public:
                         }
                     }
 
+                    /*
+                     * For things like VM::detect() and VM::percentage(),
+                     * a score of 150+ is guaranteed to be a VM, so
+                     * there's no point in running the rest of the techniques
+                     * (unless the threshold is set to be higher, but it's the
+                     * same story here nonetheless, except the threshold is 300)
+                     */
                     if (shortcut && (points >= threshold_points)) {
                         return points;
                     }
@@ -15825,7 +15832,7 @@ public:
                 last_detected_brand = brand_enum::NULL_BRAND;
                 last_detected_score = 0;
 
-                /* Snapshot scoreboard to revert phantom scores if technique returns false */
+                /* Snapshot scoreboard to prevent score leakage if technique returns false */
                 const auto scoreboard_snapshot = brand_scoreboard;
 
                 /* Run the technique */
@@ -15836,6 +15843,10 @@ public:
                     const u8 points_to_add = (last_detected_score > 0) ? last_detected_score : technique_data.points;
 
                     points += points_to_add;
+                    /*
+                     * This is specific to VM::detected_count() which
+                     * returns the number of techniques that found a VM.
+                     */
                     detected_count_num++;
 
                     /* Retrieve the brand that was set during execution (if any) */
@@ -15844,8 +15855,9 @@ public:
                     memo::cache_store(technique_macro, result, points_to_add, detected_brand);
                 }
                 else {
-                    /* Roll back any brand score increments leaked by a failed check */
                     brand_scoreboard = scoreboard_snapshot;
+                    last_detected_brand = brand_enum::NULL_BRAND;
+                    last_detected_score = 0;
                     memo::cache_store(technique_macro, false, 0);
                 }
 
@@ -15868,7 +15880,8 @@ public:
                         return points;
                     }
 
-                    if (!technique.run || core::is_disabled(flags, static_cast<u8>(technique.id))) {
+                    /* Skip empty entries */
+                    if (!technique.run) {
                         continue;
                     }
 
@@ -15888,29 +15901,41 @@ public:
                         if (shortcut && (points >= threshold_points)) {
                             return points;
                         }
+
                         continue;
                     }
 
+                    /* Reset the last detected brand before running */
                     last_detected_brand = brand_enum::NULL_BRAND;
                     last_detected_score = 0;
 
                     const auto scoreboard_snapshot = brand_scoreboard;
+
+                    /* Run the custom technique */
                     const bool result = technique.run();
 
+                    /* Accumulate a few important values */
                     if (result) {
                         const u8 points_to_add = (last_detected_score > 0) ? last_detected_score : technique.points;
+
                         points += points_to_add;
                         detected_count_num++;
 
+                        /* Retrieve the brand that was set during execution (if any) */
+                        const enum brand_enum detected_brand = last_detected_brand;
+
+                        /* Cache the result */
                         memo::cache_store(
                             technique.id,
                             result,
                             points_to_add,
-                            last_detected_brand
+                            detected_brand
                         );
                     }
                     else {
                         brand_scoreboard = scoreboard_snapshot;
+                        last_detected_brand = brand_enum::NULL_BRAND;
+                        last_detected_score = 0;
                         memo::cache_store(technique.id, false, 0);
                     }
 
@@ -15988,7 +16013,7 @@ public:
         }
 
         static void generate_default(flagset& flags) noexcept {
-            flags |= generate_default();
+            flags = generate_default();
         }
 
         static flagset generate_all() noexcept {
@@ -16000,11 +16025,12 @@ public:
                     flags.set(idx, true);
                 }
             }
+
             return flags;
         }
 
         static void generate_all(flagset& flags) noexcept {
-            flags |= generate_all();
+            flags = generate_all();
         }
 
         static void reset_disabled_flagset() noexcept {
@@ -16026,6 +16052,15 @@ public:
             }
         }
 
+        static void disable_experimental_techniques() noexcept {
+            for (const auto technique : experimental_techniques) {
+                const auto idx = static_cast<size_t>(technique);
+                if (idx < disabled_flag_collector.size()) {
+                    disabled_flag_collector.set(idx, true);
+                }
+            }
+        }
+
         /* SFINAE base case for compile-time validation of zero arguments */
         template <typename... Args>
         static constexpr typename std::enable_if<sizeof...(Args) == 0, bool>::type
@@ -16041,7 +16076,8 @@ public:
 
         /* Overload for zero arguments to prevent C4127 constant conditional warning */
         static flagset arg_handler() noexcept {
-            flagset collector = generate_default();
+            flagset collector;
+            generate_default(collector);
             collector &= ~disabled_flag_collector;
             disabled_flag_collector.reset();
             return collector;
@@ -16079,7 +16115,6 @@ public:
             }
 
             collector &= ~disabled_flag_collector;
-
             disabled_flag_collector.reset();
 
             return collector;
