@@ -12208,19 +12208,42 @@ public:
 
         struct exception_handler {
             static VMAWARE_NOINLINE int execute(const unsigned int code, struct _EXCEPTION_POINTERS* ep, volatile ULONG_PTR* out_trap_ip, volatile bool* out_anomaly) {
-                if (code == EXCEPTION_SINGLE_STEP && ep && ep->ContextRecord) {
-                #if (VMAWARE_X86_64)
-                    *out_trap_ip = ep->ContextRecord->Rip;
-                #else
-                    * out_trap_ip = ep->ContextRecord->Eip;
-                #endif
+                if (!ep || !ep->ContextRecord) {
+                    return EXCEPTION_EXECUTE_HANDLER;
+                }
+
+            #if (VMAWARE_X86_64)
+                ULONG_PTR* ip = &ep->ContextRecord->Rip;
+            #else
+                ULONG_PTR* ip = &ep->ContextRecord->Eip;
+            #endif
+
+                if (code == EXCEPTION_SINGLE_STEP) {
+                    *out_trap_ip = *ip;
                     ep->ContextRecord->EFlags &= ~0x100; /* clear TF to resume execution */
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
 
-                vma_debug("INTERRUPT_SHADOW: Exception anomaly detected, hypervisor seems to be present with CPUID interception disabled");
+                /* KVM injects #UD by default */
+                vma_debug("INTERRUPT_SHADOW: Exception anomaly detected, hypervisor seems to be present.");
                 *out_anomaly = true;
-                return EXCEPTION_EXECUTE_HANDLER;
+                *out_trap_ip = *ip; /* Record where it failed (will be at RDPRU offset 18) */
+
+                unsigned char* instruction = reinterpret_cast<unsigned char*>(*ip);
+
+                /* Check if it crashed exactly on RDPRU(0x0F, 0x01, 0xFD) */
+                if (instruction[0] == 0x0F && instruction[1] == 0x01 && instruction[2] == 0xFD) {
+                    *ip += 3; /* Advance RIP by 3 bytes to land on pop rbx (offset 21) */
+                }
+                /* Check if it crashed on CPUID(0x0F, 0xA2), for the earlier baremetal_target check */
+                else if (instruction[0] == 0x0F && instruction[1] == 0xA2) {
+                    *ip += 2; /* Advance RIP by 2 bytes to land on pop ebx */
+                }
+
+                ep->ContextRecord->EFlags &= ~0x100; /* force clear TF just in case */
+
+                /* Resume execution at the fixed IP to bypass the need for stack unwinding */
+                return EXCEPTION_CONTINUE_EXECUTION;
             }
         };
 
