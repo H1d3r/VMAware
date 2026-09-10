@@ -9166,19 +9166,6 @@ public:
                 }
 
                 if (find_pattern(pattern, pattern_len)) {
-                    /* Special handling for Xen: must not have PXEN to prevent false flagging some bare metal systems */
-                    if (strcmp(pattern, "Xen") == 0) {
-                        constexpr char pxen[] = "PXEN";
-                        constexpr size_t pxen_len = sizeof(pxen) - 1;
-                        if (!find_pattern(pxen, pxen_len)) {
-                            vma_debug("FIRMWARE: XEN detected");
-                            return core::add(brand_enum::XEN);
-                        }
-                        else {
-                            continue;
-                        }
-                    }
-
                     /* Special handling for BOCHS: if BXPC is detected, check if "BOCHS" is present too */
                     if (strcmp(pattern, "BXPC") == 0) {
                         constexpr char bochs[] = "BOCHS";
