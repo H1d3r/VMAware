@@ -7509,7 +7509,6 @@ public:
 
             if (exception_ratio >= 2.5) {
                 vma_debug("TIMER: Detected #DB interception latency");
-                vma_debug("TIMER: If you have #DB interception disabled, it means you're running under nested");
                 hypervisor_detected = true;
             }
         }
@@ -15677,7 +15676,7 @@ public:
          */
         static std::array<technique, enum_size + 1> technique_table;
 
-        static std::vector<VM::core::custom_technique> custom_table;
+        static std::vector<VM::core::custom_technique> custom_table; /* Users should not have a limit of how many functions they should add, this is the only exception of a heap-allocated object in our core */
         static size_t custom_table_size;
 
         static std::array<brand_entry, MAX_BRANDS> brand_scoreboard;
@@ -15742,7 +15741,7 @@ public:
                     m.set(i);
                 }
                 return m;
-                }();
+            }();
 
             return mask;
         }
@@ -15755,7 +15754,7 @@ public:
                     m.set(i);
                 }
                 return m;
-                }();
+            }();
 
             return mask;
         }
@@ -15804,6 +15803,10 @@ public:
 
                     if (data.result) {
                         points += data.points;
+                        /*
+                         * This is specific to VM::detected_count() which
+                         * returns the number of techniques that found a VM.
+                         */
                         detected_count_num++;
 
                         if (data.brand_name != brand_enum::NULL_BRAND) {
@@ -15835,8 +15838,9 @@ public:
                     points += points_to_add;
                     detected_count_num++;
 
+                    /* Retrieve the brand that was set during execution (if any) */
                     const enum brand_enum detected_brand = last_detected_brand;
-                    /* Store the current technique result to the cache (conforms to memo::cache_store signature) */
+                    /* Store the current technique result to the cache */
                     memo::cache_store(technique_macro, result, points_to_add, detected_brand);
                 }
                 else {
@@ -15845,12 +15849,19 @@ public:
                     memo::cache_store(technique_macro, false, 0);
                 }
 
+                /*
+                 * For things like VM::detect() and VM::percentage(),
+                 * a score of 150+ is guaranteed to be a VM, so
+                 * there's no point in running the rest of the techniques
+                 * (unless the threshold is set to be higher, but it's the
+                 * same story here nonetheless, except the threshold is 300)
+                 */
                 if (shortcut && (points >= threshold_points)) {
                     return points;
                 }
             }
 
-            /* For custom VM techniques */
+            /* For custom VM techniques, won't be used most of the time */
             if (VMAWARE_UNLIKELY(!core::custom_table.empty())) {
                 for (const auto& technique : core::custom_table) {
                     if (shortcut && (points >= threshold_points)) {
@@ -15976,7 +15987,6 @@ public:
             return default_flags;
         }
 
-        /* Fix: Merges with destination instead of overwriting existing bits */
         static void generate_default(flagset& flags) noexcept {
             flags |= generate_default();
         }
@@ -16007,7 +16017,6 @@ public:
             }
         }
 
-        /* Fix: Disables experimental techniques on the local flags bitset as specified by documentation */
         static void disable_experimental_techniques(flagset& flags) noexcept {
             for (const auto technique : experimental_techniques) {
                 const auto idx = static_cast<size_t>(technique);
@@ -16030,7 +16039,7 @@ public:
             return std::is_same<typename std::decay<T>::type, enum_flags>::value&& verify_flags<Args...>();
         }
 
-        /* Fix: Overload for zero arguments consistently applies and clears disabled_flag_collector */
+        /* Overload for zero arguments to prevent C4127 constant conditional warning */
         static flagset arg_handler() noexcept {
             flagset collector = generate_default();
             collector &= ~disabled_flag_collector;
@@ -16044,6 +16053,7 @@ public:
             static_assert(verify_flags<T, Args...>(), "argument handler only accepts enum_flags variables");
 
             flagset collector;
+            /* C++11 initializer list expansion trick to loop over the variadic arguments one by one */
             using expander = int[];
             (void)expander {
                 0, (collector.set(static_cast<size_t>(first), true), 0), (collector.set(static_cast<size_t>(args), true), 0)...
