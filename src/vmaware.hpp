@@ -3998,14 +3998,14 @@ public:
                         score += 500;
                     }
 
+                    /* Silver Rule 1b: Same L2 Cache / Module Domain (ensures AMD Bulldozer/Zen APU/clustered cores stay on the same module) */
+                    if (cand_cpu.L2CacheId != 0xFFFFFFFFu && cand_cpu.L2CacheId == counter_cpu.L2CacheId) {
+                        score += 750;
+                    }
+
                     /* Silver Rule 2: Performance Core priority */
                     if (cand_cpu.EfficiencyClass == max_efficiency) {
                         score += 800;
-                    }
-
-                    /* Silver Rule 3: Shared L2 Cluster Penalty (avoids shared E-core 4-core cluster controllers) */
-                    if (cand_cpu.L2CacheId != 0xFFFFFFFFu && cand_cpu.L2CacheId == counter_cpu.L2CacheId) {
-                        score -= 800;
                     }
 
                     /* Silver Rule 4: Same Core Type / DVFS Domain alignment */
@@ -12240,7 +12240,7 @@ public:
                     *ip += 2; /* Advance RIP by 2 bytes to land on pop ebx */
                 }
 
-                ep->ContextRecord->EFlags &= ~0x100; /* force clear TF just in case */
+                ep->ContextRecord->EFlags &= ~0x100; /* Force clear TF just in case */
 
                 /* Resume execution at the fixed IP to bypass the need for stack unwinding */
                 return EXCEPTION_CONTINUE_EXECUTION;
