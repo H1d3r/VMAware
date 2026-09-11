@@ -642,7 +642,7 @@
     #include <chrono>
 #endif
 
-#ifdef VMAWARE_DEBUG
+#if defined(VMAWARE_DEBUG) && VMAWARE_DEBUG == 1 
     #define vma_debug(...) VM::util::debug_msg(__VA_ARGS__)
 #else
     #define vma_debug(...)
