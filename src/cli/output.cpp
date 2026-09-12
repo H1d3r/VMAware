@@ -547,7 +547,6 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::MAC_IOKIT, "MacOS registry IO-kit");
     checker(VM::IOREG_GREP, "IO registry grep");
     checker(VM::MAC_SIP, "MacOS SIP");
-    checker(VM::AUDIO, "audio devices");
     checker(VM::HANDLES, "device handles");
     checker(VM::VPC_INVALID, "VPC invalid instructions");
     checker(VM::SYSTEM_REGISTERS, "task segment and descriptor tables");
