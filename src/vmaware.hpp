@@ -9161,7 +9161,7 @@ public:
 
                     /* Motherboard resources mapped via PNP0A06 generic container on designated "GPER" virtual device */
                     if (find_pattern("GPER", 4) || find_pattern("PHPR", 4)) {
-                        if (find_pattern("PNP0C02", 7) || find_pattern("PNP0A06", 7)) {
+                        if (find_pattern("PNP0A06", 7)) {
                             vma_debug("FIRMWARE: Detected QEMU resource reservation container (GPER/PHPR)");
                             return core::add(brand_enum::QEMU);
                         }
