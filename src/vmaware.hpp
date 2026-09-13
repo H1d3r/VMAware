@@ -3569,7 +3569,7 @@ public:
 
         struct bios_info {
             static char manufacturer[256];
-            static char model[128];
+            static char model[256];
             static bool cached;
 
             static constexpr const char* fetch_manufacturer() noexcept {
@@ -8001,7 +8001,7 @@ public:
         std::string line;
         while (std::getline(file, line)) {
             if (line.find("QEMU") != std::string::npos) {
-                return true;
+                return core::add(brand_enum::QEMU);
             }
         }
 
@@ -16758,7 +16758,7 @@ std::size_t VM::memo::leaf_cache::next_index = 0;
 enum VM::brand_enum VM::memo::single_brand::brand_cache = brand_enum::NULL_BRAND;
 char VM::memo::cpu_brand::brand_cache[128] = { 0 };
 char VM::memo::bios_info::manufacturer[256] = { 0 };
-char VM::memo::bios_info::model[128] = { 0 };
+char VM::memo::bios_info::model[256] = { 0 };
 bool VM::memo::single_brand::cached = false;
 bool VM::memo::multi_brand::cached = false;
 bool VM::memo::cpu_brand::cached = false;
