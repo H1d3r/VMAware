@@ -12952,6 +12952,7 @@ public:
                 if (!var_name_view.empty() && var_name_view.rfind(L"VMM", 0) == 0) {
                     vma_debug("NVRAM: Detected hypervisor signature");
                     should_break_loop = true;
+                    detection_result = true;
                     break;
                 }
 
