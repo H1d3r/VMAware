@@ -11009,7 +11009,7 @@ public:
             {"76487-337-8429955-22614", brand_enum::ANUBIS}     
         };
 
-        constexpr size_t target_length = 21;
+        constexpr size_t target_length = 23;
         if (strlen(product_id) != target_length) {
             return false;
         }
