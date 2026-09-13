@@ -3637,13 +3637,22 @@ public:
                 return handle;
             }
 
-            static void store(const HMODULE ntdll, const HMODULE kernel32) noexcept {
+            static void store_ntdll(const HMODULE ntdll) noexcept {
                 fetch_ntdll() = ntdll;
-                fetch_kernel32() = kernel32;
-                is_cached() = true;
+                is_ntdll_cached() = true;
             }
 
-            static bool& is_cached() noexcept {
+            static void store_kernel32(const HMODULE kernel32) noexcept {
+                fetch_kernel32() = kernel32;
+                is_kernel32_cached() = true;
+            }
+
+            static bool& is_ntdll_cached() noexcept {
+                static bool cached = false;
+                return cached;
+            }
+
+            static bool& is_kernel32_cached() noexcept {
                 static bool cached = false;
                 return cached;
             }
@@ -4392,8 +4401,11 @@ public:
                 }*ldr;
             };
 
-            if (memo::module::is_cached()) {
-                return get_ntdll ? memo::module::fetch_ntdll() : memo::module::fetch_kernel32();
+            if (get_ntdll && memo::module::is_ntdll_cached()) {
+                return memo::module::fetch_ntdll();
+            }
+            else if (!get_ntdll && memo::module::is_kernel32_cached()) {
+                return memo::module::fetch_kernel32();
             }
 
             custom_peb* peb = nullptr;
@@ -4450,8 +4462,11 @@ public:
                 }
             }
 
-            if (res_ntdll || res_k32) {
-                memo::module::store(res_ntdll, res_k32);
+            if (res_ntdll) {
+                memo::module::store_ntdll(res_ntdll);
+            }
+            if (res_k32) {
+                memo::module::store_ntdll(res_ntdll);
             }
 
             if (get_ntdll) {
