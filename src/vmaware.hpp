@@ -1048,11 +1048,7 @@ public:
     static std::vector<enum_flags> disabled_techniques;
     static constexpr std::array<enum_flags, 1> experimental_techniques{ { FIRMWARE } };
 
-#if (VMAWARE_WINDOWS)
     using brand_score_t = i32;
-#else
-    using brand_score_t = u8;
-#endif
 
     /* For the flag bitset structure */
     using flagset = std::bitset<enum_size + 1>;
