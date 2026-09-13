@@ -6263,7 +6263,7 @@ public:
         }
         
         static std::string brand_multiple(const brand_list_t& list) {
-            /* VMAWARE_ASSUME(!list.empty()); */
+            if (list.empty()) return;
             std::string buffer = {};
             buffer += brands::brand_enum_to_string(list[0].first);
 
@@ -6288,7 +6288,7 @@ public:
         }
 
         static enum brand_enum brand_single(const brand_list_t& list) noexcept {
-            /* VMAWARE_ASSUME(!list.empty()); */
+            if (list.empty()) return;
             const brand_element_t brand = list.front();
             return brand.first;
         }
