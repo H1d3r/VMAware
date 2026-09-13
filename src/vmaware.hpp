@@ -13874,7 +13874,8 @@ public:
                 "rdmsr"
                 : "=a"(low), "=d"(high)
                 : "c"(msr_index)
-             );
+                : "memory"
+            );
 
             rtl_remove_vectored_exception_handler(handle);
 
@@ -17017,7 +17018,5 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
 }();
 
 static_assert(VM::core::technique_table.size() == VM::enum_size + 1, "technique_table must map to every enum value.");
-
-#undef debug
 
 #endif /* VMAWARE_HEADER */
