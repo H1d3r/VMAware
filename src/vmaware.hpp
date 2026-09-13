@@ -6263,7 +6263,6 @@ public:
         }
         
         static std::string brand_multiple(const brand_list_t& list) {
-            if (list.empty()) return;
             std::string buffer = {};
             buffer += brands::brand_enum_to_string(list[0].first);
 
@@ -6288,7 +6287,6 @@ public:
         }
 
         static enum brand_enum brand_single(const brand_list_t& list) noexcept {
-            if (list.empty()) return;
             const brand_element_t brand = list.front();
             return brand.first;
         }
@@ -7645,40 +7643,88 @@ public:
      * @implements VM::DMIDECODE
      */
     [[nodiscard]] static bool dmidecode() {
-        if (!util::is_admin()) {
-            vma_debug("DMIDECODE: ", "precondition return called (root = ", util::is_admin(), ")");
+        auto is_admin = []() -> bool {
+            return geteuid() == 0;
+        };
+
+        if (!is_admin()) {
             return false;
         }
 
-        if (!(util::exists("/bin/dmidecode") || util::exists("/usr/bin/dmidecode"))) {
-            vma_debug("DMIDECODE: ", "binary doesn't exist");
+        /* We must locate binary across standard paths (including sbin) */
+        auto find_binary = [](std::initializer_list<const char*> paths) -> const char* {
+            for (const char* path : paths) {
+                if (access(path, X_OK) == 0) {
+                    return path;
+                }
+            }
+            return nullptr;
+        };
+
+        const char* dmi_bin = find_binary({
+            "/usr/sbin/dmidecode",
+            "/sbin/dmidecode",
+            "/usr/bin/dmidecode",
+            "/bin/dmidecode"
+        });
+
+        if (!dmi_bin) {
             return false;
         }
 
-        const std::unique_ptr<std::string> result = util::sys_result("dmidecode -t system | grep 'Manufacturer|Product' | grep -c \"QEMU|VirtualBox|KVM\"");
+        auto run_cmd = [](const std::string& cmd) -> std::string {
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) {
+                return std::string();
+            }
+            char buffer[512];
+            std::string output;
+            while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                output += buffer;
+            }
+            pclose(pipe);
+            return output;
+        };
 
-        if (!result || result->empty()) {
-            vma_debug("DMIDECODE: ", "invalid output");
+        auto contains_ci = [](const std::string& haystack, const std::string& needle) -> bool {
+            if (needle.empty()) {
+                return false;
+            }
+            std::string::const_iterator it = std::search(
+                haystack.begin(), haystack.end(),
+                needle.begin(), needle.end(),
+                [](char a, char b) -> bool {
+                    return std::tolower(static_cast<unsigned char>(a)) ==
+                        std::tolower(static_cast<unsigned char>(b));
+                }
+            );
+            return it != haystack.end();
+        };
+
+        /* SMBIOS Type 1 */
+        const std::string output = run_cmd(std::string(dmi_bin) + " -t system 2>/dev/null");
+        if (output.empty()) {
             return false;
         }
-        
-        if (*result == "QEMU") {
+
+        if (contains_ci(output, "QEMU")) {
             return core::add(brand_enum::QEMU);
         }
-        
-        if (*result == "VirtualBox") {
+
+        if (contains_ci(output, "VirtualBox") || contains_ci(output, "innotek")) {
             return core::add(brand_enum::VBOX);
         }
-        
-        if (*result == "KVM") {
+
+        if (contains_ci(output, "KVM") || contains_ci(output, "Bochs")) {
             return core::add(brand_enum::KVM);
-        } 
-        
-        if (std::strtol(result->c_str(), nullptr, 10) >= 1) {
+        }
+
+        if (contains_ci(output, "VMware") ||
+            contains_ci(output, "Hyper-V") ||
+            contains_ci(output, "Virtual Machine") ||
+            contains_ci(output, "Parallels")) {
             return true;
         }
-         
-        vma_debug("DMIDECODE: ", "output = ", *result);
 
         return false;
     }
@@ -7807,40 +7853,91 @@ public:
      * @implements VM::DMESG
      */
     [[nodiscard]] static bool dmesg() {
-    #if (VMAWARE_CPP <= 11)
-        return false;
-    #else
-        if (!util::is_admin()) {
+        auto is_admin = []() -> bool {
+            return geteuid() == 0;
+        };
+
+        if (!is_admin()) {
             return false;
         }
 
-        if (!util::exists("/bin/dmesg") && !util::exists("/usr/bin/dmesg")) {
-            vma_debug("DMESG: ", "binary doesn't exist");
+        auto find_binary = [](std::initializer_list<const char*> paths) -> const char* {
+            for (const char* path : paths) {
+                if (access(path, X_OK) == 0) {
+                    return path;
+                }
+            }
+            return nullptr;
+        };
+
+        const char* dmesg_bin = find_binary({
+            "/bin/dmesg",
+            "/usr/bin/dmesg",
+            "/sbin/dmesg",
+            "/usr/sbin/dmesg"
+        });
+
+        if (!dmesg_bin) {
             return false;
         }
 
-        const std::unique_ptr<std::string> result = util::sys_result("dmesg | grep -i hypervisor | grep -c \"KVM|QEMU\"");
+        auto run_cmd = [](const std::string& cmd) -> std::string {
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) {
+                return std::string();
+            }
+            char buffer[4096];
+            std::string output;
+            while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                output += buffer;
+            }
+            pclose(pipe);
+            return output;
+        };
 
-        if (!result || result->empty()) {
+        auto contains_ci = [](const std::string& haystack, const std::string& needle) -> bool {
+            if (needle.empty()) {
+                return false;
+            }
+            std::string::const_iterator it = std::search(
+                haystack.begin(), haystack.end(),
+                needle.begin(), needle.end(),
+                [](char a, char b) -> bool {
+                    return std::tolower(static_cast<unsigned char>(a)) ==
+                        std::tolower(static_cast<unsigned char>(b));
+                }
+            );
+            return it != haystack.end();
+        };
+
+        const std::string output = run_cmd(std::string(dmesg_bin) + " 2>/dev/null");
+        if (output.empty()) {
             return false;
         }
-        
-        if (*result == "KVM") {
+
+        /*
+         * Check hypervisor banner lines to avoid false positives on bare-metal
+         * hosts where host modules (like kvm_intel / kvm_amd) are loaded
+         */
+        if (contains_ci(output, "Hypervisor detected: KVM") ||
+            contains_ci(output, "Booting paravirtualized kernel on KVM") ||
+            (contains_ci(output, "hypervisor") && contains_ci(output, "KVM"))) {
             return core::add(brand_enum::KVM);
         }
-        
-        if (*result == "QEMU") {
+
+        if (contains_ci(output, "QEMU Virtual CPU") || contains_ci(output, "DMI: QEMU")) {
             return core::add(brand_enum::QEMU);
         }
-        
-        if (std::strtol(result->c_str(), nullptr, 10)) {
+
+        if (contains_ci(output, "VirtualBox") || contains_ci(output, "vboxguest")) {
+            return core::add(brand_enum::VBOX);
+        }
+
+        if (contains_ci(output, "Hypervisor detected") || contains_ci(output, "paravirtualized kernel")) {
             return true;
         }
 
-        vma_debug("DMESG: ", "output = ", *result);
-
         return false;
-    #endif
     }
 
 
