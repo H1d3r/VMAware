@@ -51,8 +51,8 @@
     #endif
 #endif
 
-constexpr const char* ver = "2.8.1";
-constexpr const char* date = "August 2026";
+constexpr const char* ver = "2.8.2";
+constexpr const char* date = "September 2026";
 
 [[noreturn]] static void help() {
     std::cout <<
