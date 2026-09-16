@@ -6844,11 +6844,9 @@ public:
         const u32 actual = memo::thread_count::fetch();
         const bool model_expects_smt = matched->smt;
 
-        if (!model_expects_smt) {
-            if (is_smt_active()) {
-                vma_debug("THREAD_MISMATCH: CPU normally runs under SMT, but SMT was fully disabled on BIOS");
-                return false;
-            }
+        if (model_expects_smt && !is_smt_active()) {
+            vma_debug("THREAD_MISMATCH: CPU normally runs under SMT, but SMT was fully disabled on BIOS");
+            return false;
         }
 
         if (actual != matched->threads) {
