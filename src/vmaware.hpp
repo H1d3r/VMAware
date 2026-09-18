@@ -862,6 +862,7 @@ public:
         SVM_EXCEPTIONS,
         MEASURED_BOOT,
         TPM, 
+        VCPU_SCHEDULING,
 
         /* Linux and Windows */
         SYSTEM_REGISTERS,
@@ -3819,7 +3820,7 @@ public:
                 };
 
                 group_cpu group_cpus[64]{};
-                DWORD idxs[64];
+                DWORD idxs[64]{};
                 DWORD active_cpu_count = 0;
 
                 for (DWORD i = 0; i < 64; ++i) {
@@ -15708,6 +15709,159 @@ public:
     }
 
 
+    /**
+     * @brief Check whether a hypervisor reschedules unpinned vCPUs
+     * @category Windows
+     * @implements VM::VCPU_SCHEDULING
+     */
+    [[nodiscard]] static bool vcpu_scheduling() {
+        unsigned int run_count = 2;
+        unsigned int iterations_per_core = 80000;
+
+        /* Local descriptor for a logical processor */
+        struct logical_cpu_entry {
+            WORD group_id;
+            WORD core_index;
+            unsigned char os_efficiency_class;
+            unsigned int global_id;
+        };
+
+        /* Enumerate all active logical processors across all processor groups (>64 CPUs) */
+        WORD total_groups = GetActiveProcessorGroupCount();
+        std::vector<logical_cpu_entry> cpu_list;
+        unsigned int next_global_id = 0;
+
+        for (WORD g = 0; g < total_groups; ++g) {
+            DWORD count_in_group = GetActiveProcessorCount(g);
+            for (DWORD c = 0; c < count_in_group; ++c) {
+                logical_cpu_entry entry{};
+                entry.group_id = g;
+                entry.core_index = static_cast<WORD>(c);
+                entry.os_efficiency_class = 0;
+                entry.global_id = next_global_id++;
+                cpu_list.push_back(entry);
+            }
+        }
+
+        if (cpu_list.empty()) {
+            return false;
+        }
+
+        /* Query Windows API for P/E core identification */
+        DWORD buffer_size = 0;
+        GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &buffer_size);
+        if (buffer_size > 0) {
+            std::vector<char> buffer(buffer_size);
+            auto* info_ptr = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data());
+            if (GetLogicalProcessorInformationEx(RelationProcessorCore, info_ptr, &buffer_size)) {
+                DWORD offset = 0;
+                while (offset < buffer_size) {
+                    auto* current_info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data() + offset);
+                    if (current_info->Relationship == RelationProcessorCore) {
+                        /* Windows sets EfficiencyClass = 0 for E-cores/Zen-c, >= 1 for P-cores/Zen */
+                        unsigned char eff_class = current_info->Processor.EfficiencyClass;
+                        for (WORD g = 0; g < current_info->Processor.GroupCount; ++g) {
+                            WORD grp = current_info->Processor.GroupMask[g].Group;
+                            KAFFINITY mask = current_info->Processor.GroupMask[g].Mask;
+                            for (auto& cpu : cpu_list) {
+                                if (cpu.group_id == grp) {
+                                    KAFFINITY bit = static_cast<KAFFINITY>(1ULL) << cpu.core_index;
+                                    if ((mask & bit) != 0) {
+                                        cpu.os_efficiency_class = eff_class;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (current_info->Size == 0) {
+                        break;
+                    }
+                    offset += current_info->Size;
+                }
+            }
+        }
+
+        LARGE_INTEGER qpc_frequency;
+        QueryPerformanceFrequency(&qpc_frequency);
+
+        /* run_classifications[run_index][cpu_index]: 1 for P-Core, 0 for E-Core */
+        std::vector<std::vector<int>> run_classifications(run_count, std::vector<int>(cpu_list.size(), 0));
+
+        for (unsigned int r = 0; r < run_count; ++r) {
+            std::vector<double> timings(cpu_list.size(), 0.0);
+
+            for (size_t i = 0; i < cpu_list.size(); ++i) {
+                GROUP_AFFINITY target_affinity;
+                std::memset(&target_affinity, 0, sizeof(target_affinity));
+                target_affinity.Group = cpu_list[i].group_id;
+                target_affinity.Mask = static_cast<KAFFINITY>(1ULL) << cpu_list[i].core_index;
+
+                GROUP_AFFINITY previous_affinity;
+                std::memset(&previous_affinity, 0, sizeof(previous_affinity));
+
+                if (SetThreadGroupAffinity(GetCurrentThread(), &target_affinity, &previous_affinity) == 0) {
+                    continue;
+                }
+
+                /* Should take <0.1ms */
+                LARGE_INTEGER start_time, end_time;
+                volatile unsigned int accumulator = 0x13579bdf;
+
+                QueryPerformanceCounter(&start_time);
+                for (unsigned int k = 0; k < iterations_per_core; ++k) {
+                    accumulator = (accumulator ^ (accumulator << 7)) + 0x9e3779b9;
+                    accumulator = (accumulator ^ (accumulator >> 9)) + 0x85ebca6b;
+                }
+                QueryPerformanceCounter(&end_time);
+
+                timings[i] = static_cast<double>(end_time.QuadPart - start_time.QuadPart) * 1000.0 /
+                    static_cast<double>(qpc_frequency.QuadPart);
+
+                SetThreadGroupAffinity(GetCurrentThread(), &previous_affinity, nullptr);
+            }
+
+            /* Partition timings into P-core and E-core profiles */
+            double min_time = timings[0];
+            double max_time = timings[0];
+            for (double t : timings) {
+                if (t < min_time) min_time = t;
+                if (t > max_time) max_time = t;
+            }
+
+            double threshold = (min_time + max_time) / 2.0;
+            bool bimodal_performance = (min_time > 0.0 && (max_time / min_time) >= 1.30);
+
+            for (size_t i = 0; i < cpu_list.size(); ++i) {
+                if (bimodal_performance) {
+                    run_classifications[r][i] = (timings[i] < threshold) ? 1 : 0;
+                }
+                else {
+                    run_classifications[r][i] = (cpu_list[i].os_efficiency_class > 0) ? 1 : 0;
+                }
+            }
+
+            /* Allow the hypervisor opportunity to migrate unpinned vCPUs so it's detected */
+            if (r + 1 < run_count) {
+                SleepEx(15, FALSE);
+            }
+        }
+
+        /* Detect if any core shifted identity */
+        bool mapping_changed = false;
+        for (size_t i = 0; i < cpu_list.size(); ++i) {
+            for (unsigned int r = 1; r < run_count; ++r) {
+                if (run_classifications[r][i] != run_classifications[0][i]) {
+                    mapping_changed = true;
+                    break;
+                }
+            }
+            if (mapping_changed) {
+                break;
+            }
+        }
+
+        return mapping_changed;
+    }
     /*
      * ADD NEW TECHNIQUE FUNCTION HERE
      */
@@ -16583,6 +16737,7 @@ public:
             case CGROUP: return "CGROUP";
             case MEASURED_BOOT: return "MEASURED_BOOT";
             case TPM: return "TPM";
+            case VCPU_SCHEDULING: return "VCPU_SCHEDULING";
             /* END OF TECHNIQUE LIST */
             case DEFAULT: return "DEFAULT"; 
             case ALL: return "ALL"; 
@@ -17013,6 +17168,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::HYPERVISOR_HOOK, {150, VM::hypervisor_hook}},
             {VM::SINGLE_STEP, {150, VM::single_step}},
             {VM::TPM, {45, VM::tpm}},
+            {VM::VCPU_SCHEDULING, {100, VM::vcpu_scheduling}},
             {VM::NVRAM, {100, VM::nvram}},
             {VM::CPU_HEURISTIC, {90, VM::cpu_heuristic}},
             {VM::ACPI_SIGNATURE, {100, VM::acpi_signature}},

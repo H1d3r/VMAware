@@ -601,6 +601,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::MEASURED_BOOT, "measured boot logs");
     checker(VM::TPM, "TPM");
     checker(VM::HYPERVISOR_HOOK, "EPT/NPT hooking");
+    checker(VM::VCPU_SCHEDULING, "vCPU scheduling");
     checker(VM::TIMER, "timing anomalies");
 
     const auto t2 = std::chrono::high_resolution_clock::now();
@@ -615,9 +616,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     #endif
 
     if (print_sha) {
-        std::cout << grey << "\nSHA-256: "
-            << white << compute_self_sha256()
-            << ansi_exit << "\n";
+        std::cout << grey << "\nSHA-256: " << white << compute_self_sha256() << ansi_exit << "\n";
     }
 #endif
 
