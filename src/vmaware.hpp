@@ -3735,8 +3735,7 @@ public:
             }
         };
 
-        struct scheduler {
-            
+        struct scheduler {         
             /*
               - Golden Rules (must happen ALWAYS; if they don't happen the check should be aborted):
               - 1. The check needs AT LEAST two different physical cores, so if one single core is detected, returns {}
@@ -3746,7 +3745,7 @@ public:
               - Silver Rules (in order of priority):
               - 1. Same NUMA Node (+1000) & Same L3 Cache / CCD domain (+500) to ensure minimal interconnect & MESI invalidation latency.
               - 2. Prioritize higher-performance pipelines (P-cores) over efficiency-oriented pipelines (E-cores) (+800) for dedicated L2 cache pipelines.
-              - 3. Deduct points (-800) for candidate cores that share an L2 cache cluster with the counter thread (targeting Intel E-core cluster bottlenecks).
+              - 3. Reject (or heavily penalize) candidate cores that share an L2 cache cluster with the counter thread (targeting Intel E-core cluster bottlenecks).
               - 4. Prioritize cores with matching efficiency classes (+100) to align DVFS frequency scaling domains.
               - 5. Prefer Primary SMT thread (+20) over secondary hyperthread siblings.
               - 6. Apply a minor index-distance penalty (-1 per logical distance) to select the closest neighbor on the ring bus.
@@ -3771,11 +3770,24 @@ public:
                     }
                 }
 
+                /* Ensure target group has at least 2 active CPUs */
+                if (util::popcount(static_cast<u64>(active_group_aff.Mask)) < 2) {
+                    const WORD group_count = GetActiveProcessorGroupCount();
+                    for (WORD g = 0; g < group_count; ++g) {
+                        const DWORD c = GetActiveProcessorCount(g);
+                        if (c >= 2) {
+                            active_group_aff.Group = g;
+                            active_group_aff.Mask = (c >= 64) ? ~0ull : ((1ull << c) - 1ull);
+                            break;
+                        }
+                    }
+                }
+
                 const WORD target_group = active_group_aff.Group;
                 const KAFFINITY target_mask = active_group_aff.Mask;
 
-                /* 16 KB stack buffer handles systems with 64 or more logical processors before heap fallback */
-                alignas(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) BYTE stack_topo[16384]{};
+                /* 32 KB stack buffer to avoid heap fallback */
+                alignas(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) BYTE stack_topo[32768]{};
                 DWORD len = sizeof(stack_topo);
 
                 std::vector<BYTE> heap_topo;
@@ -3803,20 +3815,20 @@ public:
                     DWORD l3_cache_id = 0xFFFFFFFFu;
                     BYTE  efficiency_class = 0;
                     bool  is_primary_smt = false;
+                    bool  is_p_core = true;
                 };
 
-                std::vector<group_cpu> group_cpus(64);
-                std::vector<DWORD> idxs;
-                idxs.reserve(64);
+                group_cpu group_cpus[64]{};
+                DWORD idxs[64];
+                DWORD active_cpu_count = 0;
 
                 for (DWORD i = 0; i < 64; ++i) {
                     if (target_mask & (1ull << i)) {
                         group_cpus[i].logical_id = i;
-                        idxs.push_back(i);
+                        idxs[active_cpu_count++] = i;
                     }
                 }
 
-                const DWORD active_cpu_count = static_cast<DWORD>(idxs.size());
                 if (active_cpu_count < 2) {
                     return {};
                 }
@@ -3825,7 +3837,6 @@ public:
                 DWORD cache_count = 0;
                 size_t offset = 0;
 
-                /* This is a variable-length buffer walk that does not prematurely abort near the end */
                 while (offset + sizeof(LOGICAL_PROCESSOR_RELATIONSHIP) + sizeof(DWORD) <= len) {
                     auto* ptr = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(
                         reinterpret_cast<BYTE*>(topo_ptr) + offset
@@ -3920,10 +3931,9 @@ public:
                 }
 
                 /* Golden Rule 1: At least two physical cores must exist */
-                std::vector<DWORD> unique_cores;
-                std::vector<DWORD> core_to_primary_logical;
-                unique_cores.reserve(active_cpu_count);
-                core_to_primary_logical.reserve(active_cpu_count);
+                DWORD unique_cores[64]{};
+                DWORD core_to_primary_logical[64]{};
+                DWORD unique_cores_count = 0;
 
                 for (DWORD i = 0; i < active_cpu_count; ++i) {
                     const DWORD log = idxs[i];
@@ -3934,17 +3944,16 @@ public:
                     }
 
                     bool already_seen = false;
-                    for (const DWORD seen_core : unique_cores) {
-                        if (seen_core == core) {
+                    for (DWORD u = 0; u < unique_cores_count; ++u) {
+                        if (unique_cores[u] == core) {
                             already_seen = true;
                             break;
                         }
                     }
 
                     if (!already_seen) {
-                        unique_cores.push_back(core);
+                        unique_cores[unique_cores_count] = core;
 
-                        /* Select the primary SMT logical processor representing this physical core */
                         DWORD rep_log = log;
                         for (DWORD j = 0; j < active_cpu_count; ++j) {
                             const DWORD cand_log = idxs[j];
@@ -3954,48 +3963,130 @@ public:
                             }
                         }
 
-                        core_to_primary_logical.push_back(rep_log);
+                        core_to_primary_logical[unique_cores_count] = rep_log;
+                        unique_cores_count++;
                     }
                 }
 
-                const DWORD unique_cores_count = static_cast<DWORD>(unique_cores.size());
                 if (unique_cores_count < 2) {
-                    return {}; /* Single physical core detected */
+                    return {};
                 }
 
-                /* Identify highest performance tier (P-cores on hybrid architectures) */
-                BYTE max_efficiency = 0;
-                BYTE min_efficiency = 0xFF;
+                /* Stack-based core-thread and L2 sharing tracking */
+                uint8_t core_thread_count[64]{};
                 for (DWORD i = 0; i < active_cpu_count; ++i) {
-                    const DWORD log = idxs[i];
-                    const BYTE eff = group_cpus[log].efficiency_class;
-                    if (eff > max_efficiency) {
-                        max_efficiency = eff;
-                    }
-                    if (eff < min_efficiency) {
-                        min_efficiency = eff;
-                    }
-                }
-
-                const bool has_heterogeneous_cores = (max_efficiency > min_efficiency);
-
-                /* Filter cores belonging to the highest-performance tier */
-                std::vector<DWORD> perf_core_to_primary_logical;
-                perf_core_to_primary_logical.reserve(unique_cores_count);
-
-                for (DWORD i = 0; i < unique_cores_count; ++i) {
-                    const DWORD log = core_to_primary_logical[i];
-                    if (!has_heterogeneous_cores || group_cpus[log].efficiency_class == max_efficiency) {
-                        perf_core_to_primary_logical.push_back(log);
+                    const DWORD core = group_cpus[idxs[i]].core_id;
+                    for (DWORD u = 0; u < unique_cores_count; ++u) {
+                        if (unique_cores[u] == core) {
+                            core_thread_count[u]++;
+                            break;
+                        }
                     }
                 }
 
-                const DWORD perf_cores_count = static_cast<DWORD>(perf_core_to_primary_logical.size());
+                uint8_t l2_sharing[64]{};
+                for (DWORD u = 0; u < unique_cores_count; ++u) {
+                    const DWORD l2_u = group_cpus[core_to_primary_logical[u]].l2_cache_id;
+                    if (l2_u == 0xFFFFFFFFu) continue;
+                    for (DWORD v = 0; v < unique_cores_count; ++v) {
+                        if (group_cpus[core_to_primary_logical[v]].l2_cache_id == l2_u) {
+                            l2_sharing[u]++;
+                        }
+                    }
+                }
 
-                /* Golden Rule 2: Counter thread always in middle physical core when > 2 cores, and in core 2 (1-indexed) when 2 cores */
+                BYTE min_eff = 0xFF;
+                BYTE max_eff = 0;
+                for (DWORD i = 0; i < active_cpu_count; ++i) {
+                    const BYTE eff = group_cpus[idxs[i]].efficiency_class;
+                    if (eff < min_eff) min_eff = eff;
+                    if (eff > max_eff) max_eff = eff;
+                }
+                const bool has_eff_diff = (max_eff > min_eff);
+
+                bool has_l2_cluster_diff = false;
+                for (DWORD u = 0; u < unique_cores_count; ++u) {
+                    if (l2_sharing[u] > 1) {
+                        has_l2_cluster_diff = true;
+                        break;
+                    }
+                }
+
+                bool has_smt_diff = false;
+                for (DWORD u = 1; u < unique_cores_count; ++u) {
+                    if (core_thread_count[u] != core_thread_count[0]) {
+                        has_smt_diff = true;
+                        break;
+                    }
+                }
+
+                const bool has_heterogeneous_cores = has_eff_diff || has_l2_cluster_diff || has_smt_diff;
+
+                /* to be immune to inverted EfficiencyClass and cluster sharing */
+                if (has_heterogeneous_cores) {
+                    int eff_votes[256]{};
+                    for (DWORD u = 0; u < unique_cores_count; ++u) {
+                        const DWORD rep_log = core_to_primary_logical[u];
+                        const BYTE eff = group_cpus[rep_log].efficiency_class;
+
+                        if (group_cpus[rep_log].l2_cache_id != 0xFFFFFFFFu && l2_sharing[u] == 1) {
+                            eff_votes[eff] += 10;
+                        }
+                        if (core_thread_count[u] > 1) {
+                            eff_votes[eff] += 10;
+                        }
+                    }
+
+                    BYTE best_eff = max_eff;
+                    int max_vote = -1;
+                    if (has_eff_diff) {
+                        for (DWORD u = 0; u < unique_cores_count; ++u) {
+                            const BYTE eff = group_cpus[core_to_primary_logical[u]].efficiency_class;
+                            if (eff_votes[eff] > max_vote) {
+                                max_vote = eff_votes[eff];
+                                best_eff = eff;
+                            }
+                        }
+                    }
+
+                    for (DWORD u = 0; u < unique_cores_count; ++u) {
+                        const DWORD rep_log = core_to_primary_logical[u];
+                        const DWORD core = unique_cores[u];
+                        bool is_p = true;
+
+                        if (has_eff_diff && max_vote > 0) {
+                            is_p = (group_cpus[rep_log].efficiency_class == best_eff);
+                        }
+                        else if (has_l2_cluster_diff && group_cpus[rep_log].l2_cache_id != 0xFFFFFFFFu) {
+                            is_p = (l2_sharing[u] == 1);
+                        }
+                        else if (has_smt_diff) {
+                            is_p = (core_thread_count[u] > 1);
+                        }
+
+                        for (DWORD i = 0; i < active_cpu_count; ++i) {
+                            if (group_cpus[idxs[i]].core_id == core) {
+                                group_cpus[idxs[i]].is_p_core = is_p;
+                            }
+                        }
+                    }
+                }
+
+                /* Filter cores belonging to performance tier */
+                DWORD perf_core_to_primary_logical[64]{};
+                DWORD perf_cores_count = 0;
+
+                for (DWORD u = 0; u < unique_cores_count; ++u) {
+                    const DWORD log = core_to_primary_logical[u];
+                    if (!has_heterogeneous_cores || group_cpus[log].is_p_core) {
+                        perf_core_to_primary_logical[perf_cores_count++] = log;
+                    }
+                }
+
+                /* Golden Rule 2: Counter thread in middle physical core when > 2 cores, core 2 when 2 cores */
                 const bool use_perf_pool = (perf_cores_count >= 2);
                 const DWORD pool_count = use_perf_pool ? perf_cores_count : unique_cores_count;
-                const std::vector<DWORD>& pool_to_logical = use_perf_pool ? perf_core_to_primary_logical : core_to_primary_logical;
+                const DWORD* pool_to_logical = use_perf_pool ? perf_core_to_primary_logical : core_to_primary_logical;
 
                 const DWORD counter_pos = (pool_count == 2) ? 1u : (pool_count / 2u);
                 const DWORD counter_logical = pool_to_logical[counter_pos];
@@ -4014,7 +4105,22 @@ public:
 
                 const DWORD core0_id = unique_cores[0];
                 const DWORD first_idx = idxs[0];
-                const DWORD last_idx = idxs[static_cast<std::vector<DWORD, std::allocator<DWORD>>::size_type>(active_cpu_count) - 1];
+                const DWORD last_idx = idxs[active_cpu_count - 1];
+
+                /* Check if candidate cores exist outside the counter thread's L2 cache cluster */
+                bool has_distinct_l2_candidates = false;
+                if (counter_cpu.l2_cache_id != 0xFFFFFFFFu) {
+                    for (DWORD i = 0; i < active_cpu_count; ++i) {
+                        const DWORD log = idxs[i];
+                        if (log == counter_logical) continue;
+                        const auto& cand = group_cpus[log];
+                        if (cand.core_id == counter_cpu.core_id) continue;
+                        if (cand.l2_cache_id == 0xFFFFFFFFu || cand.l2_cache_id != counter_cpu.l2_cache_id) {
+                            has_distinct_l2_candidates = true;
+                            break;
+                        }
+                    }
+                }
 
                 DWORD best_logical = 0xFFFFFFFFu;
                 int best_score = (std::numeric_limits<int>::min)();
@@ -4027,8 +4133,13 @@ public:
 
                     const auto& cand_cpu = group_cpus[logical];
 
-                    /* Golden Rule 3: Never share physical core with counter thread (exclude SMT siblings) */
+                    /* Golden Rule 3: Never share physical core with counter thread */
                     if (cand_cpu.core_id == counter_cpu.core_id) {
+                        continue;
+                    }
+
+                    /* Silver Rule 3: Reject candidate cores sharing an L2 cache cluster when distinct L2s exist */
+                    if (has_distinct_l2_candidates && cand_cpu.l2_cache_id != 0xFFFFFFFFu && cand_cpu.l2_cache_id == counter_cpu.l2_cache_id) {
                         continue;
                     }
 
@@ -4045,11 +4156,11 @@ public:
                     }
 
                     /* Silver Rule 2: Performance Core priority over Efficiency Core (+800) */
-                    if (has_heterogeneous_cores && cand_cpu.efficiency_class == max_efficiency) {
+                    if (has_heterogeneous_cores && cand_cpu.is_p_core) {
                         score += 800;
                     }
 
-                    /* Silver Rule 3: Deduct points (-800) for candidate cores sharing an L2 cache cluster */
+                    /* Silver Rule 3: Deduct points (-800) if shared L2 could not be rejected (fallback systems) */
                     if (cand_cpu.l2_cache_id != 0xFFFFFFFFu && cand_cpu.l2_cache_id == counter_cpu.l2_cache_id) {
                         score -= 800;
                     }
@@ -4066,7 +4177,7 @@ public:
 
                     /* Silver Rule 6: Ring Bus logical distance penalty (-1 per distance) */
                     const int dist = static_cast<int>(logical) - static_cast<int>(counter_logical);
-                    score -= std::abs(dist);
+                    score -= (dist < 0 ? -dist : dist);
 
                     /* Silver Rule 7: Edge logical cores & Physical Core 0 Interrupt/DPC noise penalty (-50) */
                     if (logical == first_idx || logical == last_idx || cand_cpu.core_id == core0_id) {
