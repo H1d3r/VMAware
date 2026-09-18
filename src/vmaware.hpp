@@ -13898,7 +13898,7 @@ public:
 
 
     /**
-     * @brief Check whether a hypervisor uses EPT/NPT hooking to intercept hardware breakpoints
+     * @brief Check whether a hypervisor uses EPT/NPT hooking
      * @note This hypervisor detection also affects debuggers
      * @category Windows, x86
      * @author @NickEverdox (https://github.com/everdox) - ERMSB check
@@ -14074,8 +14074,8 @@ public:
         prot_region_size = 1;
         ULONG dummy_protect = 0;
         status = nt_protect_virtual_memory(current_process, &base_address, &prot_region_size, old_protect, &dummy_protect);
-        if (status < 0) { 
-            return false; 
+        if (status < 0) {
+            return false;
         }
 
         bool hook_detected = false;
@@ -14116,7 +14116,7 @@ public:
         PVOID dst_page = nullptr;
         SIZE_T region_size = 0x2000;
 
-        /* Allocate source and destination pages */
+        /* Allocate ERMSB source and destination pages */
         const NTSTATUS status_src = nt_allocate_virtual_memory(current_process, &src_page, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         const NTSTATUS status_dst = nt_allocate_virtual_memory(current_process, &dst_page, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 
@@ -14168,8 +14168,8 @@ public:
             return false;
         }
 
-        /* Set hw breakpoint inside the source page */
-        ctx.Dr0 = reinterpret_cast<DWORD64>(src_page) + 0x1000;
+        /* DWORD_PTR is a must to support both x86-32 and x86-64 */
+        ctx.Dr0 = static_cast<DWORD_PTR>(reinterpret_cast<uintptr_t>(src_page) + 0x1000);
 
         /*
          * Dr7 = 0x30001
@@ -14200,11 +14200,85 @@ public:
         ctx.Dr7 = 0;
         nt_set_context_thread(current_thread, &ctx);
 
-        SIZE_T free_size = 0;
-        nt_free_virtual_memory(current_process, &src_page, &free_size, MEM_RELEASE);
-        nt_free_virtual_memory(current_process, &dst_page, &free_size, MEM_RELEASE);
+        SIZE_T free_size_cleanup = 0;
+        nt_free_virtual_memory(current_process, &src_page, &free_size_cleanup, MEM_RELEASE);
+        free_size_cleanup = 0;
+        nt_free_virtual_memory(current_process, &dst_page, &free_size_cleanup, MEM_RELEASE);
 
-        return hook_detected || !ermsb_trap_detected;
+        if (hook_detected || !ermsb_trap_detected) {
+            return true;
+        }
+
+        CONTEXT original_dbg_ctx{};
+        original_dbg_ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+        if (nt_get_context_thread(current_thread, &original_dbg_ctx) >= 0) {
+            /*
+             * Kernel  masks DR7 with DR7_LEGAL (0xFFFF0355), guaranteeing bit 13 GD is stripped 
+             * before writing to hardware. Hypervisors intercepting MOV-DR often maintain an internal shadow DR7
+             * without sanitization. So if bit 13 persists, a hypervisor is present
+             */
+            CONTEXT gd_ctx = original_dbg_ctx;
+            gd_ctx.Dr7 |= (1 << 13);
+            nt_set_context_thread(current_thread, &gd_ctx);
+
+            CONTEXT verify_ctx{};
+            verify_ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            if (nt_get_context_thread(current_thread, &verify_ctx) >= 0) {
+                if ((verify_ctx.Dr7 & (1 << 13)) != 0) {
+                    return true;
+                }
+            }
+        }
+
+        bool boundary_straddle_failed = false;
+        PVOID split_base = nullptr;
+        SIZE_T split_size = 0x2000; /* Two contiguous 4KB pages */
+
+        if (nt_allocate_virtual_memory(current_process, &split_base, 0, &split_size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) >= 0) {
+            /*
+             * We place a 15-byte prefixed multi-byte NOP instruction starting at
+             * offset 0xFF8 (8 bytes before the 4KB boundary at 0x1000):
+             *
+             * Page 0 (0xFF8..0xFFF - 8 bytes):
+             *   66 66 66 66 66 2E 0F 1F  ; 5x operand-size + CS segment prefix + 2 bytes of NOP
+             *
+             * Page 1 (0x1000..0x1006 - 7 bytes):
+             *   84 00 00 00 00 00 C3     ; Remaining 6 bytes of NOP + RET
+             *
+             * Emulators could fail when an instruction straddles two distinct EPT/NPT leaf entries
+             */
+            u8* page0 = static_cast<u8*>(split_base);
+            u8* page1 = page0 + 0x1000;
+
+            const u8 page0_bytes[] = { 0x66, 0x66, 0x66, 0x66, 0x66, 0x2E, 0x0F, 0x1F };
+            const u8 page1_bytes[] = { 0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 };
+
+            memcpy(page0 + 0xFF8, page0_bytes, sizeof(page0_bytes));
+            memcpy(page1, page1_bytes, sizeof(page1_bytes));
+
+            /* Make page 1 RX, leaving Page 0 as RWX */
+            PVOID page1_addr = page1;
+            SIZE_T prot_size = 0x1000;
+            ULONG old_prot = 0;
+            nt_protect_virtual_memory(current_process, &page1_addr, &prot_size, PAGE_EXECUTE_READ, &old_prot);
+            nt_flush_instruction_cache(current_process, split_base, 0x2000);
+
+            using straddle_fn_t = void(*)();
+            auto straddle_fn = reinterpret_cast<straddle_fn_t>(page0 + 0xFF8);
+
+            __try {
+                straddle_fn();
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                /* Hypervisor crashed, looped, or threw #UD/#GP across EPT boundary */
+                boundary_straddle_failed = true;
+            }
+
+            SIZE_T free_split_size = 0;
+            nt_free_virtual_memory(current_process, &split_base, &free_split_size, MEM_RELEASE);
+        }
+
+        return boundary_straddle_failed;
     #endif
     }
 
