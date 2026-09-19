@@ -12743,32 +12743,36 @@ public:
                 *out_anomaly = true;
                 *out_trap_ip = *ip; /* Record where it failed (will be at RDPRU offset 18) */
 
-                unsigned char instruction[3] = { 0 };
-                bool read_success = false;
+                bool instruction_advanced = false;
+                const unsigned char* ip_ptr = reinterpret_cast<const unsigned char*>(*ip);
 
                 __try {
-                    const unsigned char* ip_ptr = reinterpret_cast<const unsigned char*>(*ip);
-                    instruction[0] = ip_ptr[0];
-                    instruction[1] = ip_ptr[1];
-                    instruction[2] = ip_ptr[2];
-                    read_success = true;
+                    /* Safely inspect first two bytes */
+                    const unsigned char b0 = ip_ptr[0];
+                    const unsigned char b1 = ip_ptr[1];
+
+                    /* Check if it crashed on CPUID (0x0F, 0xA2) */
+                    if (b0 == 0x0F && b1 == 0xA2) {
+                        *ip += 2; /* Advance past CPUID */
+                        instruction_advanced = true;
+                    }
+                    /* Check prefix for RDPRU (0x0F, 0x01, 0xFD) */
+                    else if (b0 == 0x0F && b1 == 0x01) {
+                        if (ip_ptr[2] == 0xFD) {
+                            *ip += 3; /* Advance past RDPRU */
+                            instruction_advanced = true;
+                        }
+                    }
                 }
                 __except (EXCEPTION_EXECUTE_HANDLER) {
-                    read_success = false;
-                }
-
-                if (read_success) {
-                    /* Check if it crashed exactly on RDPRU (0x0F, 0x01, 0xFD) */
-                    if (instruction[0] == 0x0F && instruction[1] == 0x01 && instruction[2] == 0xFD) {
-                        *ip += 3; /* Advance past RDPRU */
-                    }
-                    /* Check if it crashed on CPUID (0x0F, 0xA2) */
-                    else if (instruction[0] == 0x0F && instruction[1] == 0xA2) {
-                        *ip += 2; /* Advance past CPUID */
-                    }
+                    instruction_advanced = false;
                 }
 
                 ep->ContextRecord->EFlags &= ~0x100; /* Force clear TF just in case */
+
+                if (!instruction_advanced) {
+                    return EXCEPTION_CONTINUE_SEARCH;
+                }
 
                 /* Resume execution at the fixed IP to bypass the need for stack unwinding */
                 return EXCEPTION_CONTINUE_EXECUTION;
@@ -12781,14 +12785,17 @@ public:
 
         if (cpu::is_amd()) {
             u32 a = 0, b = 0, c = 0, d = 0;
-            cpu::cpuid(a, b, c, d, cpu::leaf::ext_limits);
-            rdpru_available = ((b & (1 << 4)) != 0);
+            cpu::cpuid(a, b, c, d, 0x80000000U);
+            if (a >= 0x80000008U) {
+                cpu::cpuid(a, b, c, d, 0x80000008U);
+                rdpru_available = ((b & (1 << 4)) != 0);
+            }
         }
     #endif
 
     #if (VMAWARE_X86_32) && !(VMAWARE_CLANG || VMAWARE_GCC)
         bool hypervisor_detected = false;
-        ULONG_PTR baremetal_target_ip = 0;
+        volatile ULONG_PTR baremetal_target_ip = 0;
 
         trap_ip = 0;
         anomaly_detected = false;
@@ -12799,7 +12806,7 @@ public:
                 xor eax, eax
                 mov ax, ss
                 pushfd
-                or dword ptr[esp], 0x100 /* set TF */
+                or dword ptr[esp], 0x100 /* Set TF */
                 popfd
                 mov ss, ax
                 cpuid
@@ -12825,10 +12832,11 @@ public:
                     mov dword ptr[baremetal_target_ip], offset baremetal_target_rdpru
                     push ebx
                     xor ecx, ecx
+                    xor edx, edx /* Notify compiler of EDX clobber from RDPRU */
                     xor eax, eax
                     mov ax, ss
                     pushfd
-                    or dword ptr[esp], 0x100 /* set TF */
+                    or dword ptr[esp], 0x100 /* Set TF */
                     popfd
                     mov ss, ax
                     _emit 0x0F
@@ -12853,7 +12861,7 @@ public:
 
     #elif (VMAWARE_X86_64) || ((VMAWARE_X86_32) && (VMAWARE_CLANG || VMAWARE_GCC))
         bool hypervisor_detected = false;
-        ULONG_PTR baremetal_target_ip = 0;
+        volatile ULONG_PTR baremetal_target_ip = 0;
 
         trap_ip = 0;
         anomaly_detected = false;
@@ -14959,12 +14967,12 @@ public:
          */
         return false;
     #else   
-    #pragma pack(push, 1)
-        struct iretq_frame {
-            u64 ip;
-            u64 cs;
-        };
-    #pragma pack(pop)
+        #pragma pack(push, 1)
+            struct iretq_frame {
+                u64 ip;
+                u64 cs;
+            };
+        #pragma pack(pop)
 
         if (util::is_x86_process_on_arm()) {
             return false;
@@ -14988,21 +14996,24 @@ public:
             "NtAllocateVirtualMemory",
             "NtFreeVirtualMemory",
             "RtlAddVectoredExceptionHandler",
-            "RtlRemoveVectoredExceptionHandler"
+            "RtlRemoveVectoredExceptionHandler",
+            "NtFlushInstructionCache"
         };
 
-        void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        void* functions[sizeof(function_names) / sizeof(function_names[0])] = {};
+        memory::get_function(ntdll, function_names, functions, sizeof(function_names) / sizeof(function_names[0]));
 
         using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
         using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
         using rtl_add_vectored_exception_handler_fn = PVOID(__stdcall*)(ULONG, PVECTORED_EXCEPTION_HANDLER);
         using rtl_remove_vectored_exception_handler_fn = ULONG(__stdcall*)(PVOID);
+        using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
 
         const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
         const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[1]);
         const auto rtl_add_vectored_exception_handler = reinterpret_cast<rtl_add_vectored_exception_handler_fn>(functions[2]);
         const auto rtl_remove_vectored_exception_handler = reinterpret_cast<rtl_remove_vectored_exception_handler_fn>(functions[3]);
+        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[4]);
 
         if (!nt_allocate_virtual_memory || !nt_free_virtual_memory || !rtl_add_vectored_exception_handler || !rtl_remove_vectored_exception_handler) {
             return false;
@@ -15027,14 +15038,17 @@ public:
                 }
             }
 
-            if (saved_rsp != 0) {
+            const u64 current_saved_rsp = saved_rsp;
+            saved_rsp = 0; /* To prevent any secondary fault from re-using this stack */
+
+            if (current_saved_rsp != 0 && (current_saved_rsp % 8 == 0)) {
                 /*
                 static const unsigned char recover_stub[] = {
                     0x41, 0x5F, 0x41, 0x5E, 0x41, 0x5D, 0x41, 0x5C, 0x5E, 0x5F, 0x5D, 0x5B, // pop r15-r12, rsi, rdi, rbp, rbx
                     0xC3                                                                    // ret
                 };
                 */
-                const u64* saved_stack = reinterpret_cast<const u64*>(saved_rsp);
+                const u64* saved_stack = reinterpret_cast<const u64*>(current_saved_rsp);
                 exc_info->ContextRecord->R15 = saved_stack[0];
                 exc_info->ContextRecord->R14 = saved_stack[1];
                 exc_info->ContextRecord->R13 = saved_stack[2];
@@ -15045,29 +15059,25 @@ public:
                 exc_info->ContextRecord->Rbx = saved_stack[7];
 
                 exc_info->ContextRecord->SegCs = 0x33;
+                exc_info->ContextRecord->SegSs = 0x2B;
+                exc_info->ContextRecord->ContextFlags |= (CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS);
                 exc_info->ContextRecord->Rip = saved_stack[8];  /* Cleanup shellcode */
-                exc_info->ContextRecord->Rsp = saved_rsp + 72;
+                exc_info->ContextRecord->Rsp = current_saved_rsp + 72;
 
-                saved_rsp = 0; /* To prevent any secondary fault from re-using this stack */
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
 
             return EXCEPTION_CONTINUE_SEARCH;
         };
 
-        const PVOID handler_ptr = rtl_add_vectored_exception_handler(1, static_cast<PVECTORED_EXCEPTION_HANDLER>(eip_overflow_veh));
-        if (!handler_ptr) {
-            return false;
-        }
-
         /*
          * Recovery jump target for VEH
          * dynamically allocate a 32-bit compatible stack (must reside below 4GB)
          */
         PVOID stack32_base = nullptr;
-        SIZE_T stack32_size = 0x10000;
         for (uintptr_t addr = 0x20000000; addr < 0x80000000; addr += 0x10000000) {
             stack32_base = reinterpret_cast<PVOID>(addr);
+            SIZE_T stack32_size = 0x10000;
             if (nt_allocate_virtual_memory(current_process, &stack32_base, 0, &stack32_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) >= 0) {
                 break;
             }
@@ -15075,7 +15085,6 @@ public:
         }
 
         if (!stack32_base) {
-            rtl_remove_vectored_exception_handler(handler_ptr);
             return false;
         }
 
@@ -15100,12 +15109,24 @@ public:
                 execution_target[0] = 0x0F;
                 execution_target[1] = 0xA2;
 
-                iretq_frame frame = {};
-                frame.ip = 0xFFFFFFFEULL;
-                frame.cs = 0x23;
+                if (nt_flush_instruction_cache) {
+                    nt_flush_instruction_cache(current_process, boundary_base, boundary_size);
+                }
 
-                /* Dispatch hardware context switch shellcode */
-                memory::execute(switch_stub, &frame, stack32_ptr, &saved_rsp);
+                const PVOID handler_ptr = rtl_add_vectored_exception_handler(1, static_cast<PVECTORED_EXCEPTION_HANDLER>(eip_overflow_veh));
+                if (handler_ptr) {
+                    iretq_frame frame = {};
+                    frame.ip = 0xFFFFFFFEULL;
+                    frame.cs = 0x23;
+
+                    /* Dispatch hardware context switch shellcode */
+                    memory::execute(switch_stub, &frame, stack32_ptr, &saved_rsp);
+
+                    rtl_remove_vectored_exception_handler(handler_ptr);
+                }
+                else {
+                    hypervisor_detected = false;
+                }
             }
             else {
                 hypervisor_detected = false;
@@ -15118,7 +15139,6 @@ public:
             hypervisor_detected = false;
         }
 
-        rtl_remove_vectored_exception_handler(handler_ptr);
         saved_rsp = 0;
 
         SIZE_T free_size = 0;
@@ -15189,9 +15209,22 @@ public:
         using TBS_RESULT = UINT32;
         using TBS_HCONTEXT = void*;
 
+        #ifndef TBS_E_INSUFFICIENT_BUFFER
+            constexpr TBS_RESULT VMAWARE_TBS_INSUFFICIENT_BUFFER = 0x80284005;
+        #else
+            constexpr TBS_RESULT VMAWARE_TBS_INSUFFICIENT_BUFFER = static_cast<TBS_RESULT>(TBS_E_INSUFFICIENT_BUFFER);
+        #endif
+
+        constexpr UINT32 MAX_TCG_LOG_SIZE = 16 * 1024 * 1024; /* 16 MB sanity boundary */
+
     #pragma pack(push, 1)
         struct VMAWARE_TBS_CONTEXT_PARAMS {
             UINT32 version;
+        };
+
+        struct VMAWARE_TBS_CONTEXT_PARAMS2 {
+            UINT32 version;
+            UINT32 flags;
         };
 
         struct TCG_PCR_EVENT_HEADER {
@@ -15208,11 +15241,12 @@ public:
     #pragma pack(pop)
 
         static_assert(sizeof(VMAWARE_TBS_CONTEXT_PARAMS) == 4, "VMAWARE_TBS_CONTEXT_PARAMS must be exactly 4 bytes.");
+        static_assert(sizeof(VMAWARE_TBS_CONTEXT_PARAMS2) == 8, "VMAWARE_TBS_CONTEXT_PARAMS2 must be exactly 8 bytes.");
         static_assert(sizeof(TCG_PCR_EVENT_HEADER) == 32, "TCG_PCR_EVENT_HEADER must be exactly 32 bytes.");
         static_assert(sizeof(alg_size) == 4, "alg_size must be exactly 4 bytes.");
 
         using tbsi_get_tcg_log_ex_fn = TBS_RESULT(__stdcall*)(UINT32, PBYTE, PUINT32);
-        using tbsi_context_create_fn = TBS_RESULT(__stdcall*)(const VMAWARE_TBS_CONTEXT_PARAMS*, TBS_HCONTEXT*);
+        using tbsi_context_create_fn = TBS_RESULT(__stdcall*)(const void*, TBS_HCONTEXT*);
         using tbsip_context_close_fn = TBS_RESULT(__stdcall*)(TBS_HCONTEXT);
         using tbsi_get_tcg_log_fn = TBS_RESULT(__stdcall*)(TBS_HCONTEXT, PBYTE, PUINT32);
 
@@ -15261,7 +15295,7 @@ public:
             }
 
             const size_t first_event_data_offset = sizeof(TCG_PCR_EVENT_HEADER);
-            if (total_size < first_event_data_offset + first_hdr.eventSize) {
+            if (total_size - first_event_data_offset < first_hdr.eventSize) {
                 return false;
             }
 
@@ -15274,28 +15308,28 @@ public:
 
             const u32 num_algs = read_u32(spec_id_payload + 24);
 
-            if (num_algs > 16 || spec_id_size < 28 + (num_algs * sizeof(alg_size))) {
+            if (num_algs == 0 || num_algs > 16 || spec_id_size < 28 + (num_algs * sizeof(alg_size))) {
                 return false;
             }
 
-            std::vector<alg_size> active_algs(num_algs);
+            alg_size active_algs[16] = {};
             const u8* alg_ptr = spec_id_payload + 28;
             for (u32 i = 0; i < num_algs; ++i) {
                 active_algs[i] = read_alg_size(alg_ptr + (i * sizeof(alg_size)));
             }
 
-            auto get_digest_size = [&active_algs](const u16 algorithm_id) noexcept -> u16 {
-                for (const auto& alg : active_algs) {
-                    if (alg.algId == algorithm_id) {
-                        return alg.digestSize;
+            auto get_digest_size = [&active_algs, num_algs](const u16 algorithm_id) noexcept -> u16 {
+                for (u32 i = 0; i < num_algs; ++i) {
+                    if (active_algs[i].algId == algorithm_id) {
+                        return active_algs[i].digestSize;
                     }
                 }
                 switch (algorithm_id) {
-                    case 0x0004: return 20; /* SHA-1 */
-                    case 0x000B: return 32; /* SHA-256 */
-                    case 0x000C: return 48; /* SHA-384 */
-                    case 0x000D: return 64; /* SHA-512 */
-                    default:     return 0;
+                case 0x0004: return 20; /* SHA-1 */
+                case 0x000B: return 32; /* SHA-256 */
+                case 0x000C: return 48; /* SHA-384 */
+                case 0x000D: return 64; /* SHA-512 */
+                default:     return 0;
                 }
             };
 
@@ -15308,11 +15342,17 @@ public:
                 }
 
                 const u8* event_ptr = p_buffer + current_offset;
-                VMAWARE_PREFETCH(event_ptr + 128, _MM_HINT_T0);
+                if (total_size - current_offset > 128) {
+                    VMAWARE_PREFETCH(event_ptr + 128, _MM_HINT_T0);
+                }
 
                 const u32 pcr_index = read_u32(event_ptr);
                 const u32 event_type = read_u32(event_ptr + 4);
                 const u32 digest_count = read_u32(event_ptr + 8);
+
+                if (digest_count == 0 || digest_count > 16) {
+                    break;
+                }
 
                 size_t local_offset = 12;
 
@@ -15401,9 +15441,15 @@ public:
             for (UINT32 log_type : { 0, 2 }) {
                 UINT32 log_size = 0;
                 TBS_RESULT res = tbsi_get_tcg_log_ex(log_type, nullptr, &log_size);
-                if ((res == 0 || res == static_cast<TBS_RESULT>(TBS_E_INSUFFICIENT_BUFFER)) && log_size > 0) {
-                    std::vector<u8> buffer(log_size);
-                    if (tbsi_get_tcg_log_ex(log_type, buffer.data(), &log_size) == 0) {
+                if ((res == 0 || res == VMAWARE_TBS_INSUFFICIENT_BUFFER) && log_size > 0 && log_size <= MAX_TCG_LOG_SIZE) {
+                    std::vector<u8> buffer;
+                    try {
+                        buffer.resize(log_size);
+                    }
+                    catch (...) {
+                        buffer.clear();
+                    }
+                    if (!buffer.empty() && tbsi_get_tcg_log_ex(log_type, buffer.data(), &log_size) == 0) {
                         buffer.resize(log_size);
                         if (parse_log(buffer)) {
                             vm_detected = true;
@@ -15413,15 +15459,28 @@ public:
                 }
             }
         }
-        else if (tbsi_context_create && tbsip_context_close && tbsi_get_tcg_log) {
-            VMAWARE_TBS_CONTEXT_PARAMS params{ 1 };
+
+        if (!vm_detected && tbsi_context_create && tbsip_context_close && tbsi_get_tcg_log) {
+            VMAWARE_TBS_CONTEXT_PARAMS2 params2{ 2, 0x6 }; /* TPM_VERSION_20, includeTpm12 | includeTpm20 */
             TBS_HCONTEXT context_handle = nullptr;
-            if (tbsi_context_create(&params, &context_handle) == 0) {
+            TBS_RESULT create_res = tbsi_context_create(&params2, &context_handle);
+            if (create_res != 0) {
+                VMAWARE_TBS_CONTEXT_PARAMS params1{ 1 }; /* TPM_VERSION_12 fallback */
+                create_res = tbsi_context_create(&params1, &context_handle);
+            }
+
+            if (create_res == 0 && context_handle != nullptr) {
                 UINT32 log_size = 0;
                 TBS_RESULT res = tbsi_get_tcg_log(context_handle, nullptr, &log_size);
-                if ((res == 0 || res == static_cast<TBS_RESULT>(TBS_E_INSUFFICIENT_BUFFER)) && log_size > 0) {
-                    std::vector<u8> buffer(log_size);
-                    if (tbsi_get_tcg_log(context_handle, buffer.data(), &log_size) == 0) {
+                if ((res == 0 || res == VMAWARE_TBS_INSUFFICIENT_BUFFER) && log_size > 0 && log_size <= MAX_TCG_LOG_SIZE) {
+                    std::vector<u8> buffer;
+                    try {
+                        buffer.resize(log_size);
+                    }
+                    catch (...) {
+                        buffer.clear();
+                    }
+                    if (!buffer.empty() && tbsi_get_tcg_log(context_handle, buffer.data(), &log_size) == 0) {
                         buffer.resize(log_size);
                         if (parse_log(buffer)) {
                             vm_detected = true;
