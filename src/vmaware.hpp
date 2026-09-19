@@ -14433,32 +14433,25 @@ public:
 
         const void* stubs[2] = { vmcall_stub, vmmcall_stub };
         bool is_kvm_detected = false;
-        bool generic_hypervisor = false;
 
         for (int i = 0; i < 2; ++i) {
             const DWORD exception_status = memory::execute_handler(stubs[i]);
             const bool fault_hit = (exception_status != 0);
 
             if (!fault_hit) {
-                /* If no exception occurs, then a hypervisor intercepted and handled it */
-                generic_hypervisor = true;
+                /* If no exception occurs, then a hypervisor intercepted and handled it. Default behavior on latest KVM */
+                is_kvm_detected = true;
                 vma_debug("KVM_INTERCEPTION: Detected a hypervisor intercepting hypercalls");
             }
             else if (exception_status == EXCEPTION_ACCESS_VIOLATION || exception_status == EXCEPTION_IN_PAGE_ERROR) {
-                /* Expected #UD became a page-fault-related exception instead. KVM's instruction patching quirk is present */
+                /* Expected #UD became a page-fault-related exception instead. KVM's instruction patching quirk is present. Only occurs on old KVM */
                 vma_debug("KVM_INTERCEPTION: Detected KVM attempting to patch instructions on the fly");
                 is_kvm_detected = true;
-            }
-
-            if (is_kvm_detected) {
-                return core::add(brand_enum::KVM);
-            }
-            else if (generic_hypervisor) {
-                return true;
+                break;
             }
         }
 
-        return false;
+        return is_kvm_detected;
     #endif
     }
 
@@ -15165,6 +15158,12 @@ public:
             return false;
         }
         if (util::is_x86_process_on_arm()) {
+            return false;
+        }
+
+        u32 max_ext = 0, ebx = 0, ecx = 0, edx = 0;
+        cpu::cpuid(max_ext, ebx, ecx, edx, 0x80000000);
+        if (max_ext < cpu::leaf::proc_ext) {
             return false;
         }
 
