@@ -4624,9 +4624,11 @@ public:
                 return false;
             }
             while (*prefix) {
-                if (*str++ != *prefix++) {
+                if (!*str || *str != *prefix) {
                     return false;
                 }
+                ++str;
+                ++prefix;
             }
             return true;
         }
@@ -6568,13 +6570,16 @@ public:
             return false;
         }
 
-        char out[(sizeof(i32) * 4) + 1] = { 0 }; /* e*x size + number of e*x registers + null terminator */
-        cpu::cpuid(reinterpret_cast<int*>(out), cpu::leaf::hypervisor);
+        alignas(int) char out[sizeof(i32) * 4 + 1] = { 0 }; /* e*x size + number of e*x registers + null terminator */
+        int regs[4] = { 0 };
 
-        vma_debug("HYPERVISOR_STR: eax: ", static_cast<u32>(out[0]),
-            ", ebx: ", static_cast<u32>(out[1]),
-            ", ecx: ", static_cast<u32>(out[2]),
-            ", edx: ", static_cast<u32>(out[3])
+        cpu::cpuid(regs, cpu::leaf::hypervisor);
+        std::memcpy(out, regs, sizeof(regs));
+
+        vma_debug("HYPERVISOR_STR: eax: ", static_cast<u32>(regs[0]),
+            ", ebx: ", static_cast<u32>(regs[1]),
+            ", ecx: ", static_cast<u32>(regs[2]),
+            ", edx: ", static_cast<u32>(regs[3])
         );
 
         return (strlen(out + 4) >= 4);
@@ -15786,14 +15791,14 @@ public:
 
         for (unsigned int r = 0; r < run_count; ++r) {
             /* 32 KB aligned stack buffer with heap fallback */
-            constexpr DWORD STACK_BUFFER_SIZE = 32 * 1024; /* 32 KB */
+            constexpr DWORD STACK_BUFFER_SIZE = 32 * 1024;
             alignas(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) BYTE stack_buf[STACK_BUFFER_SIZE]{};
             std::vector<BYTE> heap_buf;
 
             DWORD buffer_size = STACK_BUFFER_SIZE;
             BYTE* raw_buffer = stack_buf;
 
-            /* Query processor core topology from the OS */
+            /* Query processor core topology */
             if (!GetLogicalProcessorInformationEx(RelationProcessorCore,
                 reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(raw_buffer),
                 &buffer_size))
@@ -15814,7 +15819,7 @@ public:
                 }
             }
 
-            /* Parse physical cores and logical affinity masks with boundary validation */
+            /* Parse physical cores and logical affinity masks */
             DWORD offset = 0;
             unsigned int physical_counter = 0;
 
@@ -15829,7 +15834,6 @@ public:
                     bool is_pcore = (eff_class > 0); /* 0 = E-Core, >= 1 = P-Core */
 
                     for (WORD g = 0; g < info->Processor.GroupCount; ++g) {
-                        /* Bounds-check flexible array GroupMask */
                         size_t mask_offset = offsetof(PROCESSOR_RELATIONSHIP, GroupMask) + (g + 1) * sizeof(GROUP_AFFINITY);
                         if (offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor) + mask_offset > info->Size) {
                             break;
@@ -15853,13 +15857,13 @@ public:
                 return false;
             }
 
-            /* Allow hypervisor opportunity to dynamically migrate or reassign vCPUs */
+            /* Allow hypervisor to migrate unpinned vCPUs so that we detect it */
             if (r + 1 < run_count) {
                 SleepEx(25, FALSE);
             }
         }
 
-        /* Check if the number of physical cores changed, this won't trigger 99% of time but its a very cheap check */
+        /* Check if the number of physical cores changed, this won't trigger 99% of time but it's a very cheap check */
         if (topology_runs[0].size() != topology_runs[1].size()) {
             return true;
         }
