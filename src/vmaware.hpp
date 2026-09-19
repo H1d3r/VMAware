@@ -14487,11 +14487,6 @@ public:
             "RtlAddVectoredExceptionHandler",
             "RtlRemoveVectoredExceptionHandler",
             "NtProtectVirtualMemory",
-            "NtQuerySystemInformation",
-            "NtCreateThreadEx",
-            "NtWaitForSingleObject",
-            "NtClose",
-            "NtSetInformationThread",
             "NtFlushInstructionCache"
         };
         void* functions[ARRAYSIZE(function_names)] = {};
@@ -14504,11 +14499,6 @@ public:
         using rtl_add_vectored_exception_handler_fn = PVOID(__stdcall*)(ULONG, PVECTORED_EXCEPTION_HANDLER);
         using rtl_remove_vectored_exception_handler_fn = ULONG(__stdcall*)(PVOID);
         using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
-        using nt_query_system_information_fn = NTSTATUS(__stdcall*)(ULONG, PVOID, ULONG, PULONG);
-        using nt_create_thread_ex_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, PVOID, HANDLE, PVOID, PVOID, ULONG, ULONG_PTR, SIZE_T, SIZE_T, PVOID);
-        using nt_wait_for_single_object_fn = NTSTATUS(__stdcall*)(HANDLE, BOOLEAN, PLARGE_INTEGER);
-        using nt_close_fn = NTSTATUS(__stdcall*)(HANDLE);
-        using nt_set_information_thread_fn = NTSTATUS(__stdcall*)(HANDLE, ULONG, PVOID, ULONG);
         using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
 
         /* Volatile ensures these are loaded from stack after SEH unwind when compiled with aggressive optimizations */
@@ -14519,18 +14509,11 @@ public:
         rtl_add_vectored_exception_handler_fn volatile rtl_add_vectored_exception_handler = reinterpret_cast<rtl_add_vectored_exception_handler_fn>(functions[4]);
         rtl_remove_vectored_exception_handler_fn volatile rtl_remove_vectored_exception_handler = reinterpret_cast<rtl_remove_vectored_exception_handler_fn>(functions[5]);
         nt_protect_virtual_memory_fn volatile nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[6]);
-        nt_query_system_information_fn volatile nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(functions[7]);
-        nt_create_thread_ex_fn volatile nt_create_thread_ex = reinterpret_cast<nt_create_thread_ex_fn>(functions[8]);
-        nt_wait_for_single_object_fn volatile nt_wait_for_single_object = reinterpret_cast<nt_wait_for_single_object_fn>(functions[9]);
-        nt_close_fn volatile nt_close = reinterpret_cast<nt_close_fn>(functions[10]);
-        nt_set_information_thread_fn volatile nt_set_information_thread = reinterpret_cast<nt_set_information_thread_fn>(functions[11]);
-        nt_flush_instruction_cache_fn volatile nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[12]);
+        nt_flush_instruction_cache_fn volatile nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[7]);
 
         if (!nt_allocate_virtual_memory || !nt_free_virtual_memory || !nt_get_context_thread ||
             !nt_set_context_thread || !rtl_add_vectored_exception_handler || !rtl_remove_vectored_exception_handler ||
-            !nt_protect_virtual_memory || !nt_query_system_information || !nt_create_thread_ex ||
-            !nt_wait_for_single_object || !nt_close || !nt_set_information_thread ||
-            !nt_flush_instruction_cache) {
+            !nt_protect_virtual_memory || !nt_flush_instruction_cache) {
             return false;
         }
 
@@ -14553,6 +14536,10 @@ public:
                 return nullptr;
             }
 
+            if (dos_header->e_lfanew <= 0 || dos_header->e_lfanew > 0x10000000) {
+                return nullptr;
+            }
+
             auto* nt_headers = reinterpret_cast<PIMAGE_NT_HEADERS>(reinterpret_cast<u8*>(module) + dos_header->e_lfanew);
             if (nt_headers->Signature != IMAGE_NT_SIGNATURE) {
                 return nullptr;
@@ -14570,7 +14557,9 @@ public:
                     }
 
                     for (size_t j = 0; j < size - 1; ++j) {
-                        VMAWARE_PREFETCH(&ptr[j + 64], _MM_HINT_T0);
+                        if (j + 64 < size) {
+                            VMAWARE_PREFETCH(&ptr[j + 64], _MM_HINT_T0);
+                        }
                         if (ptr[j] == 0xCC && ptr[j + 1] == 0xCC) {
                             /*
                              * By returning ptr[j + 1], executing it will safely run 0xC3 (after overwrite)
@@ -14635,6 +14624,9 @@ public:
         ULONG dummy_protect = 0;
         status = nt_protect_virtual_memory(current_process, &base_address, &prot_region_size, old_protect, &dummy_protect);
         if (status < 0) {
+            /* Emergency cleanup before early exit */
+            *static_cast<volatile u8*>(pointer) = original_byte;
+            nt_flush_instruction_cache(current_process, const_cast<void*>(pointer), 1);
             return false;
         }
 
@@ -14660,10 +14652,11 @@ public:
             GROUP_AFFINITY active_group_aff{};
 
             if (GetThreadGroupAffinity(current_thread, &active_group_aff)) {
-                for (ULONG i = 0; i < 64; ++i) {
-                    if (active_group_aff.Mask & ((ULONG_PTR)1 << i)) {
+                constexpr ULONG max_affinity_bits = static_cast<ULONG>(sizeof(active_group_aff.Mask) * 8);
+                for (ULONG i = 0; i < max_affinity_bits; ++i) {
+                    if (active_group_aff.Mask & (static_cast<KAFFINITY>(1) << i)) {
                         GROUP_AFFINITY target_aff = active_group_aff;
-                        target_aff.Mask = (ULONG_PTR)1 << i;
+                        target_aff.Mask = static_cast<KAFFINITY>(1) << i;
 
                         if (SetThreadGroupAffinity(current_thread, &target_aff, nullptr)) {
                             __try {
@@ -14683,12 +14676,21 @@ public:
             }
         }
 
+        restore_original_byte();
+
+        CONTEXT initial_dbg_ctx{};
+        initial_dbg_ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+        if (nt_get_context_thread(current_thread, &initial_dbg_ctx) < 0) {
+            return hook_detected;
+        }
+
         PVOID src_page = nullptr;
         PVOID dst_page = nullptr;
         SIZE_T region_size = 0x2000;
 
         /* Allocate ERMSB source and destination pages */
         const NTSTATUS status_src = nt_allocate_virtual_memory(current_process, &src_page, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        region_size = 0x2000;
         const NTSTATUS status_dst = nt_allocate_virtual_memory(current_process, &dst_page, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 
         if (status_src < 0 || status_dst < 0) {
@@ -14700,18 +14702,22 @@ public:
                 SIZE_T free_size = 0;
                 nt_free_virtual_memory(current_process, &dst_page, &free_size, MEM_RELEASE);
             }
-            return false;
+            return hook_detected;
         }
 
         /* Initialize src memory */
         __stosb(static_cast<PBYTE>(src_page), 0xAB, 0x2000);
 
-        thread_local static volatile bool ermsb_trap_detected = false;
+        static volatile bool ermsb_trap_detected = false;
+        static DWORD ermsb_expected_tid = 0;
         ermsb_trap_detected = false;
+        ermsb_expected_tid = GetCurrentThreadId();
 
         struct exception_handler {
             static VMAWARE_NOINLINE LONG __stdcall execute(const PEXCEPTION_POINTERS ctx) {
-                if (ctx->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+                if (GetCurrentThreadId() == ermsb_expected_tid &&
+                    ctx && ctx->ExceptionRecord &&
+                    ctx->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
                     ermsb_trap_detected = true;
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
@@ -14723,22 +14729,12 @@ public:
         if (!veh_handle) {
             SIZE_T free_size = 0;
             nt_free_virtual_memory(current_process, &src_page, &free_size, MEM_RELEASE);
+            free_size = 0;
             nt_free_virtual_memory(current_process, &dst_page, &free_size, MEM_RELEASE);
-            return false;
+            return hook_detected;
         }
 
-        CONTEXT ctx{};
-        ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-        status = nt_get_context_thread(current_thread, &ctx);
-
-        if (status < 0) {
-            rtl_remove_vectored_exception_handler(veh_handle);
-            SIZE_T free_size = 0;
-            nt_free_virtual_memory(current_process, &src_page, &free_size, MEM_RELEASE);
-            nt_free_virtual_memory(current_process, &dst_page, &free_size, MEM_RELEASE);
-            return false;
-        }
-
+        CONTEXT ctx = initial_dbg_ctx;
         /* DWORD_PTR is a must to support both x86-32 and x86-64 */
         ctx.Dr0 = static_cast<DWORD_PTR>(reinterpret_cast<uintptr_t>(src_page) + 0x1000);
 
@@ -14754,8 +14750,9 @@ public:
             rtl_remove_vectored_exception_handler(veh_handle);
             SIZE_T free_size = 0;
             nt_free_virtual_memory(current_process, &src_page, &free_size, MEM_RELEASE);
+            free_size = 0;
             nt_free_virtual_memory(current_process, &dst_page, &free_size, MEM_RELEASE);
-            return false;
+            return hook_detected;
         }
 
         __try {
@@ -14767,39 +14764,39 @@ public:
 
         rtl_remove_vectored_exception_handler(veh_handle);
 
-        ctx.Dr0 = 0;
-        ctx.Dr7 = 0;
-        nt_set_context_thread(current_thread, &ctx);
+        nt_set_context_thread(current_thread, &initial_dbg_ctx);
 
         SIZE_T free_size_cleanup = 0;
         nt_free_virtual_memory(current_process, &src_page, &free_size_cleanup, MEM_RELEASE);
         free_size_cleanup = 0;
         nt_free_virtual_memory(current_process, &dst_page, &free_size_cleanup, MEM_RELEASE);
-        restore_original_byte();
 
         if (hook_detected || !ermsb_trap_detected) {
             return true;
         }
 
-        CONTEXT original_dbg_ctx{};
-        original_dbg_ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-        if (nt_get_context_thread(current_thread, &original_dbg_ctx) >= 0) {
-            /*
-             * Kernel  masks DR7 with DR7_LEGAL (0xFFFF0355), guaranteeing bit 13 GD is stripped 
-             * before writing to hardware. Hypervisors intercepting MOV-DR often maintain an internal shadow DR7
-             * without sanitization. So if bit 13 persists, a hypervisor is present
-             */
-            CONTEXT gd_ctx = original_dbg_ctx;
-            gd_ctx.Dr7 |= (1 << 13);
-            nt_set_context_thread(current_thread, &gd_ctx);
-
+        /*
+         * Kernel masks DR7 with DR7_LEGAL (0xFFFF0355), guaranteeing bit 13 GD is stripped
+         * before writing to hardware. Hypervisors intercepting MOV-DR often maintain an internal shadow DR7
+         * without sanitization. So if bit 13 persists, a hypervisor is present
+         */
+        bool gd_detected = false;
+        CONTEXT gd_ctx = initial_dbg_ctx;
+        gd_ctx.Dr7 |= (1 << 13);
+        if (nt_set_context_thread(current_thread, &gd_ctx) >= 0) {
             CONTEXT verify_ctx{};
             verify_ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
             if (nt_get_context_thread(current_thread, &verify_ctx) >= 0) {
                 if ((verify_ctx.Dr7 & (1 << 13)) != 0) {
-                    return true;
+                    gd_detected = true;
                 }
             }
+            /* Ensure bit 13 (GD) is cleared immediately so subsequent instructions never fault */
+            nt_set_context_thread(current_thread, &initial_dbg_ctx);
+        }
+
+        if (gd_detected) {
+            return true;
         }
 
         bool boundary_straddle_failed = false;
@@ -14835,11 +14832,8 @@ public:
             nt_protect_virtual_memory(current_process, &page1_addr, &prot_size, PAGE_EXECUTE_READ, &old_prot);
             nt_flush_instruction_cache(current_process, split_base, 0x2000);
 
-            using straddle_fn_t = void(*)();
-            auto straddle_fn = reinterpret_cast<straddle_fn_t>(page0 + 0xFF8);
-
             __try {
-                straddle_fn();
+                memory::execute(page0 + 0xFF8);
             }
             __except (EXCEPTION_EXECUTE_HANDLER) {
                 /* Hypervisor crashed, looped, or threw #UD/#GP across EPT boundary */
@@ -14872,19 +14866,35 @@ public:
         }
 
         struct exception_handler {
-            static VMAWARE_NOINLINE LONG execute(const EXCEPTION_POINTERS* info, DWORD* exceptionCode) {
-                *exceptionCode = info->ExceptionRecord->ExceptionCode;
-            #if (VMAWARE_X86_64)
-                info->ContextRecord->Rbx = info->ContextRecord->R8;
-            #elif (VMAWARE_X86_32)
-                info->ContextRecord->Ebx = info->ContextRecord->Edi;
-            #endif
+            static VMAWARE_NOINLINE LONG execute(const EXCEPTION_POINTERS* info, volatile DWORD* exceptionCode) {
+                if (!info || !info->ExceptionRecord) {
+                    return EXCEPTION_CONTINUE_SEARCH;
+                }
+
+                const DWORD code = info->ExceptionRecord->ExceptionCode;
+
+                /* Only intercept expected instruction and debug traps */
+                if (code != EXCEPTION_SINGLE_STEP && code != EXCEPTION_ILLEGAL_INSTRUCTION) {
+                    return EXCEPTION_CONTINUE_SEARCH;
+                }
+
+                if (exceptionCode) {
+                    *exceptionCode = code;
+                }
+
+                if (info->ContextRecord) {
+                #if (VMAWARE_X86_64)
+                    info->ContextRecord->Rbx = info->ContextRecord->R8;
+                #elif (VMAWARE_X86_32)
+                    info->ContextRecord->Ebx = info->ContextRecord->Edi;
+                #endif
+                }
                 return EXCEPTION_EXECUTE_HANDLER;
             }
         };
 
         bool cpuid_is_vm = true;
-        DWORD exc_code_cpuid = 0;
+        volatile DWORD exc_code_cpuid = 0;
 
         __try {
             memory::execute(cpuid_singlestep_stub);
@@ -14900,29 +14910,33 @@ public:
             }
         }
 
-        bool rdpru_available = false;
-        if (!cpuid_is_vm && cpu::is_amd()) {
-            u32 a = 0, b = 0, c = 0, d = 0;
-            cpu::cpuid(a, b, c, d, cpu::leaf::ext_limits);
-            rdpru_available = ((b & (1 << 4)) != 0);
-        }
-        else {
+        if (cpuid_is_vm || !cpu::is_amd()) {
             return cpuid_is_vm;
         }
 
-        bool rdpru_is_vm = false;
+        u32 max_ext_leaf = 0, unused = 0;
+        cpu::cpuid(max_ext_leaf, unused, unused, unused, 0x80000000);
+        if (max_ext_leaf < cpu::leaf::ext_limits) {
+            return false;
+        }
 
-        if (rdpru_available) {
-            rdpru_is_vm = true;
-            DWORD exc_code_rdpru = 0;
+        u32 a = 0, b = 0, c = 0, d = 0;
+        cpu::cpuid(a, b, c, d, cpu::leaf::ext_limits);
+        const bool rdpru_available = ((b & (1 << 4)) != 0);
 
-            __try {
-                memory::execute(rdpru_singlestep_stub);
-            }
-            __except (exception_handler::execute(GetExceptionInformation(), &exc_code_rdpru)) {
-                if (exc_code_rdpru == EXCEPTION_SINGLE_STEP) {
-                    rdpru_is_vm = false;
-                }
+        if (!rdpru_available) {
+            return false;
+        }
+
+        bool rdpru_is_vm = true;
+        volatile DWORD exc_code_rdpru = 0;
+
+        __try {
+            memory::execute(rdpru_singlestep_stub);
+        }
+        __except (exception_handler::execute(GetExceptionInformation(), &exc_code_rdpru)) {
+            if (exc_code_rdpru == EXCEPTION_SINGLE_STEP) {
+                rdpru_is_vm = false;
             }
         }
 
@@ -16227,18 +16241,28 @@ public:
             DWORD offset = 0;
             unsigned int physical_counter = 0;
 
-            while (offset + sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) <= buffer_size) {
+            constexpr DWORD min_header_size = sizeof(LOGICAL_PROCESSOR_RELATIONSHIP) + sizeof(DWORD);
+
+            while (offset + min_header_size <= buffer_size) {
                 auto* info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(raw_buffer + offset);
-                if (info->Size == 0 || offset + info->Size > buffer_size) {
+
+                if (info->Size < min_header_size || info->Size > buffer_size - offset) {
                     break;
                 }
 
                 if (info->Relationship == RelationProcessorCore) {
+                    constexpr size_t min_proc_rel_size = offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor)
+                        + offsetof(PROCESSOR_RELATIONSHIP, GroupMask);
+                    if (info->Size < min_proc_rel_size) {
+                        offset += info->Size;
+                        continue;
+                    }
+
                     unsigned char eff_class = info->Processor.EfficiencyClass;
                     bool is_pcore = (eff_class > 0); /* 0 = E-Core, >= 1 = P-Core */
 
                     for (WORD g = 0; g < info->Processor.GroupCount; ++g) {
-                        size_t mask_offset = offsetof(PROCESSOR_RELATIONSHIP, GroupMask) + (g + 1) * sizeof(GROUP_AFFINITY);
+                        size_t mask_offset = offsetof(PROCESSOR_RELATIONSHIP, GroupMask) + (static_cast<size_t>(g) + 1) * sizeof(GROUP_AFFINITY);
                         if (offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor) + mask_offset > info->Size) {
                             break;
                         }
@@ -16277,13 +16301,12 @@ public:
             const auto& core_before = topology_runs[0][i];
             const auto& core_after = topology_runs[1][i];
 
-            if (core_before.physical_id != core_after.physical_id ||
-                core_before.group_id != core_after.group_id ||
+            if (core_before.group_id != core_after.group_id ||
                 core_before.mask != core_after.mask ||
                 core_before.efficiency_class != core_after.efficiency_class ||
                 core_before.is_pcore != core_after.is_pcore)
             {
-                return true; 
+                return true;
             }
         }
 
