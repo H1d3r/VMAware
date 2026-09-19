@@ -11243,8 +11243,7 @@ public:
             {L"cmdvrt32.dll",  brand_enum::COMODO},
             {L"cmdvrt64.dll",  brand_enum::COMODO},
             {L"cuckoomon.dll", brand_enum::CUCKOO},
-            {L"SxIn.dll",      brand_enum::QIHOO},
-            {L"wpespy.dll",    brand_enum::NULL_BRAND}
+            {L"SxIn.dll",      brand_enum::QIHOO}
         };
 
         for (const auto& x : dlls) {
@@ -11411,9 +11410,9 @@ public:
         object_attributes.ObjectName = &key_name;
         object_attributes.Attributes = OBJ_CASE_INSENSITIVE;
 
-        /* Open the registry key with minimal permissions (query only) */
+        /* Query with KEY_WOW64_64KEY to ensure consistent view under WoW64 */
+        constexpr ACCESS_MASK KEY_QUERY_ONLY = 0x0001 | 0x0100;
         HANDLE key = nullptr;
-        constexpr ACCESS_MASK KEY_QUERY_ONLY = 0x0001; /* KEY_QUERY_VALUE */
         NTSTATUS st = nt_open_key(&key, KEY_QUERY_ONLY, &object_attributes);
         if (!NT_SUCCESS(st) || !key) {
             return false;
@@ -11453,7 +11452,13 @@ public:
             return false;
         }
 
-        const auto* kv = reinterpret_cast<KEY_VALUE_PARTIAL_INFORMATION_LOCAL*>(buffer);
+        const auto* kv = reinterpret_cast<const KEY_VALUE_PARTIAL_INFORMATION_LOCAL*>(buffer);
+
+        /* Validate that is actually a REG_SZ(1) */
+        constexpr ULONG reg_sz_type = 1;
+        if (kv->Type != reg_sz_type) {
+            return false;
+        }
 
         const size_t max_safe_data_len = result_length - header_size;
         const ULONG declared_len = kv->DataLength;
@@ -11518,37 +11523,30 @@ public:
         }
 
         auto is_inside_vpc = [](PEXCEPTION_POINTERS ep) noexcept -> LONG {
-            if (!ep ||
-                !ep->ExceptionRecord ||
-                !ep->ContextRecord ||
-                ep->ExceptionRecord->ExceptionCode != EXCEPTION_ILLEGAL_INSTRUCTION) {
-                return EXCEPTION_CONTINUE_SEARCH;
+            if (!ep || !ep->ExceptionRecord || !ep->ContextRecord) {
+                return EXCEPTION_EXECUTE_HANDLER;
+            }
+
+            if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_ILLEGAL_INSTRUCTION) {
+                return EXCEPTION_EXECUTE_HANDLER;
             }
 
             const DWORD eip = ep->ContextRecord->Eip;
-            const auto* ip = reinterpret_cast<const u8*>(static_cast<std::uintptr_t>(eip));
-
-            if (reinterpret_cast<std::uintptr_t>(
-                ep->ExceptionRecord->ExceptionAddress) != eip) {
-                return EXCEPTION_CONTINUE_SEARCH;
+            if (reinterpret_cast<std::uintptr_t>(ep->ExceptionRecord->ExceptionAddress) != eip) {
+                return EXCEPTION_EXECUTE_HANDLER;
             }
 
-            __try {
-                if (eip > 0xFFFFFFFFu - 4) {
-                    return EXCEPTION_CONTINUE_SEARCH;
-                }
+            const auto* ip = reinterpret_cast<const u8*>(static_cast<std::uintptr_t>(eip));
 
+            if (eip <= 0xFFFFFFFFu - 4) {
                 if (ip[0] == 0x0F && ip[1] == 0x3F && ip[2] == 0x07 && ip[3] == 0x0B) {
                     ep->ContextRecord->Ebx = 0xFFFFFFFFu;
                     ep->ContextRecord->Eip = eip + 4;
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
             }
-            __except (EXCEPTION_EXECUTE_HANDLER) {
-                return EXCEPTION_CONTINUE_SEARCH;
-            }
 
-            return EXCEPTION_CONTINUE_SEARCH;
+            return EXCEPTION_EXECUTE_HANDLER;
         };
 
         __try {
@@ -11580,7 +11578,7 @@ public:
         }
     #endif
 
-        return rc;
+        return rc ? core::add(brand_enum::VPC) : false;
     }
 
 
