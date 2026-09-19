@@ -9890,14 +9890,14 @@ public:
      * @category Linux, Windows
      * @implements VM::DEVICES
      */
-    [[nodiscard]] static bool pci_devices() {
+    [[nodiscard]] static bool devices() {
         struct pci_device { u16 vendor_id; u32 device_id; };
         std::vector<pci_device> devices;
 
         #if (VMAWARE_LINUX)
             const std::string pci_path = "/sys/bus/pci/devices";
             #if (VMAWARE_CPP >= 17)
-                /* Std::filesystem throws exceptions when directories don't exist (SIGSEGV) */
+                /* std::filesystem throws exceptions when directories don't exist (SIGSEGV) */
                 std::error_code ec;
                 auto dir_iter = std::filesystem::directory_iterator(pci_path, ec);
 
@@ -9937,173 +9937,192 @@ public:
                 }
             #endif
         #elif (VMAWARE_WINDOWS)
-            constexpr DWORD MAX_MULTI_SZ = 64 * 1024;
+        constexpr DWORD MAX_MULTI_SZ = 64 * 1024;
 
-            auto hex_val = [](wchar_t c) noexcept -> int {
-                if (c >= L'0' && c <= L'9') {
-                    return c - L'0';
-                }
-                const wchar_t lower = static_cast<wchar_t>((static_cast<int>(c) | 0x20));
-                if (lower >= L'a' && lower <= L'f') {
-                    return lower - L'a' + 10;
-                }
+        auto hex_val = [](wchar_t c) noexcept -> int {
+            if (c >= L'0' && c <= L'9') {
+                return c - L'0';
+            }
+            const wchar_t lower = static_cast<wchar_t>((static_cast<int>(c) | 0x20));
+            if (lower >= L'a' && lower <= L'f') {
+                return lower - L'a' + 10;
+            }
 
-                return -1;
-            };
+            return -1;
+        };
 
-            auto parse_hex = [&](const wchar_t* ptr, size_t maxDigits, size_t stopLen, unsigned long& out, size_t& consumed) noexcept -> bool {
-                out = 0;
-                consumed = 0;
+        auto parse_hex = [&](const wchar_t* ptr, size_t maxDigits, size_t stopLen, unsigned long& out, size_t& consumed) noexcept -> bool {
+            out = 0;
+            consumed = 0;
 
-                const size_t limit = (stopLen < maxDigits) ? stopLen : maxDigits;
+            if (!ptr) return false;
 
-                for (; consumed < limit; ++consumed) {
-                    const int v = hex_val(ptr[consumed]);
-                    if (v < 0) break;
+            const size_t limit = (stopLen < maxDigits) ? stopLen : maxDigits;
 
-                    out = (out << 4) | static_cast<unsigned long>(v);
-                }
+            for (; consumed < limit; ++consumed) {
+                const int v = hex_val(ptr[consumed]);
+                if (v < 0) break;
 
-                return consumed > 0;
-            };
+                out = (out << 4) | static_cast<unsigned long>(v);
+            }
 
-            std::unordered_set<unsigned long long> seen;
+            return consumed > 0;
+        };
 
-            auto add_device = [&](u16 vid, u32 did) noexcept {
-                const unsigned long long key = (static_cast<unsigned long long>(vid) << 32) | static_cast<unsigned long long>(did);
-                if (seen.insert(key).second) {
-                    devices.push_back({ vid, did });
-                }
-            };
+        std::unordered_set<unsigned long long> seen;
 
-            auto scan_text_ids = [&](const wchar_t* text) noexcept {
-                if (!text) return;
+        auto add_device = [&](const u16 vid, const u32 did) {
+            const unsigned long long key = (static_cast<unsigned long long>(vid) << 32) | static_cast<unsigned long long>(did);
+            if (seen.insert(key).second) {
+                devices.push_back({ vid, did });
+            }
+        };
 
-                /* USB: VID_ and then PID_ */
-                const wchar_t* p = text;
-                while ((p = wcsstr(p, L"VID_"))) {
-                    const wchar_t* v = p;
-                    p += 4;
-                    const wchar_t* d = wcsstr(v + 4, L"PID_");
-                    if (d && (d - v) < 64) {
-                        unsigned long parsed_v = 0, parsed_d = 0;
-                        size_t c_v = 0, c_d = 0;
-                        if (parse_hex(v + 4, 4, SIZE_MAX, parsed_v, c_v) &&
-                            parse_hex(d + 4, 8, SIZE_MAX, parsed_d, c_d)) {
-                            add_device(static_cast<u16>(parsed_v & 0xFFFFu), static_cast<u32>(parsed_d));
-                        }
-                    }
-                }
+        auto scan_text_ids = [&](const wchar_t* text) {
+            if (!text) return;
 
-                /* PCI or HDAUDIO = VEN_ and then DEV_ after it */
-                p = text;
-                while ((p = wcsstr(p, L"VEN_"))) {
-                    const wchar_t* v = p;
-                    p += 4;
-                    const wchar_t* d = wcsstr(v + 4, L"DEV_");
-
-                    if (!(d && (d - v) < 64)) {
-                        continue;
-                    }
-
-                    unsigned long parsed_v = 0;
-                    size_t c_v = 0;
-
-                    if (!parse_hex(v + 4, 4, SIZE_MAX, parsed_v, c_v)) {
-                        continue;
-                    }
-
-                    const wchar_t* dev_start = const_cast<wchar_t*>(d + 4);
-                    const wchar_t* amp_after_dev = wcschr(dev_start, L'&');
-                    const size_t dev_len = amp_after_dev ? static_cast<size_t>(amp_after_dev - dev_start) : wcslen(dev_start);
-
-                    if (!(dev_len > 0 && dev_len <= 8)) {
-                        continue;
-                    }
-
-                    unsigned long parsed_d = 0;
-                    size_t c_d = 0;
-
-                    if (parse_hex(dev_start, 8, dev_len, parsed_d, c_d) && c_d == dev_len) {
+            /* USB: VID_ and then PID_ */
+            const wchar_t* p = text;
+            while ((p = wcsstr(p, L"VID_"))) {
+                const wchar_t* v = p;
+                p += 4;
+                const wchar_t* d = wcsstr(v + 4, L"PID_");
+                if (d && (d - v) < 64) {
+                    unsigned long parsed_v = 0, parsed_d = 0;
+                    size_t c_v = 0, c_d = 0;
+                    if (parse_hex(v + 4, 4, SIZE_MAX, parsed_v, c_v) &&
+                        parse_hex(d + 4, 8, SIZE_MAX, parsed_d, c_d)) {
                         add_device(static_cast<u16>(parsed_v & 0xFFFFu), static_cast<u32>(parsed_d));
                     }
                 }
+            }
 
-                /* PCI Subsystem: SUBSYS_ (8 hex digits: SSSSVVVV) */
-                p = text;
-                while ((p = wcsstr(p, L"SUBSYS_"))) {
-                    const wchar_t* s = p;
-                    p += 7;
+            /* PCI or HDAUDIO = VEN_ and then DEV_ after it */
+            p = text;
+            while ((p = wcsstr(p, L"VEN_"))) {
+                const wchar_t* v = p;
+                p += 4;
+                const wchar_t* d = wcsstr(v + 4, L"DEV_");
 
-                    unsigned long parsed_sub = 0;
-                    size_t c_sub = 0;
+                if (!(d && (d - v) < 64)) {
+                    continue;
+                }
 
-                    if (parse_hex(s + 7, 8, 8, parsed_sub, c_sub) && c_sub == 8) {
-                        const u16 sub_vid = static_cast<u16>(parsed_sub & 0xFFFFu);
-                        const u32 sub_did = static_cast<u32>((parsed_sub >> 16) & 0xFFFFu);
-                        add_device(sub_vid, sub_did);
+                unsigned long parsed_v = 0;
+                size_t c_v = 0;
+
+                if (!parse_hex(v + 4, 4, SIZE_MAX, parsed_v, c_v)) {
+                    continue;
+                }
+
+                const wchar_t* dev_start = d + 4;
+                const wchar_t* amp_after_dev = wcschr(dev_start, L'&');
+                const size_t dev_len = amp_after_dev ? static_cast<size_t>(amp_after_dev - dev_start) : wcslen(dev_start);
+
+                if (!(dev_len > 0 && dev_len <= 8)) {
+                    continue;
+                }
+
+                unsigned long parsed_d = 0;
+                size_t c_d = 0;
+
+                if (parse_hex(dev_start, 8, dev_len, parsed_d, c_d) && c_d == dev_len) {
+                    add_device(static_cast<u16>(parsed_v & 0xFFFFu), static_cast<u32>(parsed_d));
+                }
+            }
+
+            /* PCI Subsystem: SUBSYS_ (8 hex digits: SSSSVVVV) */
+            p = text;
+            while ((p = wcsstr(p, L"SUBSYS_"))) {
+                const wchar_t* s = p;
+                p += 7;
+
+                unsigned long parsed_sub = 0;
+                size_t c_sub = 0;
+
+                if (parse_hex(s + 7, 8, 8, parsed_sub, c_sub) && c_sub == 8) {
+                    const u16 sub_vid = static_cast<u16>(parsed_sub & 0xFFFFu);
+                    const u32 sub_did = static_cast<u32>((parsed_sub >> 16) & 0xFFFFu);
+                    add_device(sub_vid, sub_did);
+                }
+            }
+        };
+
+        HDEVINFO h_dev_info = SetupDiGetClassDevsW(
+            nullptr,
+            nullptr,
+            nullptr,
+            DIGCF_ALLCLASSES | DIGCF_PRESENT
+        );
+
+        if (h_dev_info != INVALID_HANDLE_VALUE) {
+            struct dev_info_closer {
+                HDEVINFO handle;
+                ~dev_info_closer() {
+                    if (handle != INVALID_HANDLE_VALUE) {
+                        SetupDiDestroyDeviceInfoList(handle);
                     }
                 }
-            };
+            } dev_info_closer{ h_dev_info };
 
-            HDEVINFO h_dev_info = SetupDiGetClassDevsW(
-                nullptr,
-                nullptr,
-                nullptr,
-                DIGCF_ALLCLASSES | DIGCF_PRESENT
-            );
+            SP_DEVINFO_DATA dev_info_data{};
 
-            if (h_dev_info != INVALID_HANDLE_VALUE) {
-                SP_DEVINFO_DATA dev_info_data{};
+            for (DWORD i = 0; ; ++i) {
                 dev_info_data.cbSize = sizeof(SP_DEVINFO_DATA);
+                if (!SetupDiEnumDeviceInfo(h_dev_info, i, &dev_info_data)) {
+                    break;
+                }
 
-                for (DWORD i = 0; SetupDiEnumDeviceInfo(h_dev_info, i, &dev_info_data); ++i) {
-                    DWORD reg_type = 0;
-                    DWORD required_size = 0;
+                DWORD reg_type = 0;
+                DWORD required_size = 0;
 
-                    SetupDiGetDeviceRegistryPropertyW(
-                        h_dev_info,
-                        &dev_info_data,
-                        SPDRP_HARDWAREID,
-                        &reg_type,
-                        nullptr,
-                        0,
-                        &required_size
-                    );
+                const BOOL size_query_ok = SetupDiGetDeviceRegistryPropertyW(
+                    h_dev_info,
+                    &dev_info_data,
+                    SPDRP_HARDWAREID,
+                    &reg_type,
+                    nullptr,
+                    0,
+                    &required_size
+                );
 
-                    if (required_size == 0 || required_size > MAX_MULTI_SZ) {
-                        continue;
-                    }
+                if (!size_query_ok && GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+                    continue;
+                }
 
-                    static thread_local std::vector<wchar_t> buf;
-                    const size_t aligned_size = (required_size + sizeof(wchar_t) - 1) & ~(sizeof(wchar_t) - 1);
-                    const size_t needed_wchars = aligned_size / sizeof(wchar_t);
-                    const size_t total_wchars_needed = needed_wchars + 2;
+                if (required_size == 0 || required_size > MAX_MULTI_SZ) {
+                    continue;
+                }
 
-                    buf.assign(total_wchars_needed, L'\0');
+                static thread_local std::vector<wchar_t> buf;
+                const size_t aligned_size = (required_size + sizeof(wchar_t) - 1) & ~(sizeof(wchar_t) - 1);
+                const size_t needed_wchars = aligned_size / sizeof(wchar_t);
+                const size_t total_wchars_needed = needed_wchars + 2;
 
-                    if (SetupDiGetDeviceRegistryPropertyW(
-                        h_dev_info,
-                        &dev_info_data,
-                        SPDRP_HARDWAREID,
-                        &reg_type,
-                        reinterpret_cast<PBYTE>(buf.data()),
-                        static_cast<DWORD>(buf.size() * sizeof(wchar_t)),
-                        nullptr
-                    )) {
-                        if (reg_type == REG_MULTI_SZ) {
-                            buf[needed_wchars] = L'\0';
-                            buf[needed_wchars + 1] = L'\0';
+                buf.assign(total_wchars_needed, L'\0');
 
-                            for (wchar_t* p = buf.data(); *p; p += wcslen(p) + 1) {
-                                VMAWARE_PREFETCH(p + 32, _MM_HINT_T0);
-                                scan_text_ids(p);
-                            }
+                DWORD bytes_read = 0;
+                if (SetupDiGetDeviceRegistryPropertyW(
+                    h_dev_info,
+                    &dev_info_data,
+                    SPDRP_HARDWAREID,
+                    &reg_type,
+                    reinterpret_cast<PBYTE>(buf.data()),
+                    static_cast<DWORD>(aligned_size),
+                    &bytes_read
+                )) {
+                    if (reg_type == REG_MULTI_SZ) {
+                        buf[needed_wchars] = L'\0';
+                        buf[needed_wchars + 1] = L'\0';
+
+                        const wchar_t* const buf_end = buf.data() + needed_wchars;
+                        for (wchar_t* p = buf.data(); p < buf_end && *p; p += wcslen(p) + 1) {
+                            scan_text_ids(p);
                         }
                     }
                 }
-                SetupDiDestroyDeviceInfoList(h_dev_info);
             }
+        }
         #endif
 
         for (const auto d : devices) {
@@ -11997,7 +12016,7 @@ public:
 
 
     /**
-     * @brief Check for vm-specific devices
+     * @brief Check for VM-specific devices
      * @category Windows
      * @implements VM::HANDLES
      */
@@ -17393,7 +17412,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
 
         #if (VMAWARE_LINUX || VMAWARE_WINDOWS)
             {VM::FIRMWARE, {100, VM::firmware}},
-            {VM::DEVICES, {95, VM::pci_devices}},
+            {VM::DEVICES, {95, VM::devices}},
             {VM::SYSTEM_REGISTERS, {50, VM::system_registers}},
             {VM::AZURE, {30, VM::azure}},
             {VM::BOOT_LOGO, {90, VM::boot_logo}},
