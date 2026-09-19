@@ -9180,7 +9180,7 @@ public:
     /**
      * @brief Check for VM signatures on all firmware tables
      * @category Windows, Linux
-     * @authors Requiem, dmfrpro, MegaMax
+     * @authors dmfrpro (DSDT parsing), MegaMax (VMWareHardenedLoader)
      * @warning Permissions required on Linux
      * @implements VM::FIRMWARE
      */
@@ -9274,7 +9274,7 @@ public:
 
         auto scan_buffer = [&](const u8* buffer, const size_t buffer_len, const bool is_acpi) noexcept -> bool {
             auto find_pattern = [&](const char* pattern, size_t pattern_len) noexcept -> bool {
-                if (pattern_len == 0 || pattern_len > buffer_len) {
+                if (!pattern || pattern_len == 0 || pattern_len > buffer_len) {
                     return false;
                 }
                 const u8 first_byte = static_cast<u8>(pattern[0]);
@@ -9283,21 +9283,21 @@ public:
                 size_t remaining_bytes = buffer_len;
 
                 while (remaining_bytes >= pattern_len) {
-                    VMAWARE_PREFETCH(search_ptr + 64, _MM_HINT_T0);
                     const void* match = std::memchr(search_ptr, first_byte, remaining_bytes);
                     if (!match) {
                         return false;
                     }
                     const u8* match_ptr = static_cast<const u8*>(match);
                     const size_t index = static_cast<size_t>(match_ptr - base_ptr);
-                    if (index + pattern_len > buffer_len) {
+                    if (pattern_len > buffer_len - index) {
                         return false;
                     }
                     if (std::memcmp(match_ptr, pattern, pattern_len) == 0) {
                         return true;
                     }
                     search_ptr = match_ptr + 1;
-                    remaining_bytes = buffer_len - static_cast<size_t>(search_ptr - base_ptr);
+                    const size_t consumed = static_cast<size_t>(search_ptr - base_ptr);
+                    remaining_bytes = (consumed <= buffer_len) ? (buffer_len - consumed) : 0;
                 }
                 return false;
             };
@@ -9306,7 +9306,7 @@ public:
                 return false;
             }
 
-            acpi_header header;
+            acpi_header header{};
             if (is_acpi) {
                 if (buffer_len < sizeof(acpi_header)) {
                     return false;
@@ -9339,7 +9339,7 @@ public:
                         bool is_acer_aspire = false;
 
                         if (util::get_manufacturer_model(&man, &mod)) {
-                            if (string::find_ci(man, "Acer") && string::find_ci(mod, "Aspire")) {
+                            if (man && mod && string::find_ci(man, "Acer") && string::find_ci(mod, "Aspire")) {
                                 is_acer_aspire = true;
                             }
                         }
@@ -9382,9 +9382,9 @@ public:
                             const size_t pnp_offset = static_cast<size_t>(pnp_ptr - buffer);
                             /* Search for the _UID name declaration within a 128-byte scope surrounding the HID */
                             const size_t search_start = pnp_offset >= 64 ? pnp_offset - 64 : 0;
-                            const size_t search_end = pnp_offset + 64 <= buffer_len ? pnp_offset + 64 : buffer_len;
+                            const size_t search_end = (buffer_len - pnp_offset >= 64) ? pnp_offset + 64 : buffer_len;
 
-                            for (size_t i = search_start; i + 8 < search_end; ++i) {
+                            for (size_t i = search_start; search_end >= 8 && i <= search_end - 8; ++i) {
                                 if (std::memcmp(buffer + i, uid_signature, sizeof(uid_signature)) == 0) {
                                     /* Check if the _UID value is a string (represented by 0x0D StringPrefix in AML) starting with "SM" */
                                     if (buffer[i + 5] == 0x0D && buffer[i + 6] == 'S' && buffer[i + 7] == 'M') {
@@ -9409,21 +9409,22 @@ public:
                     /* PRTP and PRTA variable-size relative symmetry check (replaces old exact-128 check) */
                     {
                         auto get_package_size = [&](const char* name) noexcept -> u8 {
+                            if (!name) return 0;
                             const u8* name_ptr = static_cast<const u8*>(std::memchr(buffer, name[0], buffer_len));
                             while (name_ptr) {
                                 const size_t offset = static_cast<size_t>(name_ptr - buffer);
-                                if (offset + 10 <= buffer_len && std::memcmp(name_ptr, name, 4) == 0) {
+                                if (buffer_len >= offset && buffer_len - offset >= 10 && std::memcmp(name_ptr, name, 4) == 0) {
                                     /* Confirm it represents NameOp (0x08) and PackageOp (0x12) */
                                     if (offset >= 1 && *(name_ptr - 1) == 0x08 && name_ptr[4] == 0x12) {
                                         /* Scan a small window following the PackageOp for a realistic element count (32 to 255) */
-                                        for (size_t k = 5; k < 12 && offset + k < buffer_len; ++k) {
+                                        for (size_t k = 5; k < 12 && buffer_len - offset > k; ++k) {
                                             if (name_ptr[k] >= 32 && name_ptr[k] <= 255) {
                                                 return name_ptr[k];
                                             }
                                         }
                                     }
                                 }
-                                if (offset + 1 < buffer_len) {
+                                if (buffer_len > offset + 1) {
                                     name_ptr = static_cast<const u8*>(std::memchr(name_ptr + 1, name[0], buffer_len - (offset + 1)));
                                 }
                                 else {
@@ -9546,12 +9547,11 @@ public:
                         vma_debug("FIRMWARE: declared header length larger than fetched length (declared ", header.length, ", fetched ", buffer_len, ")");
                         return true;
                     }
-                    if (buffer_len < sizeof(fadt_table)) {
-                        vma_debug("FIRMWARE: FACP buffer too small (len ", buffer_len, ")");
-                        return true;
+                    if (buffer_len < sizeof(fadt_table) || header.length < sizeof(fadt_table)) {
+                        return false;
                     }
 
-                    fadt_table fadt;
+                    fadt_table fadt{};
                     std::memcpy(&fadt, buffer, sizeof(fadt_table));
 
                     if (fadt.p_lvl2_lat == 0x0FFF || fadt.p_lvl3_lat == 0x0FFF) {
@@ -9563,13 +9563,13 @@ public:
                 /* 5) DMA Remapping table validation */
                 if (std::memcmp(header.signature, "DMAR", 4) == 0) {
                     size_t offset = 48; /* Subtables start at offset 48 (0x30) */
-                    while (offset + 4 <= buffer_len) {
+                    while (buffer_len >= 4 && offset <= buffer_len - 4) {
                         u16 subtable_type = 0;
                         u16 subtable_len = 0;
                         std::memcpy(&subtable_type, buffer + offset, sizeof(u16));
                         std::memcpy(&subtable_len, buffer + offset + 2, sizeof(u16));
 
-                        if (subtable_len < 4 || offset + subtable_len > buffer_len) {
+                        if (subtable_len < 4 || subtable_len > buffer_len - offset) {
                             break;
                         }
 
@@ -9578,11 +9578,11 @@ public:
                             size_t scope_offset = offset + 16;
                             const size_t scope_end = offset + subtable_len;
 
-                            while (scope_offset + 6 <= scope_end) {
+                            while (scope_end >= 6 && scope_offset <= scope_end - 6) {
                                 const u8 scope_type = buffer[scope_offset];
                                 const u8 scope_len = buffer[scope_offset + 1];
 
-                                if (scope_len < 6 || scope_offset + scope_len > scope_end) {
+                                if (scope_len < 6 || scope_len > scope_end - scope_offset) {
                                     break;
                                 }
 
@@ -9616,11 +9616,11 @@ public:
                     size_t offset = 44; /* MADT subtables start at offset 44 (0x2C) */
                     u8 qemu_override_mask = 0;
 
-                    while (offset + 2 <= buffer_len) {
+                    while (buffer_len >= 2 && offset <= buffer_len - 2) {
                         const u8 subtable_type = buffer[offset];
                         const u8 subtable_len = buffer[offset + 1];
 
-                        if (subtable_len < 2 || offset + subtable_len > buffer_len) {
+                        if (subtable_len < 2 || subtable_len > buffer_len - offset) {
                             break;
                         }
 
@@ -9636,11 +9636,11 @@ public:
 
                             u8 source_mask = 0;
                             switch (source) {
-                                case 5:  source_mask = 1u << 0; break;
-                                case 9:  source_mask = 1u << 1; break;
-                                case 10: source_mask = 1u << 2; break;
-                                case 11: source_mask = 1u << 3; break;
-                                default: break;
+                            case 5:  source_mask = 1u << 0; break;
+                            case 9:  source_mask = 1u << 1; break;
+                            case 10: source_mask = 1u << 2; break;
+                            case 11: source_mask = 1u << 3; break;
+                            default: break;
                             }
 
                             /*
@@ -9676,7 +9676,10 @@ public:
     #if (VMAWARE_WINDOWS)
         /* To minimize heap allocations */
         std::vector<u8> work_buffer;
-        work_buffer.reserve(65536);
+        try {
+            work_buffer.reserve(65536);
+        }
+        catch (...) {}
 
         /* Enumerate ACPI tables */
         constexpr DWORD acpi_signature = 'ACPI';
@@ -9689,7 +9692,13 @@ public:
         }
 
         const size_t table_count = acpi_enum_size / sizeof(DWORD);
-        std::vector<DWORD> tables(table_count);
+        std::vector<DWORD> tables;
+        try {
+            tables.resize(table_count);
+        }
+        catch (...) {
+            return false;
+        }
         if (EnumSystemFirmwareTables(acpi_signature, tables.data(), acpi_enum_size) != acpi_enum_size) {
             return false;
         }
@@ -9698,22 +9707,25 @@ public:
         {
             constexpr DWORD dsdt_sig = 'DSDT';
             constexpr DWORD dsdt_swapped =
-                  ((dsdt_sig >> 24) & 0x000000FFu)
-                | ((dsdt_sig >> 8)  & 0x0000FF00u)
-                | ((dsdt_sig << 8)  & 0x00FF0000u)
+                ((dsdt_sig >> 24) & 0x000000FFu)
+                | ((dsdt_sig >> 8) & 0x0000FF00u)
+                | ((dsdt_sig << 8) & 0x00FF0000u)
                 | ((dsdt_sig << 24) & 0xFF000000u);
 
             const UINT sz = GetSystemFirmwareTable(acpi_signature, dsdt_swapped, nullptr, 0);
             if (sz > 0) {
-                if (sz > work_buffer.capacity()) {
-                    work_buffer.reserve(sz);
-                }
-                work_buffer.resize(sz);
-                if (GetSystemFirmwareTable(acpi_signature, dsdt_swapped, work_buffer.data(), sz) == sz) {
-                    if (scan_buffer(work_buffer.data(), work_buffer.size(), true)) {
-                        return true;
+                try {
+                    if (sz > work_buffer.capacity()) {
+                        work_buffer.reserve(sz);
+                    }
+                    work_buffer.resize(sz);
+                    if (GetSystemFirmwareTable(acpi_signature, dsdt_swapped, work_buffer.data(), sz) == sz) {
+                        if (scan_buffer(work_buffer.data(), work_buffer.size(), true)) {
+                            return true;
+                        }
                     }
                 }
+                catch (...) {}
             }
         }
 
@@ -9723,10 +9735,15 @@ public:
                 return false;
             }
 
-            if (sz > work_buffer.capacity()) {
-                work_buffer.reserve(sz);
+            try {
+                if (sz > work_buffer.capacity()) {
+                    work_buffer.reserve(sz);
+                }
+                work_buffer.resize(sz);
             }
-            work_buffer.resize(sz);
+            catch (...) {
+                return false;
+            }
 
             if (GetSystemFirmwareTable(provider, table_id, work_buffer.data(), sz) != sz) {
                 return false;
@@ -9755,7 +9772,13 @@ public:
             }
 
             const size_t cnt = e / sizeof(DWORD);
-            std::vector<DWORD> provider_tables(cnt);
+            std::vector<DWORD> provider_tables;
+            try {
+                provider_tables.resize(cnt);
+            }
+            catch (...) {
+                continue;
+            }
 
             if (EnumSystemFirmwareTables(prov, provider_tables.data(), e) != e) {
                 continue;
@@ -9777,10 +9800,10 @@ public:
         const struct dir_closer { /* NOLINT(cppcoreguidelines-special-member-functions) */
             DIR* d;
             explicit dir_closer(DIR* dir) : d(dir) {}
-            ~dir_closer() { 
-                if (d) { 
+            ~dir_closer() {
+                if (d) {
                     closedir(d);
-                } 
+                }
             }
         } dir(raw_dir);
 
@@ -9793,7 +9816,11 @@ public:
             }
 
             char path[PATH_MAX];
-            snprintf(path, sizeof(path), "/sys/firmware/acpi/tables/%s", entry->d_name);
+            const int path_len = snprintf(path, sizeof(path), "/sys/firmware/acpi/tables/%s", entry->d_name);
+            if (path_len < 0 || static_cast<size_t>(path_len) >= sizeof(path)) {
+                vma_debug("FIRMWARE: path truncated or invalid for ", entry->d_name);
+                continue;
+            }
 
             const int fd = open(path, O_RDONLY);
             if (fd == -1) {
@@ -9832,8 +9859,19 @@ public:
                     if (n == 0) {
                         break;
                     }
-                    buffer.insert(buffer.end(), chunk, chunk + n);
-                    if (buffer.size() > MAX_TABLE_SIZE) {
+                    if (buffer.size() >= static_cast<size_t>(MAX_TABLE_SIZE)) {
+                        vma_debug("FIRMWARE: table size exceeds maximum limit, truncating");
+                        break;
+                    }
+                    const size_t to_insert = std::min(static_cast<size_t>(n), static_cast<size_t>(MAX_TABLE_SIZE) - buffer.size());
+                    try {
+                        buffer.insert(buffer.end(), chunk, chunk + to_insert);
+                    }
+                    catch (...) {
+                        vma_debug("FIRMWARE: failed to allocate memory for buffer");
+                        break;
+                    }
+                    if (buffer.size() >= static_cast<size_t>(MAX_TABLE_SIZE)) {
                         vma_debug("FIRMWARE: table size exceeds maximum limit, truncating");
                         break;
                     }
@@ -11389,7 +11427,7 @@ public:
         rtl_init_unicode_string(&value_name, L"ProductId");
 
         /* Buffer for KEY_VALUE_PARTIAL_INFORMATION */
-        BYTE buffer[128]{};
+        alignas(ULONG) BYTE buffer[128]{};
         ULONG result_length = 0;
         constexpr ULONG key_value_partial_information = 2;
 
@@ -11410,29 +11448,27 @@ public:
 
         static_assert(offsetof(KEY_VALUE_PARTIAL_INFORMATION_LOCAL, Data) == 12, "Offset of Data member in KEY_VALUE_PARTIAL_INFORMATION_LOCAL must be exactly 12 bytes.");
 
-        if (result_length < offsetof(KEY_VALUE_PARTIAL_INFORMATION_LOCAL, Data) + 1) {
+        const size_t header_size = offsetof(KEY_VALUE_PARTIAL_INFORMATION_LOCAL, Data);
+        if (result_length <= header_size || result_length > sizeof(buffer)) {
             return false;
         }
 
         const auto* kv = reinterpret_cast<KEY_VALUE_PARTIAL_INFORMATION_LOCAL*>(buffer);
 
-        const size_t header_size = offsetof(KEY_VALUE_PARTIAL_INFORMATION_LOCAL, Data);
-        if (result_length <= header_size) {
-            return false;
-        }
         const size_t max_safe_data_len = result_length - header_size;
-
         const ULONG declared_len = kv->DataLength;
         const size_t actual_data_len = (declared_len < max_safe_data_len) ? declared_len : max_safe_data_len;
 
-        if (actual_data_len == 0) {
+        if (actual_data_len < sizeof(wchar_t)) {
             return false;
         }
 
         wchar_t product_id[64] = { 0 };
-        const size_t copy_bytes = (actual_data_len < sizeof(product_id) - sizeof(wchar_t))
+        size_t copy_bytes = (actual_data_len < sizeof(product_id) - sizeof(wchar_t))
             ? actual_data_len
             : (sizeof(product_id) - sizeof(wchar_t));
+
+        copy_bytes -= (copy_bytes % sizeof(wchar_t));
 
         std::memcpy(product_id, kv->Data, copy_bytes);
         product_id[copy_bytes / sizeof(wchar_t)] = L'\0';
@@ -11717,7 +11753,7 @@ public:
             object_attributes.ObjectName = &path;
             object_attributes.Attributes = OBJ_CASE_INSENSITIVE;
 
-            IO_STATUS_BLOCK iosb;
+            IO_STATUS_BLOCK iosb{};
             HANDLE handle = nullptr;
 
             const NTSTATUS st = nt_open_file(&handle, target.desired_access, &object_attributes, &iosb, target.share_access, target.open_options);
