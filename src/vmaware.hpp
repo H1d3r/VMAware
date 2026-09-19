@@ -1271,7 +1271,7 @@ public:
             cpu::cpuid(regs[4], regs[5], regs[6], regs[7], cpu::leaf::brand2);
             cpu::cpuid(regs[8], regs[9], regs[10], regs[11], cpu::leaf::brand3);
 
-            static char buffer[49];
+            char buffer[49];
             std::memcpy(buffer, regs, sizeof(regs));
             buffer[48] = '\0';
 
@@ -1297,15 +1297,15 @@ public:
             const char** cache = nullptr;
 
             switch (leaf_id) {
-                case cpu::leaf::hypervisor:
-                    cache = &leaf_40000000;
-                    break;
-                case cpu::leaf::hv_enlightenment:
-                    cache = &leaf_40000100;
-                    break;
-                default:
-                    /* VMAWARE_ASSUME(0); */
-                    return "";
+            case cpu::leaf::hypervisor:
+                cache = &leaf_40000000;
+                break;
+            case cpu::leaf::hv_enlightenment:
+                cache = &leaf_40000100;
+                break;
+            default:
+                /* VMAWARE_ASSUME(0); */
+                return "";
             }
 
             if (*cache) {
@@ -1324,7 +1324,7 @@ public:
 
             const size_t index = (leaf_id == cpu::leaf::hypervisor) ? 0 : 1;
 
-            u32 regs[3] = { ebx, ecx, edx };
+            const u32 regs[3] = { ebx, ecx, edx };
 
             std::memcpy(buffers[index], regs, sizeof(regs));
             buffers[index][12] = '\0';
@@ -1431,11 +1431,15 @@ public:
         }
 
         [[nodiscard]] static bool vmid_template(const u32 p_leaf) {
-            const std::string brand_str = cpu_manufacturer(p_leaf);
+            const char* brand = cpu_manufacturer(p_leaf);
 
-            if (brand_str == "Microsoft Hv") {
+            if (!brand || brand[0] == '\0') {
+                return false;
+            }
+
+            if (std::memcmp(brand, "Microsoft Hv", 12) == 0) {
                 /*
-                 * A Hyper-V *host* (root partition) is not itself a guest VM, and a QEMU/KVM guest
+                 * A Hyper-V host (root partition) is not itself a guest VM, and a QEMU/KVM guest
                  * running with Hyper-V enlightenments is already attributed to QEMU_KVM_HYPERV by
                  * hyper_x(). In neither case should the "Microsoft Hv" vendor string be taken to
                  * mean the guest is genuine Microsoft Hyper-V.
@@ -1446,54 +1450,60 @@ public:
                 return core::add(brand_enum::HYPERV);
             }
 
-            if (util::find(brand_str, "KVM")) {
+            if (util::find(brand, 12, "KVM")) {
                 return core::add(brand_enum::KVM);
             }
 
-            static const std::unordered_map<std::string, enum brand_enum> brand_map = {
-                {"VMwareVMware", brand_enum::VMWARE},
-                {"VBoxVBoxVBox", brand_enum::VBOX},
-                {"TCGTCGTCGTCG", brand_enum::QEMU},
-                {"XenVMMXenVMM", brand_enum::XEN},
-                {"Linux KVM Hv", brand_enum::KVM_HYPERV},
-                {" prl hyperv ", brand_enum::PARALLELS},
-                {" lrpepyh  vr", brand_enum::PARALLELS},
-                {"bhyve bhyve ", brand_enum::BHYVE},
-                {"BHyVE BHyVE ", brand_enum::BHYVE},
-                {"ACRNACRNACRN", brand_enum::ACRN},
-                {" QNXQVMBSQG ", brand_enum::QNX},
-                {"___ NVMM ___", brand_enum::NVMM},
-                {"OpenBSDVMM58", brand_enum::BSD_VMM},
-                {"HAXMHAXMHAXM", brand_enum::INTEL_HAXM},
-                {"UnisysSpar64", brand_enum::UNISYS},
-                {"SRESRESRESRE", brand_enum::LMHS},
-                {"Jailhouse\0\0\0", brand_enum::JAILHOUSE},
-                {"EVMMEVMMEVMM", brand_enum::INTEL_KGT},
-                {"Barevisor!\0\0", brand_enum::BAREVISOR},
-                {"MiniVisor\0\0\0", brand_enum::MINIVISOR},
-                {"IntelTDX    ", brand_enum::INTEL_TDX},
-                {"LKVMLKVMLKVM", brand_enum::LKVM},
-                {"Neko Project", brand_enum::NEKO_PROJECT},
-                {"NoirVisor ZT", brand_enum::NOIRVISOR},
-                {"Compaq FX!32", brand_enum::COMPAQ},
-                {"Insignia 586", brand_enum::INSIGNIA},
-                {"ConnectixCPU", brand_enum::CONNECTIX}
+            struct brand_entry {
+                char sig[13];
+                brand_enum id;
             };
 
-            const auto it = brand_map.find(brand_str);
-            if (it != brand_map.end()) {
-                return core::add(it->second);
+            static const brand_entry brand_table[] = {
+                {"VMwareVMware",   brand_enum::VMWARE},
+                {"VBoxVBoxVBox",   brand_enum::VBOX},
+                {"TCGTCGTCGTCG",   brand_enum::QEMU},
+                {"XenVMMXenVMM",   brand_enum::XEN},
+                {"Linux KVM Hv",   brand_enum::KVM_HYPERV},
+                {" prl hyperv ",   brand_enum::PARALLELS},
+                {" lrpepyh  vr",   brand_enum::PARALLELS},
+                {"bhyve bhyve ",   brand_enum::BHYVE},
+                {"BHyVE BHyVE ",   brand_enum::BHYVE},
+                {"ACRNACRNACRN",   brand_enum::ACRN},
+                {" QNXQVMBSQG ",   brand_enum::QNX},
+                {"___ NVMM ___",   brand_enum::NVMM},
+                {"OpenBSDVMM58",   brand_enum::BSD_VMM},
+                {"HAXMHAXMHAXM",   brand_enum::INTEL_HAXM},
+                {"UnisysSpar64",   brand_enum::UNISYS},
+                {"SRESRESRESRE",   brand_enum::LMHS},
+                {"Jailhouse\0\0\0", brand_enum::JAILHOUSE},
+                {"EVMMEVMMEVMM",   brand_enum::INTEL_KGT},
+                {"Barevisor!\0\0", brand_enum::BAREVISOR},
+                {"MiniVisor\0\0\0", brand_enum::MINIVISOR},
+                {"IntelTDX    ",   brand_enum::INTEL_TDX},
+                {"LKVMLKVMLKVM",   brand_enum::LKVM},
+                {"Neko Project",   brand_enum::NEKO_PROJECT},
+                {"NoirVisor ZT",   brand_enum::NOIRVISOR},
+                {"Compaq FX!32",   brand_enum::COMPAQ},
+                {"Insignia 586",   brand_enum::INSIGNIA},
+                {"ConnectixCPU",   brand_enum::CONNECTIX}
+            };
+
+            for (const auto& entry : brand_table) {
+                if (std::memcmp(brand, entry.sig, 12) == 0) {
+                    return core::add(entry.id);
+                }
             }
 
-            if (util::find(brand_str, "QXNQSBMV")) {
+            if (util::find(brand, 12, "QXNQSBMV")) {
                 return core::add(brand_enum::QNX);
             }
 
-            if (util::find(brand_str, "Apple VZ")) {
+            if (util::find(brand, 12, "Apple VZ")) {
                 return core::add(brand_enum::APPLE_VZ);
             }
 
-            if (util::find(brand_str, "PpyH")) {
+            if (util::find(brand, 12, "PpyH")) {
                 return core::add(brand_enum::HYPERPLATFORM);
             }
 
@@ -3490,15 +3500,9 @@ public:
         };
 
         struct thread_count {
-            static u32 thread_count_cache;
-
             static u32 fetch() noexcept {
-                if (VMAWARE_LIKELY(thread_count_cache != 0)) {
-                    VMAWARE_ASSUME(thread_count_cache != 0);
-                    return thread_count_cache;
-                }
-                thread_count_cache = std::thread::hardware_concurrency();
-                return thread_count_cache;
+                static const u32 cached_count = std::thread::hardware_concurrency();
+                return cached_count;
             }
         };
 
@@ -3601,7 +3605,7 @@ public:
                     model[0] = '\0';
                     return; 
                 }
-                const size_t cap = sizeof(manufacturer) - 1;
+                const size_t cap = sizeof(model) - 1;
 
                 size_t n = 0;
                 while (n < cap && s[n] != '\0') {
@@ -4717,7 +4721,7 @@ public:
                 return s1 == s2;
             }
             while (*s1 && *s2) {
-                if (to_lower(*s1) != to_lower(*s2)) {
+                if (to_lower(static_cast<unsigned char>(*s1)) != to_lower(static_cast<unsigned char>(*s2))) {
                     return false;
                 }
                 s1++;
@@ -4920,6 +4924,35 @@ public:
         #else
             return true;
         #endif
+        }
+
+        [[nodiscard]] static bool find(const char* base, const size_t base_len, const char* keyword) noexcept {
+            VMAWARE_ASSUME(base != nullptr);
+            VMAWARE_ASSUME(keyword != nullptr);
+
+            const size_t kw_len = std::strlen(keyword);
+            if (kw_len == 0) {
+                return true;
+            }
+            if (base_len < kw_len) {
+                return false;
+            }
+
+            const char first = keyword[0];
+            const size_t max_offset = base_len - kw_len;
+
+            for (size_t i = 0; i <= max_offset; ++i) {
+                const char* match = static_cast<const char*>(std::memchr(base + i, first, max_offset - i + 1));
+                if (!match) {
+                    return false;
+                }
+                i = static_cast<size_t>(match - base);
+                if (std::memcmp(match, keyword, kw_len) == 0) {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         [[nodiscard]] static bool find(const std::string& base_str, const char* keyword) noexcept {
@@ -6713,14 +6746,27 @@ public:
             while (offset < len) {
                 auto* rec = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buf + offset);
 
+                if (len - offset < sizeof(DWORD) * 2) {
+                    break;
+                }
+
                 if (rec->Size == 0 || offset + rec->Size > len) {
                     break;
                 }
 
                 if (rec->Relationship == RelationProcessorCore) {
-                    const PROCESSOR_RELATIONSHIP& pr = rec->Processor;
-                    unsigned logicals = 0;
+                    constexpr size_t header_min = offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor.GroupMask);
+                    if (rec->Size < header_min) {
+                        break;
+                    }
 
+                    const PROCESSOR_RELATIONSHIP& pr = rec->Processor;
+                    const size_t min_size = header_min + (static_cast<size_t>(pr.GroupCount) * sizeof(GROUP_AFFINITY));
+                    if (rec->Size < min_size) {
+                        break;
+                    }
+
+                    unsigned logicals = 0;
                     for (WORD i = 0; i < pr.GroupCount; ++i) {
                         logicals += util::popcount(static_cast<unsigned long long>(pr.GroupMask[i].Mask));
                     }
@@ -6864,9 +6910,10 @@ public:
         const cpu::cpu_entry* db = nullptr;
         const cpu::cpu_entry* matched = nullptr;
         const char* model_name = nullptr;
+        cpu::model_struct model{};
 
         if (cpu::is_intel()) {
-            const cpu::model_struct model = cpu::get_model();
+            model = cpu::get_model();
             if (model.found) {
                 model_name = model.string;
 
@@ -7171,6 +7218,31 @@ public:
             return false;
         }
 
+        const GROUP_AFFINITY trigger_affinity = timer::scheduler::get_mask(true);
+        static GROUP_AFFINITY counter_affinity{};
+        counter_affinity = timer::scheduler::get_mask(false);
+
+        if (!trigger_affinity.Mask || !counter_affinity.Mask) {
+            return false;
+        }
+
+        const HMODULE ntdll = memory::get_module(true);
+        if (!ntdll) {
+            return false;
+        }
+
+        constexpr const char* function_names[] = {
+            "ZwRaiseException"
+        };
+        void* functions[ARRAYSIZE(function_names)] = {};
+        memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
+
+        using zw_raise_exception_fn = NTSTATUS(__stdcall*)(PEXCEPTION_RECORD, PCONTEXT, BOOLEAN);
+        zw_raise_exception_fn zw_raise_exception = reinterpret_cast<zw_raise_exception_fn>(functions[0]);
+        if (!zw_raise_exception) {
+            return false;
+        }
+
         /* Calculation of minimum threshold for instrution latency */
         double threshold = 2.75;
         bool check_nested = false;
@@ -7178,6 +7250,70 @@ public:
             vma_debug("TIMER: Hyper-V detected, running nested checks");
             check_nested = true;
         }
+
+        bool serialize_available = cpu::is_intel();
+        if (serialize_available) {
+            /* SERIALIZE requires Ice Lake or newer */
+            u32 l7_eax = 0, l7_ebx = 0, l7_ecx = 0, l7_edx = 0;
+            cpu::cpuid(l7_eax, l7_ebx, l7_ecx, l7_edx, cpu::leaf::ext_features, 0);
+            if (!(l7_edx & (1u << 14))) {
+                serialize_available = false;
+            }
+        }
+
+        VMAWARE_CONSTEXPR const u32 ct_seed = timer::config::get_seed();
+        const size_t batch_size = timer::config::generate_batch_size(ct_seed);
+
+        std::vector<timer::timer_tick_t> vm_samples(batch_size), ref_samples(batch_size); /* pre page-fault MMU, we won't warm-up cpuid samples for the P-states intentionally */
+        std::vector<timer::timer_tick_t> api_samples(batch_size), db_samples(batch_size);
+
+        /* Pre-reserve active sample vectors to eliminate ANY dynamic heap allocations inside the trial loop */
+        std::vector<timer::timer_tick_t> active_vm_samples, active_ref_samples;
+        std::vector<timer::timer_tick_t> active_api_samples, active_db_samples;
+        if (!check_nested) {
+            active_vm_samples.reserve(batch_size);
+            active_ref_samples.reserve(batch_size);
+        }
+        active_api_samples.reserve(batch_size);
+        active_db_samples.reserve(batch_size);
+
+        /* Lock the memory for the samples to prevent soft #PF during timing if permissions are enough */
+        const bool vm_samples_locked = VirtualLock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+        const bool ref_samples_locked = VirtualLock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+        const bool api_samples_locked = VirtualLock(api_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+        const bool db_samples_locked = VirtualLock(db_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+
+        static const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
+        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
+
+        GROUP_AFFINITY old_affinity{};
+        const DWORD old_process_priority = GetPriorityClass(current_process);
+        const int old_thread_priority = GetThreadPriority(current_thread);
+
+        auto cleanup = [&]() noexcept {
+            SetThreadPriorityBoost(current_thread, FALSE);
+            SetThreadPriority(current_thread, old_thread_priority);
+            SetPriorityClass(current_process, old_process_priority);
+            SetThreadGroupAffinity(current_thread, &old_affinity, nullptr);
+            if (vm_samples_locked) {
+                VirtualUnlock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+            }
+            if (ref_samples_locked) {
+                VirtualUnlock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+            }
+            if (api_samples_locked) {
+                VirtualUnlock(api_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+            }
+            if (db_samples_locked) {
+                VirtualUnlock(db_samples.data(), batch_size * sizeof(timer::timer_tick_t));
+            }
+        };
+
+        /* Prepare threads for check */
+        SetThreadGroupAffinity(current_thread, &trigger_affinity, &old_affinity);
+        SetPriorityClass(current_process, ABOVE_NORMAL_PRIORITY_CLASS); /* ABOVE_NORMAL_PRIORITY_CLASS + THREAD_PRIORITY_HIGHEST = 12 base priority */
+        SetThreadPriority(current_thread, THREAD_PRIORITY_HIGHEST);
+        SetThreadPriorityBoost(current_thread, TRUE); /* Disable dynamic thread priority adjustments by Windows, not turbo boosts by the hardware itself */
 
         static timer::cache_state state;
         static_assert(alignof(timer::cache_state) >= 64, "timer::cache_state must be aligned to 64 bytes to prevent cache-line thrashing (false sharing).");
@@ -7187,25 +7323,15 @@ public:
         state.start_test.store(false, std::memory_order_relaxed);
         state.test_done.store(false, std::memory_order_relaxed);
 
-        bool hypervisor_detected = false;
-        static HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-        const GROUP_AFFINITY trigger_affinity = timer::scheduler::get_mask(true);
-        static GROUP_AFFINITY counter_affinity = timer::scheduler::get_mask(false);
-
-        if (!trigger_affinity.Mask || !counter_affinity.Mask) {
-            return false;
-        }
-
         /* Our software clock */
         auto counter_thread = []() noexcept -> void {
             SetThreadGroupAffinity(current_thread, &counter_affinity, nullptr);
-            SetThreadPriority(current_thread, THREAD_PRIORITY_HIGHEST); /* decrease chance of being rescheduled */
-            SetThreadPriorityBoost(current_thread, TRUE); /* disable dynamic boosts */
+            SetThreadPriority(current_thread, THREAD_PRIORITY_HIGHEST); /* Decrease chance of being rescheduled */
+            SetThreadPriorityBoost(current_thread, TRUE); /* Disable dynamic boosts */
 
             timer::timer_tick_t local_counter = state.counter;
 
-            /* better than calling incq in inline asm, as this forces standard increment cache behavior */
+            /* Better than calling incq in inline asm, as this forces standard increment cache behavior */
             #define TICK8() \
                 local_counter++; state.counter = local_counter; \
                 local_counter++; state.counter = local_counter; \
@@ -7235,62 +7361,6 @@ public:
             #undef TICK8
         };
 
-        bool serialize_available = cpu::is_intel();
-        if (serialize_available) {
-            /* SERIALIZE requires Ice Lake or newer */
-            u32 l7_eax = 0, l7_ebx = 0, l7_ecx = 0, l7_edx = 0;
-            cpu::cpuid(l7_eax, l7_ebx, l7_ecx, l7_edx, cpu::leaf::ext_features, 0);
-            if (!(l7_edx & (1u << 14))) {
-                serialize_available = false;
-            }
-        }
-
-        /* Prepare threads for check */
-        GROUP_AFFINITY old_affinity{};
-        const DWORD old_process_priority = GetPriorityClass(current_process);
-        const int old_thread_priority = GetThreadPriority(current_thread);
-        SetThreadGroupAffinity(current_thread, &trigger_affinity, &old_affinity);
-        SetPriorityClass(current_process, ABOVE_NORMAL_PRIORITY_CLASS); /* ABOVE_NORMAL_PRIORITY_CLASS + THREAD_PRIORITY_HIGHEST = 12 base priority */
-        SetThreadPriority(current_thread, THREAD_PRIORITY_HIGHEST);
-        SetThreadPriorityBoost(current_thread, TRUE); /* disable dynamic thread priority adjustments by Windows, not turbo boosts by the hardware itself */
-
-        VMAWARE_CONSTEXPR const u32 ct_seed = timer::config::get_seed();
-        const size_t batch_size = timer::config::generate_batch_size(ct_seed);
-
-        const HMODULE ntdll = memory::get_module(true);
-        if (!ntdll) {
-            return false;
-        }
-
-        constexpr const char* function_names[] = {
-            "ZwRaiseException"
-        };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
-
-        using zw_raise_exception_fn = NTSTATUS(__stdcall*)(PEXCEPTION_RECORD, PCONTEXT, BOOLEAN);
-        zw_raise_exception_fn zw_raise_exception = reinterpret_cast<zw_raise_exception_fn>(functions[0]);
-        if (!zw_raise_exception) {
-            return false;
-        }
-
-        std::vector<timer::timer_tick_t> vm_samples(batch_size), ref_samples(batch_size); /* pre page-fault MMU, we won't warm-up cpuid samples for the P-states intentionally */
-        std::vector<timer::timer_tick_t> api_samples(batch_size), db_samples(batch_size);
-
-        /* Lock the memory for the samples to prevent soft #PF during timing if permissions are enough */
-        const bool vm_samples_locked = VirtualLock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t));
-        const bool ref_samples_locked = VirtualLock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
-        const bool api_samples_locked = VirtualLock(api_samples.data(), batch_size * sizeof(timer::timer_tick_t));
-        const bool db_samples_locked = VirtualLock(db_samples.data(), batch_size * sizeof(timer::timer_tick_t));
-
-        /* Independent multi-trial state initialization */
-        constexpr int trials = 5;
-        constexpr size_t local_max_attempts = 1000 * trials;
-        timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
-        timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
-        timer::timer_tick_t best_api_l = (std::numeric_limits<timer::timer_tick_t>::max)();
-        timer::timer_tick_t best_db_l = (std::numeric_limits<timer::timer_tick_t>::max)();
-
         /* To isolate the SEH frame from C++ unwinding scopes */
         struct exception_handler {
             static VMAWARE_NOINLINE void execute_db() noexcept {
@@ -7309,7 +7379,7 @@ public:
                     :
                         : "cc", "memory"
                     );
-                    #else
+                #else
                     __asm__ volatile (
                         "pushfl \n\t"
                         "orl $0x100, (%%esp) \n\t"
@@ -7349,39 +7419,39 @@ public:
                     u32 current_ss = 0;
                     u32 current_eflags = 0;
 
-                #if (VMAWARE_MSVC) /* This matches clang-cl on purpose */
-                    __asm {
-                        mov current_esp, esp
-                        mov current_ebp, ebp
+                    #if (VMAWARE_MSVC) /* This matches clang-cl on purpose */
+                        __asm {
+                            mov current_esp, esp
+                            mov current_ebp, ebp
 
-                        xor eax, eax
-                        mov ax, cs
-                        mov current_cs, eax
+                            xor eax, eax
+                            mov ax, cs
+                            mov current_cs, eax
 
-                        xor eax, eax
-                        mov ax, ss
-                        mov current_ss, eax
+                            xor eax, eax
+                            mov ax, ss
+                            mov current_ss, eax
 
-                        call get_eip
-                        get_eip :
-                        pop eax
-                            mov current_eip, eax
-                    }
-                    current_eflags = static_cast<u32>(__readeflags());
-                #else
-                    __asm__ volatile(
-                        "movl %%esp, %0 \n\t"
-                        "movl %%ebp, %1 \n\t"
-                        "mov %%cs, %2 \n\t"
-                        "mov %%ss, %3 \n\t"
-                        "pushfl \n\t"
-                        "popl %4 \n\t"
-                        "call 1f \n\t"
-                        "1: \n\t"
-                        "popl %5 \n\t"
-                        : "=r"(current_esp), "=r"(current_ebp), "=r"(current_cs), "=r"(current_ss), "=r"(current_eflags), "=r"(current_eip)
-                    );
-                #endif
+                            call get_eip
+                            get_eip :
+                            pop eax
+                                mov current_eip, eax
+                        }
+                        current_eflags = static_cast<u32>(__readeflags());
+                    #else
+                        __asm__ volatile(
+                            "movl %%esp, %0 \n\t"
+                            "movl %%ebp, %1 \n\t"
+                            "mov %%cs, %2 \n\t"
+                            "mov %%ss, %3 \n\t"
+                            "pushfl \n\t"
+                            "popl %4 \n\t"
+                            "call 1f \n\t"
+                            "1: \n\t"
+                            "popl %5 \n\t"
+                            : "=r"(current_esp), "=r"(current_ebp), "=r"(current_cs), "=r"(current_ss), "=r"(current_eflags), "=r"(current_eip)
+                         );
+                    #endif
 
                     ctx->Esp = current_esp;
                     ctx->Ebp = current_ebp;
@@ -7402,22 +7472,30 @@ public:
             }
         };
 
+        /* Independent multi-trial state initialization */
+        constexpr int trials = 5;
+        constexpr size_t local_max_attempts = 1000 * trials;
+        timer::timer_tick_t best_cpuid_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+        timer::timer_tick_t best_ref_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+        timer::timer_tick_t best_api_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+        timer::timer_tick_t best_db_l = (std::numeric_limits<timer::timer_tick_t>::max)();
+
         std::thread t1(counter_thread);
         state.start_test.store(true, std::memory_order_release);
 
         /* Cache and CPU scheduler warm-up won't affect anything in the measurement loop, so ramp up frequency/P-states to a high non-AVX Turbo/P-state without vmexits */
         timer::engine::warmup_cpu(serialize_available);
 
+        /*
+         * state is a static local variable, so accessing state.counter directly requires the compiler to resolve its address using RIP-relative addressing or base-plus-displacement addressing on every single iteration
+         * depending on the compiler's O level and the presence of PIC/PIE, this can introduce small addressing calculations inside the loop, so by assigning the address to a local pointer outside the loop,
+         * we encourage the compiler to load this absolute pointer into a CPU register BEFORE the loop starts so at the end it translates to a simple mov
+        */
+        volatile timer::timer_tick_t* const counter_ptr = &state.counter;
+
         for (int trial = 0; trial < trials; ++trial) {
             size_t valid = 0;
             size_t invalid = 0;
-
-            /*
-             * state is a static local variable, so accessing state.counter directly requires the compiler to resolve its address using RIP-relative addressing or base-plus-displacement addressing on every single iteration
-             * depending on the compiler's O level and the presence of PIC/PIE, this can introduce small addressing calculations inside the loop, so by assigning the address to a local pointer outside the loop,
-             * we encourage the compiler to load this absolute pointer into a CPU register BEFORE the loop starts so at the end it translates to a simple mov
-            */
-            volatile timer::timer_tick_t* const counter_ptr = &state.counter;
 
             /* Inside the timing windows, there must be zero memory output (no stack arrays can be written to), zero conditional branches and zero stack spilling (no register push/pops) */
             if (!check_nested) {
@@ -7428,7 +7506,7 @@ public:
 
                         /* This is done as a counter to both legitimate and malicious hypervisors interrupts that may pause the counter thread while we measure */
                         sync = *counter_ptr;
-                        while (*counter_ptr == sync); /* infer if counter got enough quantum momentum (so its currently scheduled) */
+                        while (*counter_ptr == sync); /* Infer if counter got enough quantum momentum (so its currently scheduled) */
 
                         /*
                          * SERIALIZE/LFENCE check is before CPUID on purpose, so that possible pauses when cpuid is executed do not affect SERIALIZE/LFENCE too. The hv needs to wait for cpuid to pause the thread
@@ -7436,7 +7514,7 @@ public:
                          */
                         sync = *counter_ptr;
                         VMAWARE_PREFETCH(counter_ptr, _MM_HINT_T0);
-                        while (*counter_ptr == sync); /* fastest busy-waiting strategy, PAUSE can conditionally exit, calling APIs like SwitchToThread() would be even worse */
+                        while (*counter_ptr == sync); /* Fastest busy-waiting strategy, PAUSE can conditionally exit, calling APIs like SwitchToThread() would be even worse */
 
                         r_pre = *counter_ptr;
                         std::atomic_signal_fence(std::memory_order_acq_rel);
@@ -7513,7 +7591,7 @@ public:
                             "cpuid"
                             : "+a"(a), "=b"(b), "=c"(c), "=d"(d)
                         );
-                    #else   
+                        #else   
                         int dummy[4];
                         __cpuid(dummy, 0);
                     #endif
@@ -7535,8 +7613,8 @@ public:
 
                 if (valid > 0) {
                     /* Discard the unused default-initialized zero-elements */
-                    std::vector<timer::timer_tick_t> active_vm_samples(vm_samples.begin(), vm_samples.begin() + valid);
-                    std::vector<timer::timer_tick_t> active_ref_samples(ref_samples.begin(), ref_samples.begin() + valid);
+                    active_vm_samples.assign(vm_samples.begin(), vm_samples.begin() + valid);
+                    active_ref_samples.assign(ref_samples.begin(), ref_samples.begin() + valid);
 
                     /* Check for lowest dense cluster with no interrupt spikes, filter noise we can't directly detect (SMIs, NMIs, etc) */
                     const timer::timer_tick_t cpuid_l = timer::engine::calculate_latency(active_vm_samples);
@@ -7551,15 +7629,19 @@ public:
                     }
                 }
             }
-            
+
             valid = 0;
             invalid = 0;
 
-            /* 
+            /*
              * I choose #DB because it forces a L0 to L1 nested vmexit when Hyper-V is running
              * L0 must sync the exception bitmap with L1 in order for this to receive pending events, as the CPU always jumps to the hv running on the metal
              * VMCB/VMCS public dumps shows Hyper-V intercepts #DB, #AC and #MC
              */
+            volatile bool flag = false;
+            alignas(16) CONTEXT ctx {};
+            EXCEPTION_RECORD er{};
+
             while (valid < batch_size && invalid < local_max_attempts) {
                 timer::timer_tick_t db_pre, db_post, api_pre, api_post, sync;
 
@@ -7581,11 +7663,7 @@ public:
                 VMAWARE_PREFETCH(counter_ptr, _MM_HINT_T0);
                 while (*counter_ptr == sync);
 
-                volatile bool flag = false;
-                CONTEXT ctx{};
                 ctx.ContextFlags = CONTEXT_FULL;
-
-                EXCEPTION_RECORD er{};
                 er.ExceptionCode = EXCEPTION_SINGLE_STEP;
                 er.ExceptionFlags = 0;
 
@@ -7608,8 +7686,8 @@ public:
             }
 
             if (valid > 0) {
-                std::vector<timer::timer_tick_t> active_api_samples(api_samples.begin(), api_samples.begin() + valid);
-                std::vector<timer::timer_tick_t> active_db_samples(db_samples.begin(), db_samples.begin() + valid);
+                active_api_samples.assign(api_samples.begin(), api_samples.begin() + valid);
+                active_db_samples.assign(db_samples.begin(), db_samples.begin() + valid);
 
                 const timer::timer_tick_t api_l = timer::engine::calculate_latency(active_api_samples);
                 const timer::timer_tick_t db_l = timer::engine::calculate_latency(active_db_samples);
@@ -7626,8 +7704,12 @@ public:
         state.test_done.store(true, std::memory_order_release);
         t1.join();
 
+        cleanup();
+
         constexpr auto uninitialized_tick = (std::numeric_limits<timer::timer_tick_t>::max)();
         const bool invalid_measurement = (!check_nested && best_ref_l == uninitialized_tick && best_cpuid_l == uninitialized_tick) || (best_db_l == uninitialized_tick && best_api_l == uninitialized_tick);
+
+        bool hypervisor_detected = false;
 
         /* Analyze instruction latency results and report exactly what VMAware found */
         if (!invalid_measurement) {
@@ -7639,7 +7721,7 @@ public:
 
                 /* High latency can occur even with CPUID interception disabled if vCPU pinning is not 1:1, thus detecting the hypervisor, as this is a cache-based counter */
                 if (latency_ratio >= threshold) {
-                    vma_debug("TIMER: Detected #VMEXIT latency"); 
+                    vma_debug("TIMER: Detected #VMEXIT latency");
                     hypervisor_detected = true;
                 }
                 else if (best_cpuid_l >= 12000 || best_ref_l >= 12000) { /* If latency is abnormally high, it means something was spamming interrupts */
@@ -7655,23 +7737,6 @@ public:
                 vma_debug("TIMER: Detected #DB interception latency");
                 hypervisor_detected = true;
             }
-        }
-
-        SetThreadPriorityBoost(current_thread, FALSE);
-        SetThreadPriority(current_thread, old_thread_priority);
-        SetPriorityClass(current_process, old_process_priority);
-        SetThreadGroupAffinity(current_thread, &old_affinity, nullptr);
-        if (vm_samples_locked) {
-            VirtualUnlock(vm_samples.data(), batch_size * sizeof(timer::timer_tick_t));
-        }
-        if (ref_samples_locked) {
-            VirtualUnlock(ref_samples.data(), batch_size * sizeof(timer::timer_tick_t));
-        }
-        if (api_samples_locked) {
-            VirtualUnlock(api_samples.data(), batch_size * sizeof(timer::timer_tick_t));
-        }
-        if (db_samples_locked) {
-            VirtualUnlock(db_samples.data(), batch_size * sizeof(timer::timer_tick_t));
         }
 
         return hypervisor_detected;
@@ -17131,7 +17196,6 @@ VM::flagset VM::memo::multi_brand::cached_flags{};
 VM::flagset VM::memo::brand_list::cached_flags{};
 VM::brand_list_t VM::memo::brand_list::cache = {};
 VM::hyperx_state VM::memo::hyperx::state = VM::HYPERV_UNKNOWN;
-VM::u32 VM::memo::thread_count::thread_count_cache = 0;
 std::array<VM::memo::cache_entry, VM::enum_size + 1> VM::memo::cache_table{};
 std::array<VM::memo::leaf_entry, VM::memo::leaf_cache::CAPACITY> VM::memo::leaf_cache::table{};
 std::string VM::memo::multi_brand::brand_cache;
