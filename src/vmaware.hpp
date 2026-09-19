@@ -12543,7 +12543,7 @@ public:
             return false;
         }
 
-        bool hypervisor_caught = false;
+        volatile bool hypervisor_caught = false;
     #if (VMAWARE_X86_64)
         /*
          * When a single-step (TF) and hardware breakpoint (DR0) collide, Intel CPUs set both DR6.BS and DR6.B0.
@@ -12555,6 +12555,10 @@ public:
 
         /* Mobile SKUs can "false flag" this check */
         const char* brand = cpu::get_brand();
+        if (!brand) {
+            return false;
+        }
+
         for (const char* c = brand; *c; ++c) {
             if (*c == 'U') {
                 if (c > brand && (c[-1] >= '0' && c[-1] <= '9')) {
@@ -12574,23 +12578,24 @@ public:
             "NtGetContextThread",
             "NtSetContextThread"
         };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        constexpr size_t num_functions = sizeof(function_names) / sizeof(function_names[0]);
+        void* functions[num_functions] = {};
+        memory::get_function(ntdll, function_names, functions, num_functions);
 
         using nt_get_context_thread_fn = NTSTATUS(__stdcall*)(HANDLE, PCONTEXT);
         using nt_set_context_thread_fn = NTSTATUS(__stdcall*)(HANDLE, PCONTEXT);
 
-        nt_get_context_thread_fn volatile nt_get_context_thread = reinterpret_cast<nt_get_context_thread_fn>(functions[0]);
-        nt_set_context_thread_fn volatile nt_set_context_thread = reinterpret_cast<nt_set_context_thread_fn>(functions[1]);
+        nt_get_context_thread_fn nt_get_context_thread = reinterpret_cast<nt_get_context_thread_fn>(functions[0]);
+        nt_set_context_thread_fn nt_set_context_thread = reinterpret_cast<nt_set_context_thread_fn>(functions[1]);
 
         if (!nt_get_context_thread || !nt_set_context_thread) {
             return false;
         }
 
-        u8 hit_count = 0;
-        CONTEXT original_context{};
+        volatile u8 hit_count = 0;
+        alignas(16) CONTEXT original_context {};
         original_context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-        const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
+        const HANDLE current_thread = GetCurrentThread();
 
         if (!NT_SUCCESS(nt_get_context_thread(current_thread, &original_context))) {
             return false;
@@ -12602,7 +12607,7 @@ public:
          */
         const uintptr_t expected_trap_address = reinterpret_cast<uintptr_t>(trampoline_stub) + 14;
 
-        CONTEXT debug_context = original_context;
+        alignas(16) CONTEXT debug_context = original_context;
         debug_context.Dr0 = expected_trap_address; /* Single-step breakpoint address */
         debug_context.Dr7 = 1;                     /* Enable Local Breakpoint 0 */
 
@@ -12613,15 +12618,15 @@ public:
 
         /* Context structure to pass data to the static SEH handler */
         struct trap_context {
-            uintptr_t expectedTrapAddr;
-            u8* hitCount;
-            bool* hypervisor_caught;
+            uintptr_t expected_trap_address;
+            volatile u8* hit_count;
+            volatile bool* hypervisor_caught;
         };
 
         /* Static struct for SEH filtering to avoid release-mode lambda optimizations */
         struct exception_handler {
             static VMAWARE_NOINLINE LONG execute(const u32 code, EXCEPTION_POINTERS* info, trap_context* ctx) noexcept {
-                if (!info || !info->ExceptionRecord || !info->ContextRecord) {
+                if (!info || !info->ExceptionRecord || !info->ContextRecord || !ctx || !ctx->hit_count || !ctx->hypervisor_caught) {
                     return EXCEPTION_CONTINUE_SEARCH;
                 }
 
@@ -12629,15 +12634,24 @@ public:
                     return EXCEPTION_CONTINUE_SEARCH;
                 }
 
+                /* Ensure debug registers are restored to hardware upon resuming execution */
+                info->ContextRecord->ContextFlags |= CONTEXT_DEBUG_REGISTERS;
+
+                /* Set RF */
+                info->ContextRecord->EFlags |= 0x10000;
+
                 /* Verify exception occurred at our calculated instruction offset */
-                if (reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress) != ctx->expectedTrapAddr) {
+                if (reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress) != ctx->expected_trap_address) {
                     info->ContextRecord->EFlags &= ~0x100; /* Clear TF */
                     info->ContextRecord->Dr7 &= ~1;        /* Clear DR0 Enable */
+                    info->ContextRecord->Dr6 = 0;
                     *ctx->hypervisor_caught = true;
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
 
-                (*ctx->hitCount)++;
+                if (*ctx->hit_count < 0xFF) {
+                    (*ctx->hit_count)++;
+                }
 
                 /* Check if both Trap Flag and DR0 contributed to the exception status */
                 constexpr u64 required_bits = (1ULL << 14) | 1ULL; /* BS | B0 */
@@ -12655,6 +12669,8 @@ public:
                 /* Clear DR7 Local Enable 0 to disable the hardware breakpoint */
                 info->ContextRecord->Dr7 &= ~1;
 
+                info->ContextRecord->Dr6 = 0;
+
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
         };
@@ -12666,7 +12682,7 @@ public:
             __try {
                 memory::execute(trampoline_stub);
             }
-            __except (exception_handler::execute(GetExceptionCode(), reinterpret_cast<EXCEPTION_POINTERS*>(_exception_info()), &ctx)) {}
+            __except (exception_handler::execute(GetExceptionCode(), GetExceptionInformation(), &ctx)) {}
         }
         __finally {
             nt_set_context_thread(current_thread, &original_context);
@@ -12676,8 +12692,6 @@ public:
         if (hit_count != 1) {
             hypervisor_caught = true;
         }
-
-        nt_set_context_thread(current_thread, &original_context);
     #endif
         return hypervisor_caught;
     }
@@ -15161,13 +15175,13 @@ public:
             return false;
         }
 
-        u32 max_ext = 0, ebx = 0, ecx = 0, edx = 0;
-        cpu::cpuid(max_ext, ebx, ecx, edx, 0x80000000);
+        u32 eax = 0, ebx = 0, ecx = 0, edx = 0;
+        cpu::cpuid(eax, ebx, ecx, edx, 0x80000000);
+        const u32 max_ext = eax;
         if (max_ext < cpu::leaf::proc_ext) {
             return false;
         }
 
-        u32 eax = 0, ebx = 0, ecx = 0, edx = 0;
         cpu::cpuid(eax, ebx, ecx, edx, cpu::leaf::proc_ext);
         const bool svm_visible = ((ecx >> 2) & 1) != 0;
 
