@@ -8907,7 +8907,7 @@ public:
     /**
      * @brief Check for Task Segment and Descriptor Table instructions (SGDT, SLDT, SMSW, SIDT)
      * @category Windows, Linux, x86, x86_32
-     * @implements VM::DESCRIPTOR_TABLES
+     * @implements VM::SYSTEM_REGISTERS
      * 
      * --- SGDT ---
      * @note code documentation paper in /papers/www.offensivecomputing.net_vm.pdf (top-most byte signature)
@@ -8934,7 +8934,7 @@ public:
          * Even though SMSW queries a status register (CR0), it is historically grouped with descriptor table checks in virtualization detection
          * (often called "Red Pill" techniques)
          */
-        bool found = false;
+        volatile bool found = false;
 
         /* Linux - SIDT only */
     #if (VMAWARE_LINUX && (VMAWARE_GCC || VMAWARE_CLANG) && VMAWARE_X86)
@@ -8942,19 +8942,37 @@ public:
 
         fflush(stdout);
 
+        /* Local static jump buffer scoped entirely inside this function */
+        static sigjmp_buf s_vma_jmp_buf;
+
+        /*
+         * In C++11, a captureless lambda converts to a function pointer (void(*)(int))
+         * It accesses s_vma_jmp_buf ok because the buffer has static storage duration
+         */
+        struct sigaction sa {}, old_segv{}, old_ill{};
+        sa.sa_handler = [](int) {
+            siglongjmp(s_vma_jmp_buf, 1);
+        };
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+
+        sigaction(SIGSEGV, &sa, &old_segv);
+        sigaction(SIGILL, &sa, &old_ill);
+
+        if (sigsetjmp(s_vma_jmp_buf, 1) == 0) {
         #if (VMAWARE_X86_64)
             /* 64-bit Linux: IDT descriptor is 10 bytes (2-byte limit + 8-byte base) */
             __asm__ __volatile__("sidt %0" : "=m"(values));
 
-        #ifdef VMAWARE_DEBUG
-            vma_debug("SIDT: values = ");
-            for (u8 i = 0; i < 10; ++i) {
-                vma_debug(std::hex, std::setw(2), std::setfill('0'), static_cast<u32>(values[i]));
-                if (i < 9) {
-                    vma_debug(" ");
+            #ifdef VMAWARE_DEBUG
+                vma_debug("SIDT: values = ");
+                for (u8 i = 0; i < 10; ++i) {
+                    vma_debug(std::hex, std::setw(2), std::setfill('0'), static_cast<u32>(values[i]));
+                    if (i < 9) {
+                        vma_debug(" ");
+                    }
                 }
-            }
-        #endif
+            #endif
 
             if (values[9] == 0x00) {
                 found = true; /* 10th byte in x64 mode */
@@ -8963,35 +8981,38 @@ public:
             /* 32-bit Linux: IDT descriptor is 6 bytes (2-byte limit + 4-byte base) */
             __asm__ __volatile__("sidt %0" : "=m"(values));
 
-        #ifdef VMAWARE_DEBUG
-            vma_debug("SIDT: values = ");
-            for (u8 i = 0; i < 6; ++i) {
-                vma_debug(std::hex, std::setw(2), std::setfill('0'), static_cast<u32>(values[i]));
-                if (i < 5) {
-                    vma_debug(" ");
+            #ifdef VMAWARE_DEBUG
+                vma_debug("SIDT: values = ");
+                for (u8 i = 0; i < 6; ++i) {
+                    vma_debug(std::hex, std::setw(2), std::setfill('0'), static_cast<u32>(values[i]));
+                    if (i < 5) {
+                        vma_debug(" ");
+                    }
                 }
-            }
-        #endif
+            #endif
 
             if (values[5] == 0x00) {
                 found = true; /* 6th byte in x86 mode */
             }
         #endif
+        }
+
+        /* Restore original signal handlers manually without RAII */
+        sigaction(SIGSEGV, &old_segv, nullptr);
+        sigaction(SIGILL, &old_ill, nullptr);
 
         /* Windows - SGDT, SLDT, SIDT, SMSW */
     #elif (VMAWARE_WINDOWS && VMAWARE_X86)
-        SYSTEM_INFO si;
-        GetNativeSystemInfo(&si);
-        DWORD_PTR original_mask = 0;
-        const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
+        const HANDLE current_thread = GetCurrentThread();
 
         /* Iterating processors for SGDT, SLDT, and SIDT */
         GROUP_AFFINITY original_group_aff{};
         if (GetThreadGroupAffinity(current_thread, &original_group_aff)) {
-            for (DWORD i = 0; i < 64; ++i) {
-                if (original_group_aff.Mask & ((ULONG_PTR)1 << i)) {
+            const DWORD max_affinity_bits = static_cast<DWORD>(sizeof(ULONG_PTR) * 8);
+            for (DWORD i = 0; i < max_affinity_bits; ++i) {
+                if (original_group_aff.Mask & (static_cast<ULONG_PTR>(1) << i)) {
                     GROUP_AFFINITY target_aff = original_group_aff;
-                    target_aff.Mask = (ULONG_PTR)1 << i; 
+                    target_aff.Mask = static_cast<ULONG_PTR>(1) << i;
 
                     if (SetThreadGroupAffinity(current_thread, &target_aff, nullptr)) {
                         /* Technique 1: SGDT(x86 & x64) */
@@ -9001,6 +9022,7 @@ public:
                         #else
                             u8 gdtr[6] = { 0 };
                         #endif
+                            bool sgdt_executed = false;
 
                             __try {
                             #if (VMAWARE_CLANG || VMAWARE_GCC)
@@ -9009,24 +9031,29 @@ public:
                                 __asm { sgdt gdtr }
                             #else
                                 #pragma pack(push,1)
-                                struct {
-                                    u16 limit;
-                                    u64 base;
-                                } _gdtr = {};
+                                    struct {
+                                        u16 limit;
+                                        u64 base;
+                                    } _gdtr = {};
                                 #pragma pack(pop)
                                 _sgdt(&_gdtr);
                                 std::memcpy(gdtr, &_gdtr, sizeof(_gdtr));
                             #endif
+                                sgdt_executed = true;
                             }
                             __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-                            ULONG_PTR gdt_base = 0;
-                            std::memcpy(&gdt_base, &gdtr[2], sizeof(gdt_base));
+                    #if (VMAWARE_X86_32)
+                            if (sgdt_executed) {
+                                ULONG_PTR gdt_base = 0;
+                                std::memcpy(&gdt_base, &gdtr[2], sizeof(gdt_base));
 
-                            if ((gdt_base >> 24) == 0xFF) {
-                                vma_debug("SGDT: 0xFF signature detected on core ", i);
-                                found = true;
+                                if ((gdt_base >> 24) == 0xFF) {
+                                    vma_debug("SGDT: 0xFF signature detected on core ", i);
+                                    found = true;
+                                }
                             }
+                        #endif
                         }
 
                         /* Technique 2: SLDT (x86_32 only) */
@@ -9034,6 +9061,7 @@ public:
                         if (!found) {
                             u8 ldtr_buf[4] = { 0xEF, 0xBE, 0xAD, 0xDE };
                             u32 ldt_val = 0;
+                            bool sldt_executed = false;
 
                             __try {
                             #if (VMAWARE_CLANG || VMAWARE_GCC)
@@ -9044,28 +9072,32 @@ public:
                                     mov  word ptr[ldtr_buf], ax
                                 }
                             #endif
+                                sldt_executed = true;
                             }
                             __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-                            std::memcpy(&ldt_val, ldtr_buf, sizeof(ldt_val));
-                            if (ldtr_buf[0] != 0x00 && ldtr_buf[1] != 0x00) {
-                                vma_debug("SLDT: ldtr_buf signature detected");
-                                found = true;
-                            }
-                            if (ldt_val != 0xDEAD0000) {
-                                vma_debug("SLDT: 0xDEAD0000 signature detected");
-                                found = true;
+                            if (sldt_executed) {
+                                std::memcpy(&ldt_val, ldtr_buf, sizeof(ldt_val));
+                                if (ldtr_buf[0] != 0x00 || ldtr_buf[1] != 0x00) {
+                                    vma_debug("SLDT: ldtr_buf signature detected");
+                                    found = true;
+                                }
+                                if (ldt_val != 0xDEAD0000) {
+                                    vma_debug("SLDT: 0xDEAD0000 signature detected");
+                                    found = true;
+                                }
                             }
                         }
                     #endif
 
                         /* Technique 3: SIDT(x86 & x64) */
                         if (!found) {
-                        #if (VMAWARE_X86_64)    
+                        #if (VMAWARE_X86_64)        
                             u8 idtr_buffer[10] = { 0 };
                         #else
                             u8 idtr_buffer[6] = { 0 };
                         #endif
+                            bool sidt_executed = false;
 
                             __try {
                             #if (VMAWARE_CLANG || VMAWARE_GCC)
@@ -9074,25 +9106,30 @@ public:
                                 __asm { sidt idtr_buffer }
                             #elif (VMAWARE_MSVC) && (VMAWARE_X86_64)
                                 #pragma pack(push, 1)
-                                struct {
-                                    USHORT Limit;
-                                    ULONG_PTR Base;
-                                } idtr;
+                                    struct {
+                                        USHORT Limit;
+                                        ULONG_PTR Base;
+                                    } idtr;
                                 #pragma pack(pop)
                                 __sidt(&idtr);
                                 std::memcpy(idtr_buffer, &idtr, sizeof(idtr));
                             #endif
+                                sidt_executed = true;
                             }
                             __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-                            ULONG_PTR idt_base = 0;
-                            std::memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
+                        #if (VMAWARE_X86_32)
+                            if (sidt_executed) {
+                                ULONG_PTR idt_base = 0;
+                                std::memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
 
-                            if ((idt_base >> 24) == 0xE8) {
-                                vma_debug("SIDT: VPC/Hyper-V signature detected on core ", i);
-                                core::add(brand_enum::VPC, 100);
-                                found = true;
+                                if ((idt_base >> 24) == 0xE8) {
+                                    vma_debug("SIDT: VPC/Hyper-V signature detected on core ", i);
+                                    core::add(brand_enum::VPC, 100);
+                                    found = true;
+                                }
                             }
+                        #endif
                         }
                     }
                 }
@@ -9104,24 +9141,39 @@ public:
             SetThreadGroupAffinity(current_thread, &original_group_aff, nullptr);
         }
 
-        if (original_mask != 0) {
-            SetThreadAffinityMask(current_thread, original_mask);
-        }
-
         /* Technique 4: SMSW (x86_32 only), no affinity pinning needed */
         #if (VMAWARE_X86_32)
             if (!found) {
                 u32 reax = 0;
-                __asm
-                {
-                    mov eax, 0xCCCCCCCC;
-                    smsw eax;
-                    mov DWORD PTR[reax], eax;
-                }
+                bool smsw_executed = false;
 
-                if ((((reax >> 24) & 0xFF) == 0xCC) && (((reax >> 16) & 0xFF) == 0xCC)) {
-                    vma_debug("SMSW: Signature detected");
-                    found = true;
+                __try {
+                #if (VMAWARE_CLANG || VMAWARE_GCC)
+                    __asm__ volatile (
+                        "movl $0xCCCCCCCC, %%eax\n\t"
+                        "smsw %%eax\n\t"
+                        "movl %%eax, %0"
+                        : "=r"(reax)
+                        :
+                        : "eax"
+                    );
+                #else
+                    __asm
+                    {
+                        mov eax, 0xCCCCCCCC
+                        smsw eax
+                        mov reax, eax
+                    }
+                #endif
+                    smsw_executed = true;
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {}
+
+                if (smsw_executed) {
+                    if ((((reax >> 24) & 0xFF) == 0xCC) && (((reax >> 16) & 0xFF) == 0xCC)) {
+                        vma_debug("SMSW: Signature detected");
+                        found = true;
+                    }
                 }
             }
         #endif
@@ -12382,15 +12434,24 @@ public:
                 return false;
             }
             for (const wchar_t* tok : excluded_tokens) {
-                if (wcsstr(s, tok) != nullptr) 
+                if (wcsstr(s, tok) != nullptr) {
                     return true;
+                }
             }
             return false;
         };
 
-        for (DWORD idx = 0; SetupDiEnumDeviceInfo(handle_dev_info, idx, &dev_info); ++idx) {
+        for (DWORD idx = 0; ; ++idx) {
+            dev_info.cbSize = sizeof(dev_info);
+            if (!SetupDiEnumDeviceInfo(handle_dev_info, idx, &dev_info)) {
+                break;
+            }
+
             wchar_t inst_id[MAX_PATH] = { 0 };
-            SetupDiGetDeviceInstanceIdW(handle_dev_info, &dev_info, inst_id, MAX_PATH, nullptr);
+            if (!SetupDiGetDeviceInstanceIdW(handle_dev_info, &dev_info, inst_id, MAX_PATH, nullptr)) {
+                inst_id[0] = L'\0';
+            }
+
             if (wcsstr(inst_id, L"PNP0A06") && (wcsstr(inst_id, L"HOTPLUG") || wcsstr(inst_id, L"GPE0") || wcsstr(inst_id, L"SMI"))) {
                 vma_debug("ACPI_SIGNATURE: Synthetic QEMU ACPI device detected (PNP0A06)");
                 SetupDiDestroyDeviceInfoList(handle_dev_info);
@@ -12401,9 +12462,16 @@ public:
             DWORD required_size = 0;
 
             /* Query required size (bytes) */
-            SetupDiGetDevicePropertyW(handle_dev_info, &dev_info, &key, &prop_type, nullptr, 0, &required_size, 0);
-            if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || required_size == 0) {
-                continue;             
+            SetLastError(ERROR_SUCCESS);
+            const BOOL size_query_ok = SetupDiGetDevicePropertyW(handle_dev_info, &dev_info, &key, &prop_type, nullptr, 0, &required_size, 0);
+
+            if (size_query_ok || GetLastError() != ERROR_INSUFFICIENT_BUFFER || required_size == 0) {
+                continue;
+            }
+
+            /* Ensure size is valid and aligned for wchar_t string list */
+            if (required_size < (sizeof(wchar_t) * 2) || (required_size % sizeof(wchar_t)) != 0) {
+                continue;
             }
 
             /* Fetch buffer (multi-sz) */
@@ -12413,12 +12481,24 @@ public:
                 continue;
             }
 
-            const wchar_t* ptr = reinterpret_cast<const wchar_t*>(buffer.data());
-            const size_t total_wchars = required_size / sizeof(wchar_t); /* number of wchar_t slots in buffer */
-            const wchar_t* buf_end = ptr + (total_wchars ? total_wchars : 0);
+            /* Verify property type is a wide string list */
+            if (prop_type != DEVPROP_TYPE_STRING_LIST || (required_size % sizeof(wchar_t)) != 0) {
+                continue;
+            }
 
-            for (const wchar_t* p = ptr; p < buf_end && *p; p += (wcslen(p) + 1)) {
-                VMAWARE_PREFETCH(p + 32, _MM_HINT_T0);
+            const wchar_t* ptr = reinterpret_cast<const wchar_t*>(buffer.data());
+            const size_t total_wchars = required_size / sizeof(wchar_t); /* Number of wchar_t slots in buffer */
+            const wchar_t* buf_end = ptr + total_wchars;
+
+            static constexpr const wchar_t* vm_signatures[] = {
+                L"#ACPI(VMOD)", L"#ACPI(VMBS)", L"#VMBUS(", L"#VPCI("
+            };
+
+            for (const wchar_t* p = ptr; p < buf_end && *p; ) {
+                const size_t str_len = wcslen(p);
+                if (p + str_len >= buf_end) {
+                    break;
+                }
 
                 if (wcsstr(p, L"ACPI(DRAC)")) {
                     vma_debug("ACPI_SIGNATURE: QEMU virtual DRAM Controller (DRAC) ACPI node detected");
@@ -12426,7 +12506,7 @@ public:
                     return core::add(brand_enum::QEMU);
                 }
 
-                if (wcsstr(inst_id, L"VEN_1022")) {
+                if (inst_id[0] != L'\0' && wcsstr(inst_id, L"VEN_1022")) {
                     if (wcsstr(p, L"PCI(1F00)") || wcsstr(p, L"PCI(1F02)") || wcsstr(p, L"PCI(1F03)")) {
                         vma_debug("ACPI_SIGNATURE: Impossible AMD Vendor ID mapped to Intel Q35 PCI slot");
                         SetupDiDestroyDeviceInfoList(handle_dev_info);
@@ -12434,27 +12514,17 @@ public:
                     }
                 }
 
-                if (has_excluded_token(p)) {
-                    continue;
-                }
-            }
-
-            static constexpr const wchar_t* vm_signatures[] = {
-                L"#ACPI(VMOD)", L"#ACPI(VMBS)", L"#VMBUS(", L"#VPCI("
-            };
-
-            for (const wchar_t* p = ptr; p < buf_end && *p; p += (wcslen(p) + 1)) {
-                if (has_excluded_token(p)) {
-                    continue;
-                }
-
-                for (const wchar_t* sig : vm_signatures) {
-                    if (wcsstr(p, sig) != nullptr) {
-                        vma_debug("ACPI_SIGNATURE: Detected Hyper-V signatures");
-                        SetupDiDestroyDeviceInfoList(handle_dev_info);
-                        return core::add(brand_enum::HYPERV);
+                if (!has_excluded_token(p)) {
+                    for (const wchar_t* sig : vm_signatures) {
+                        if (wcsstr(p, sig) != nullptr) {
+                            vma_debug("ACPI_SIGNATURE: Detected Hyper-V signatures");
+                            SetupDiDestroyDeviceInfoList(handle_dev_info);
+                            return core::add(brand_enum::HYPERV);
+                        }
                     }
                 }
+
+                p += (str_len + 1);
             }
         }
 
@@ -13195,19 +13265,19 @@ public:
         nt_free_virtual_memory_fn nt_free_memory = nullptr;
         nt_query_system_environment_value_ex_fn nt_query_value = nullptr;
 
-        const HANDLE current_process_handle = reinterpret_cast<HANDLE>(-1LL);
+        const HANDLE current_process_handle = GetCurrentProcess();
 
         /*
          * -------------------------------------------------------------------------
-         * helper lambdas
+         * Helper lambdas
          * -------------------------------------------------------------------------
          */
         auto buffer_contains_ascii_ci = [](const BYTE* data, size_t len, const char* pat) noexcept -> bool {
-            if (!data || len == 0 || !pat) {
+            if (!data || len == 0 || !pat || pat[0] == '\0') {
                 return false;
             }
 
-            const size_t plen = strlen(pat); 
+            const size_t plen = strlen(pat);
             if (len < plen) {
                 return false;
             }
@@ -13241,11 +13311,11 @@ public:
         };
 
         auto buffer_contains_utf16le_ci = [](const WCHAR* data, size_t wlen, const wchar_t* pat) noexcept -> bool {
-            if (!data || wlen == 0 || !pat) {
+            if (!data || wlen == 0 || !pat || pat[0] == L'\0') {
                 return false;
             }
 
-            const size_t plen = wcslen(pat); 
+            const size_t plen = wcslen(pat);
             if (wlen < plen) {
                 return false;
             }
@@ -13253,7 +13323,7 @@ public:
             const WCHAR p0 = static_cast<WCHAR>((pat[0] >= L'A' && pat[0] <= L'Z') ? (pat[0] + 32) : pat[0]);
             const WCHAR* end = data + (wlen - plen);
             for (const WCHAR* p = data; p <= end; ++p) {
-                WCHAR c0 = *p; 
+                WCHAR c0 = *p;
                 c0 = static_cast<WCHAR>((c0 >= L'A' && c0 <= L'Z') ? (c0 + 32) : c0);
                 if (c0 != p0) {
                     continue;
@@ -13261,12 +13331,12 @@ public:
 
                 bool ok = true;
                 for (size_t j = 1; j < plen; ++j) {
-                    WCHAR dj = p[j]; 
+                    WCHAR dj = p[j];
                     dj = static_cast<WCHAR>((dj >= L'A' && dj <= L'Z') ? (dj + 32) : dj);
                     WCHAR pj = static_cast<WCHAR>((pat[j] >= L'A' && pat[j] <= L'Z') ? (pat[j] + 32) : pat[j]);
-                    if (dj != pj) { 
-                        ok = false; 
-                        break;  
+                    if (dj != pj) {
+                        ok = false;
+                        break;
                     }
                 }
                 if (ok) {
@@ -13277,7 +13347,7 @@ public:
             return false;
         };
 
-        auto read_variable_to_buffer = [&](const std::wstring& name, GUID& guid, BYTE*& out_buf, SIZE_T& out_len) noexcept -> bool {
+        auto read_variable_to_buffer = [&](const std::wstring& name, GUID guid, BYTE*& out_buf, SIZE_T& out_len) noexcept -> bool {
             UNICODE_STRING uni_str{};
             uni_str.Buffer = const_cast<PWSTR>(name.c_str());
             uni_str.Length = static_cast<USHORT>(name.length() * sizeof(wchar_t));
@@ -13316,18 +13386,9 @@ public:
             return false;
         };
 
-        auto cleanup = [&](auto& ptr) noexcept {
-            if (ptr) {
-                PVOID base = ptr;
-                SIZE_T size = 0;
-                nt_free_memory(current_process_handle, &base, &size, 0x8000);
-                ptr = nullptr;
-            }
-        };
-
         /*
          * -------------------------------------------------------------------------
-         * main logic block
+         * Main logic block
          * -------------------------------------------------------------------------
          */
         do {
@@ -13344,7 +13405,8 @@ public:
             tp_enable.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
 
             previous_privileges_size = sizeof(previous_privileges);
-            if (!AdjustTokenPrivileges(token_handle, FALSE, &tp_enable, previous_privileges_size, &previous_privileges, &previous_privileges_size)) {            
+            SetLastError(ERROR_SUCCESS);
+            if (!AdjustTokenPrivileges(token_handle, FALSE, &tp_enable, previous_privileges_size, &previous_privileges, &previous_privileges_size)) {
                 break;
             }
             if (GetLastError() == ERROR_NOT_ALL_ASSIGNED) {
@@ -13389,7 +13451,7 @@ public:
                         enum_base_buffer = nullptr;
                     }
                 }
-            }          
+            }
 
             if (alloc_status != 0 || !enum_base_buffer || buffer_required_length == 0) {
                 vma_debug("NVRAM: System is not UEFI");
@@ -13398,7 +13460,7 @@ public:
 
             /*
              * ---------------------------------------------------------------------
-             * constants and data
+             * Constants and data
              * ---------------------------------------------------------------------
              */
             constexpr const char redhat_sig_ascii[] = "red hat";
@@ -13411,7 +13473,7 @@ public:
 
             /*
              * ---------------------------------------------------------------------
-             * iteration loop
+             * Iteration loop
              * ---------------------------------------------------------------------
              */
             while (true) {
@@ -13435,8 +13497,8 @@ public:
                 size_t name_max_bytes = 0;
                 if (current_var->NextEntryOffset != 0) {
                     const SIZE_T next_entry = static_cast<SIZE_T>(current_var->NextEntryOffset);
-                    if (next_entry <= name_struct_offset) { 
-                        should_break_loop = true; 
+                    if (next_entry <= name_struct_offset) {
+                        should_break_loop = true;
                         break;
                     }
                     if (next_entry > buffer_total_size - current_offset) {
@@ -13448,7 +13510,7 @@ public:
                 else {
                     if (current_offset + name_struct_offset >= buffer_total_size) {
                         should_break_loop = true;
-                        break; 
+                        break;
                     }
 
                     name_max_bytes = buffer_total_size - (current_offset + name_struct_offset);
@@ -13463,13 +13525,13 @@ public:
                     const WCHAR* name_ptr = reinterpret_cast<const WCHAR*>(reinterpret_cast<const BYTE*>(current_var) + name_struct_offset);
                     const size_t max_chars = name_max_bytes / sizeof(WCHAR);
                     size_t real_chars = 0;
-                    while (real_chars < max_chars && name_ptr[real_chars] != L'\0') {             
+                    while (real_chars < max_chars && name_ptr[real_chars] != L'\0') {
                         ++real_chars;
                     }
 
-                    if (real_chars == max_chars) { 
+                    if (real_chars == max_chars) {
                         should_break_loop = true;
-                        break; 
+                        break;
                     }
 
                     var_name_view = std::wstring(name_ptr, real_chars);
@@ -13485,7 +13547,8 @@ public:
 
                 /* Read variables */
                 if (var_name_view == L"PKDefault" && pk_default_buf == nullptr) {
-                    (void)read_variable_to_buffer(std::wstring(var_name_view), current_var->VendorGuid, pk_default_buf, pk_default_len);
+                    const GUID var_guid = current_var->VendorGuid;
+                    (void)read_variable_to_buffer(var_name_view, var_guid, pk_default_buf, pk_default_len);
                 }
 
                 if (current_var->NextEntryOffset == 0) {
@@ -13508,12 +13571,12 @@ public:
             /* Free enumeration buffer */
             SIZE_T z = 0;
             nt_free_memory(current_process_handle, &enum_base_buffer, &z, 0x8000);
-            enum_base_buffer = nullptr;          
+            enum_base_buffer = nullptr;
 
             /* Check for official red hat certs (QEMU/OVMF) */
             bool found_redhat = false;
             if (pk_default_buf && pk_default_len) {
-                if ((pk_default_len >= 2) && ((pk_default_len % 2) == 0)) {
+                if (pk_default_len >= sizeof(WCHAR)) {
                     const WCHAR* wptr = reinterpret_cast<const WCHAR*>(pk_default_buf);
                     const size_t wlen = pk_default_len / sizeof(WCHAR);
                     if (buffer_contains_utf16le_ci(wptr, wlen, redhat_sig_wide)) {
@@ -13534,8 +13597,18 @@ public:
         } while (false);
 
         /* Cleanup */
-        cleanup(pk_default_buf);
-        cleanup(enum_base_buffer);
+        if (pk_default_buf) {
+            PVOID base = pk_default_buf;
+            SIZE_T size = 0;
+            nt_free_memory(current_process_handle, &base, &size, 0x8000);
+            pk_default_buf = nullptr;
+        }
+        if (enum_base_buffer) {
+            PVOID base = enum_base_buffer;
+            SIZE_T size = 0;
+            nt_free_memory(current_process_handle, &base, &size, 0x8000);
+            enum_base_buffer = nullptr;
+        }
 
         if (privilege_state_saved && token_handle) {
             AdjustTokenPrivileges(token_handle, FALSE, &previous_privileges, previous_privileges_size, nullptr, nullptr);
@@ -13562,7 +13635,7 @@ public:
             return false;
         }
 
-        const HANDLE current_thread = reinterpret_cast<HANDLE>(-2);
+        const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
         const DWORD_PTR old_affinity = SetThreadAffinityMask(current_thread, 1);
 
         /* 1) Check for commonly disabled instructions on patches and VMs */
@@ -13570,7 +13643,9 @@ public:
         cpu::cpuid(max_leaf, ebx_0, ecx_0, edx_0, cpu::leaf::basic_info);
 
         u32 a = 0, b = 0, c = 0, d = 0;
-        cpu::cpuid(a, b, c, d, cpu::leaf::features);
+        if (max_leaf >= 1u) {
+            cpu::cpuid(a, b, c, d, cpu::leaf::features);
+        }
 
         constexpr u32 AES_NI_BIT = 1u << 25;
         const bool aes_support = (c & AES_NI_BIT) != 0;
@@ -13590,7 +13665,7 @@ public:
             #if (VMAWARE_CLANG || VMAWARE_GCC)
                 __attribute__((__target__("aes")))
             #endif
-            static bool VMAWARE_VECTORCALL check_aes_integrity(const __m128i block, const __m128i key_vec, unsigned char* o, const bool support) {
+                static bool VMAWARE_VECTORCALL check_aes_integrity(const __m128i block, const __m128i key_vec, unsigned char* o, const bool support) {
                 __try {
                     __m128i tmp = _mm_xor_si128(block, key_vec);
                     tmp = _mm_aesenc_si128(tmp, key_vec);
@@ -13651,133 +13726,128 @@ public:
         const bool avx512_adv = (b7 & CPUID7_AVX512F) != 0;
 
         /* Probe AVX */
-        auto is_avx_spoofed = [&]() VMAWARE_TARGET_AVX noexcept -> bool {
-            /* If hardware doesn't advertise AVX, we cannot test it in user-mode */
-            if (!avx_adv) {
-                return false;
-            }
+        struct avx_executor {
+        #if (VMAWARE_CLANG || VMAWARE_GCC)
+            __attribute__((__target__("avx")))
+        #endif
+            static bool check() noexcept {
+                __try {
+                    /* Since CPUID reports OSXSAVE as active, xgetbv is guaranteed to work */
+                    const u64 xcr0 = static_cast<u64>(_xgetbv(0));
+                    /*
+                     * If the OS has not enabled AVX state tracking in XCR0, AVX cannot execute
+                     * If a hypervisor misconfigures this, the xgetbv instruction itself will #UD here
+                     */
+                    if ((xcr0 & XCR0_AVX_MASK) != XCR0_AVX_MASK) {
+                        return false;
+                    }
 
-            /*
-             * If the OS has not enabled XSAVE/XRSTOR, AVX cannot run
-             * This is normal bare-metal OS behavior (e.g. legacy/minimal bootloader environments)
-             */
-            if (!osxsave_adv) {
-                return false;
-            }
+                    alignas(32) float in0[8] = { 1,2,3,4,5,6,7,8 };
+                    alignas(32) float in1[8] = { 16,15,14,13,12,11,10,9 };
+                    alignas(32) float out[8] = {};
 
-            alignas(32) float in0[8] = { 1,2,3,4,5,6,7,8 };
-            alignas(32) float in1[8] = { 16,15,14,13,12,11,10,9 };
-            alignas(32) float out[8] = {};
-
-            __try {
-                /* Since CPUID reports OSXSAVE as active, xgetbv is guaranteed to work */
-                const u64 xcr0 = static_cast<u64>(_xgetbv(0));
-                /*
-                 * If the OS has not enabled AVX state tracking in XCR0, AVX cannot execute
-                 * If a hypervisor misconfigures this, the xgetbv instruction itself will #UD here
-                 */
-                if ((xcr0 & XCR0_AVX_MASK) != XCR0_AVX_MASK) {
-                    return false;
+                    const __m256 va = _mm256_loadu_ps(in0);
+                    const __m256 vb = _mm256_loadu_ps(in1);
+                    const __m256 vc = _mm256_add_ps(va, vb);
+                    _mm256_storeu_ps(out, vc);
+                    return out[0] != 17.0f;
                 }
-
-                const __m256 va = _mm256_loadu_ps(in0);
-                const __m256 vb = _mm256_loadu_ps(in1);
-                const __m256 vc = _mm256_add_ps(va, vb);
-                _mm256_storeu_ps(out, vc);
-                return out[0] != 17.0f;
-            }
-            __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
-                ? EXCEPTION_EXECUTE_HANDLER
-                : EXCEPTION_CONTINUE_SEARCH)
-            {
-                /*
-                 * CPUID says AVX is supported, OSXSAVE is enabled, and XCR0 has the AVX state bit
-                 * An illegal instruction exception here is architecturally impossible
-                 */
-                vma_debug("CPU_HEURISTIC: Hypervisor detected hiding AVX capabilities");
-                return true;
+                __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
+                    ? EXCEPTION_EXECUTE_HANDLER
+                    : EXCEPTION_CONTINUE_SEARCH)
+                {
+                    /*
+                     * CPUID says AVX is supported, OSXSAVE is enabled, and XCR0 has the AVX state bit
+                     * An illegal instruction exception here is architecturally impossible
+                     */
+                    vma_debug("CPU_HEURISTIC: Hypervisor detected hiding AVX capabilities");
+                    return true;
+                }
             }
         };
 
         /* Probe AVX2 */
-        auto is_avx2_spoofed = [&]() VMAWARE_TARGET_AVX2 noexcept -> bool{
-            if (!avx2_adv) {
-                return false;
-            }
-            if (!avx_adv || !osxsave_adv) {
-                return false;
-            }
+        struct avx2_executor {
+            #if (VMAWARE_CLANG || VMAWARE_GCC)
+                __attribute__((__target__("avx2")))
+            #endif
+            static bool check() noexcept {
+                __try {
+                    const u64 xcr0 = static_cast<u64>(_xgetbv(0));
+                    if ((xcr0 & XCR0_AVX_MASK) != XCR0_AVX_MASK) {
+                        return false;
+                    }
 
-            alignas(32) u32 in0[8] = { 1,2,3,4,5,6,7,8 };
-            alignas(32) u32 in1[8] = { 16,15,14,13,12,11,10,9 };
-            alignas(32) u32 out[8] = {};
+                    alignas(32) u32 in0[8] = { 1,2,3,4,5,6,7,8 };
+                    alignas(32) u32 in1[8] = { 16,15,14,13,12,11,10,9 };
+                    alignas(32) u32 out[8] = {};
 
-            __try {
-                const u64 xcr0 = static_cast<u64>(_xgetbv(0));
-                if ((xcr0 & XCR0_AVX_MASK) != XCR0_AVX_MASK) {
-                    return false;
+                    const __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(in0));
+                    const __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(in1));
+                    const __m256i vc = _mm256_add_epi32(va, vb);
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(out), vc);
+                    return out[0] != 17u;
                 }
-
-                const __m256i va = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(in0));
-                const __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(in1));
-                const __m256i vc = _mm256_add_epi32(va, vb);
-                _mm256_storeu_si256(reinterpret_cast<__m256i*>(out), vc);
-                return out[0] != 17u;
-            }
-            __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
-                ? EXCEPTION_EXECUTE_HANDLER
-                : EXCEPTION_CONTINUE_SEARCH)
-            {
-                vma_debug("CPU_HEURISTIC: Hypervisor detected hiding AVX2 capabilities");
-                return true;
+                __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
+                    ? EXCEPTION_EXECUTE_HANDLER
+                    : EXCEPTION_CONTINUE_SEARCH)
+                {
+                    vma_debug("CPU_HEURISTIC: Hypervisor detected hiding AVX2 capabilities");
+                    return true;
+                }
             }
         };
 
         /* Probe AVX512 */
-        auto is_avx512_spoofed = [&]() VMAWARE_TARGET_AVX512 noexcept -> bool{
-            if (!avx512_adv) {
-                return false;
-            }
-            if (!avx_adv || !osxsave_adv) {
-                return false;
-            }
+        struct avx512_executor {
+            #if (VMAWARE_CLANG || VMAWARE_GCC)
+                __attribute__((__target__("avx512f")))
+            #endif
+            static bool check() noexcept {
+                __try {
+                    const u64 xcr0 = static_cast<u64>(_xgetbv(0));
 
-            alignas(64) u32 in0[16] = {
-                1,2,3,4,5,6,7,8, 9,10,11,12,13,14,15,16
-            };
-            alignas(64) u32 in1[16] = {
-                16,15,14,13,12,11,10,9, 8,7,6,5,4,3,2,1
-            };
-            alignas(64) u32 out[16] = {};
+                    /*
+                     * If the OS disabled AVX-512 state tracking (e.g. kernel flags or hybrid cores)
+                     * we return false. Running AVX-512 would legitimately #UD here
+                     */
+                    if ((xcr0 & XCR0_AVX512_MASK) != XCR0_AVX512_MASK) {
+                        return false;
+                    }
 
-            __try {
-                const u64 xcr0 = static_cast<u64>(_xgetbv(0));
+                    alignas(64) u32 in0[16] = {
+                        1,2,3,4,5,6,7,8, 9,10,11,12,13,14,15,16
+                    };
+                    alignas(64) u32 in1[16] = {
+                        16,15,14,13,12,11,10,9, 8,7,6,5,4,3,2,1
+                    };
+                    alignas(64) u32 out[16] = {};
 
-                /*
-                 * If the OS disabled AVX-512 state tracking (e.g. kernel flags or hybrid cores)
-                 * we return false. Running AVX-512 would legitimately #UD here
-                 */
-                if ((xcr0 & XCR0_AVX512_MASK) != XCR0_AVX512_MASK) {
-                    return false;
+                    const __m512i va = _mm512_loadu_si512(reinterpret_cast<const void*>(in0));
+                    const __m512i vb = _mm512_loadu_si512(reinterpret_cast<const void*>(in1));
+                    const __m512i vc = _mm512_add_epi32(va, vb);
+                    _mm512_storeu_si512(reinterpret_cast<void*>(out), vc);
+                    return out[0] != 17u;
                 }
-
-                const __m512i va = _mm512_loadu_si512(reinterpret_cast<const void*>(in0));
-                const __m512i vb = _mm512_loadu_si512(reinterpret_cast<const void*>(in1));
-                const __m512i vc = _mm512_add_epi32(va, vb);
-                _mm512_storeu_si512(reinterpret_cast<void*>(out), vc);
-                return out[0] != 17u;
-            }
-            __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
-                ? EXCEPTION_EXECUTE_HANDLER
-                : EXCEPTION_CONTINUE_SEARCH)
-            {
-                vma_debug("CPU_HEURISTIC: Hypervisor detected hiding AVX512 capabilities");
-                return true;
+                __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION
+                    ? EXCEPTION_EXECUTE_HANDLER
+                    : EXCEPTION_CONTINUE_SEARCH)
+                {
+                    vma_debug("CPU_HEURISTIC: Hypervisor detected hiding AVX512 capabilities");
+                    return true;
+                }
             }
         };
 
         if (!is_spoofed) {
-            if (is_avx_spoofed() || is_avx2_spoofed() || is_avx512_spoofed()) {
+            /* If hardware doesn't advertise AVX or XSAVE is disabled by OS, we cannot test in user-mode */
+            if (avx_adv && osxsave_adv && avx_executor::check()) {
+                is_spoofed = true;
+            }
+            else if (avx2_adv && avx_adv && osxsave_adv && avx2_executor::check()) {
+                is_spoofed = true;
+            }
+            else if (avx512_adv && avx_adv && osxsave_adv && avx512_executor::check()) {
                 is_spoofed = true;
             }
         }
@@ -13809,20 +13879,22 @@ public:
         */
 
     #if (VMAWARE_X86_64)
-        /* Mov rax, imm64 (10 bytes) + clzero (3 bytes) + ret (1 byte) */
+        /* Mov rax, imm64 (10 bytes) + clzero (3 bytes) + mfence (3 bytes) + ret (1 byte) */
         u8 amd_bytes[] = {
             0x48, 0xB8,                 /* mov rax, imm64 */
             0x00, 0x00, 0x00, 0x00,     /* imm64 low bytes (placeholder) */
             0x00, 0x00, 0x00, 0x00,     /* imm64 high bytes (placeholder) */
             0x0F, 0x01, 0xFC,           /* clzero */
+            0x0F, 0xAE, 0xF0,           /* mfence - ensure weakly ordered CLZERO is committed */
             0xC3                        /* ret */
         };
     #else
-        /* Mov eax, imm32 (5 bytes) + clzero (3 bytes) + ret (1 byte) */
+        /* Mov eax, imm32 (5 bytes) + clzero (3 bytes) + mfence (3 bytes) + ret (1 byte) */
         u8 amd_bytes[] = {
             0xB8,                       /* mov eax, imm32 */
             0x00, 0x00, 0x00, 0x00,     /* imm32 (placeholder) */
             0x0F, 0x01, 0xFC,           /* clzero */
+            0x0F, 0xAE, 0xF0,           /* mfence - ensure weakly ordered CLZERO is committed */
             0xC3                        /* ret */
         };
     #endif
@@ -13858,40 +13930,55 @@ public:
                 vma_debug("CPU_HEURISTIC: CPU is AMD but not Ryzen. Skipping CLZERO check");
                 proceed = false;
             }
+
+            /* Check CPUID Fn8000_0008 EBX[0] for architectural CLZERO feature advertisement */
+            u32 max_ext_leaf = 0, ext_b = 0, ext_c = 0, ext_d = 0;
+            cpu::cpuid(max_ext_leaf, ext_b, ext_c, ext_d, 0x80000000u);
+            if (max_ext_leaf >= 0x80000008u) {
+                u32 a8 = 0, b8 = 0, c8 = 0, d8 = 0;
+                cpu::cpuid(a8, b8, c8, d8, 0x80000008u);
+                if ((b8 & 1u) == 0) {
+                    vma_debug("CPU_HEURISTIC: Claimed AMD CPU does not report CLZERO support in CPUID");
+                    proceed = false;
+                }
+            }
+            else {
+                proceed = false;
+            }
         }
 
         if (claimed_intel || !claimed_amd) {
-            exception = true; /* should generate an exception rather than be treated as a NOP, but we will check its side effects anyways */
+            exception = true; /* Should generate an exception rather than be treated as a NOP, but we will check its side effects anyways */
         }
 
-        /* One cache line = 64 bytes */
-        const SIZE_T target_size = 64;
-        const HMODULE ntdll = memory::get_module(true);
-        if (!ntdll) {
-            return false;
-        }
+        if (proceed) {
+            /* One cache line = 64 bytes */
+            const SIZE_T target_size = 64;
+            const HMODULE ntdll = memory::get_module(true);
+            if (!ntdll) {
+                return false;
+            }
 
-        constexpr const char* function_names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFlushInstructionCache", "NtFreeVirtualMemory" };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
+            constexpr const char* function_names[] = { "NtAllocateVirtualMemory", "NtProtectVirtualMemory", "NtFlushInstructionCache", "NtFreeVirtualMemory" };
+            void* functions[ARRAYSIZE(function_names)] = {};
+            memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
-        using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
-        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
-        using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
+            using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
+            using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
+            using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
+            using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
 
-        const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
-        const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
-        const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[2]);
-        const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[3]);
+            const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
+            const auto nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[1]);
+            const auto nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[2]);
+            const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[3]);
 
-        if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_flush_instruction_cache || !nt_free_virtual_memory) {
-            return false;
-        }
+            if (!nt_allocate_virtual_memory || !nt_protect_virtual_memory || !nt_flush_instruction_cache || !nt_free_virtual_memory) {
+                return false;
+            }
 
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
+            const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
 
-        {
             PVOID base = nullptr;
             SIZE_T sz = target_size;
             NTSTATUS st2 = nt_allocate_virtual_memory(current_process, &base, 0, &sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -13916,85 +14003,86 @@ public:
             #endif
                 bytes = amd_bytes;
                 code_size = amd_stub_size;
-            }
-        }
 
-        if (proceed) {
-            PVOID base = nullptr;
-            SIZE_T sz = code_size;
-            NTSTATUS st2 = nt_allocate_virtual_memory(current_process, &base, 0, &sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-            if (NT_SUCCESS(st2) && base != nullptr) {
-                exec_mem = base;
-                std::memcpy(exec_mem, bytes, code_size);
+                PVOID exec_base = nullptr;
+                SIZE_T exec_sz = code_size;
+                st2 = nt_allocate_virtual_memory(current_process, &exec_base, 0, &exec_sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                if (NT_SUCCESS(st2) && exec_base != nullptr) {
+                    exec_mem = exec_base;
+                    std::memcpy(exec_mem, bytes, code_size);
 
-                /* Change to RX */
-                ULONG old_protection = 0;
-                PVOID tmp_base = exec_mem;
-                SIZE_T tmp_sz = code_size;
-                st2 = nt_protect_virtual_memory(current_process, &tmp_base, &tmp_sz, PAGE_EXECUTE_READ, &old_protection);
-                if (NT_SUCCESS(st2)) {
-                    nt_flush_instruction_cache(current_process, exec_mem, code_size);
+                    /* Change to RX */
+                    ULONG old_protection = 0;
+                    PVOID tmp_base = exec_mem;
+                    SIZE_T tmp_sz = code_size;
+                    st2 = nt_protect_virtual_memory(current_process, &tmp_base, &tmp_sz, PAGE_EXECUTE_READ, &old_protection);
+                    if (NT_SUCCESS(st2)) {
+                        nt_flush_instruction_cache(current_process, exec_mem, code_size);
 
-                    using code_func = void(*)();
-                    using runner_func = u8(*)(code_func);
-                    runner_func runner = +[](code_func func) -> u8 {
-                        __try {
-                            func();
-                            return 0;
-                        }
-                        __except (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
-                            return 1;
-                        }
-                    };
+                        using code_func = void(*)();
+                        using runner_func = u8(*)(code_func);
+                        runner_func runner = +[](code_func func) -> u8 {
+                            __try {
+                                func();
+                                return 0;
+                            }
+                            __except (EXCEPTION_EXECUTE_HANDLER) {
+                                return (GetExceptionCode() == EXCEPTION_ILLEGAL_INSTRUCTION) ? 1 : 2;
+                            }
+                        };
 
-                    const u8 runner_rc = runner(reinterpret_cast<code_func>(exec_mem));
+                        const u8 runner_rc = runner(reinterpret_cast<code_func>(exec_mem));
 
-                    /* Check if the target buffer was written to zero by CLZERO */
-                    bool memory_all_zero = false;
-                    if (amd_target_mem) {
-                        volatile u8* p = reinterpret_cast<volatile u8*>(amd_target_mem);
-                        memory_all_zero = true;
-                        for (SIZE_T i = 0; i < target_size; ++i) {
-                            if (p[i] != 0) { 
-                                memory_all_zero = false; 
-                                break; 
+                        /* Per the AMD APM, we need to order loads following CLZERO */
+                        _mm_mfence();
+
+                        /* Check if the target buffer was written to zero by CLZERO */
+                        bool memory_all_zero = false;
+                        if (amd_target_mem) {
+                            volatile u8* p = reinterpret_cast<volatile u8*>(amd_target_mem);
+                            memory_all_zero = true;
+                            for (SIZE_T i = 0; i < target_size; ++i) {
+                                if (p[i] != 0) {
+                                    memory_all_zero = false;
+                                    break;
+                                }
                             }
                         }
-                    }
 
-                    if (runner_rc == 0 && exception) {
-                        /* Only treat as spoofed if the CLZERO execution actually zeroed the target memory */
-                        if (memory_all_zero) {
-                            vma_debug("CPU_HEURISTIC: CPU reports being Intel, but VMAware detected a hypervisor running an AMD CPU in the host"); /* or another CPU vendor */
+                        if (runner_rc == 0 && exception) {
+                            /* Only treat as spoofed if the CLZERO execution actually zeroed the target memory */
+                            if (memory_all_zero) {
+                                vma_debug("CPU_HEURISTIC: CPU reports being Intel, but VMAware detected a hypervisor running an AMD CPU in the host"); /* or another CPU vendor */
+                                spoofed = true;
+                            }
+                            else {
+                                vma_debug("CPU_HEURISTIC: CLZERO returned without exception but target memory was NOT zeroed (NOP/emulated)");
+                            }
+                        }
+                        else if (runner_rc == 1 && !exception) {
+                            vma_debug("CPU_HEURISTIC: CPU reports being AMD, but VMAware detected a hypervisor running an Intel CPU in the host"); /* or another CPU vendor */
                             spoofed = true;
                         }
-                        else {
-                            vma_debug("CPU_HEURISTIC: CLZERO returned without exception but target memory was NOT zeroed (NOP/emulated)");
-                        }
-                    }
-                    else if (runner_rc == 1 && !exception) {
-                        vma_debug("CPU_HEURISTIC: CPU reports being AMD, but VMAware detected a hypervisor running an Intel CPU in the host"); /* or another CPU vendor */
-                        spoofed = true;
-                    }
-                    else if (runner_rc == 0 && !exception) {
-                        if (!memory_all_zero) {
-                            vma_debug("CPU_HEURISTIC: CPU reports being AMD, CLZERO executed but did NOT zero the target memory");
-                            spoofed = true;
+                        else if (runner_rc == 0 && !exception) {
+                            if (!memory_all_zero) {
+                                vma_debug("CPU_HEURISTIC: CPU reports being AMD, CLZERO executed but did NOT zero the target memory");
+                                spoofed = true;
+                            }
                         }
                     }
                 }
             }
-        }
 
-        if (exec_mem) {
-            free_base = exec_mem; free_size = 0;
-            nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
-            exec_mem = nullptr;
-        }
-        if (amd_target_mem) {
-            free_base = amd_target_mem; free_size = 0;
-            nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
-            amd_target_mem = nullptr;
+            if (exec_mem) {
+                free_base = exec_mem; free_size = 0;
+                nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
+                exec_mem = nullptr;
+            }
+            if (amd_target_mem) {
+                free_base = amd_target_mem; free_size = 0;
+                nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
+                amd_target_mem = nullptr;
+            }
         }
 
         if (spoofed) {
@@ -14024,6 +14112,9 @@ public:
                 u32 val = 0;
                 for (int i = 0; i < 4; ++i) {
                     const wchar_t c = p[i];
+                    if (c == L'\0') {
+                        return 0;
+                    }
                     u32 nib;
                     if (c >= L'0' && c <= L'9') {
                         nib = static_cast<u32>(c - L'0');
@@ -14042,11 +14133,12 @@ public:
             SP_DEVINFO_DATA dev_info_data{};
             dev_info_data.cbSize = sizeof(SP_DEVINFO_DATA);
 
-            wchar_t instance_id[256];
+            wchar_t instance_id[256] = {};
             int intel_hits = 0;
             int amd_hits = 0;
 
             for (DWORD i = 0; SetupDiEnumDeviceInfo(handle_dev_info, i, &dev_info_data); ++i) {
+                std::memset(instance_id, 0, sizeof(instance_id));
                 if (SetupDiGetDeviceInstanceIdW(handle_dev_info, &dev_info_data, instance_id, ARRAYSIZE(instance_id), nullptr)) {
                     if (((instance_id[0] | 0x20) == L'p') &&
                         ((instance_id[1] | 0x20) == L'c') &&
@@ -14069,6 +14161,7 @@ public:
                         }
                     }
                 }
+                dev_info_data.cbSize = sizeof(SP_DEVINFO_DATA);
             }
 
             SetupDiDestroyDeviceInfoList(handle_dev_info);
