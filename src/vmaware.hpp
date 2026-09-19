@@ -4688,6 +4688,9 @@ public:
 
         /* Checks if a std::string contains a substring (case-sensitive) */
         static VMAWARE_FORCE_INLINE bool contains(const std::string& base_str, const char* keyword) noexcept {
+            if (!keyword) {
+                return false;
+            }
             return base_str.find(keyword) != std::string::npos;
         }
 
@@ -8324,7 +8327,7 @@ public:
      * @implements VM::HYPERVISOR_DIR
      */
     [[nodiscard]] static bool hypervisor_dir() {
-        struct DirDeleter {
+        struct dir_deleter {
             void operator()(DIR* d) const {
                 if (d != nullptr) {
                     closedir(d);
@@ -8332,7 +8335,7 @@ public:
             }
         };
 
-        std::unique_ptr<DIR, DirDeleter> dir(opendir("/sys/hypervisor"));
+        std::unique_ptr<DIR, dir_deleter> dir(opendir("/sys/hypervisor"));
 
         if (dir == nullptr) {
             return false;
@@ -9135,7 +9138,7 @@ public:
      */
     [[nodiscard]] static bool azure() noexcept {
     #if (VMAWARE_WINDOWS)
-        char buf[MAX_COMPUTERNAME_LENGTH + 1];
+        char buf[MAX_COMPUTERNAME_LENGTH + 1] = { 0 };
         DWORD len = sizeof(buf);
 
         if (!GetComputerNameA(buf, &len) || len != 13) {
@@ -9160,7 +9163,7 @@ public:
             return false;
         }
 
-        const bool is_match = 
+        const bool is_match =
             string::is_alnum(buf[8]) &&
             string::is_alnum(buf[9]) &&
             string::is_alnum(buf[10]) &&
@@ -10230,23 +10233,30 @@ public:
             NTSTATUS st = nt_query_system_information(sys_boot_info, nullptr, 0, &needed);
             if (st != static_cast<NTSTATUS>(0xC0000023) &&
                 st != static_cast<NTSTATUS>(0x80000005) &&
-                st != static_cast<NTSTATUS>(0xC0000004)) { 
+                st != static_cast<NTSTATUS>(0xC0000004)) {
                 return false;
             }
-            std::vector<u8> buffer(needed);
+
+            constexpr ULONG max_buffer_size = 0x04000000; /* 64 MB cap */
+            if (needed < sizeof(boot_logo_info) || needed > max_buffer_size) {
+                return false;
+            }
+
+            const ULONG allocated = needed;
+            std::vector<u8> buffer(allocated);
 
             /* Fetch the boot-logo data */
-            st = nt_query_system_information(sys_boot_info, buffer.data(), needed, &needed);
+            st = nt_query_system_information(sys_boot_info, buffer.data(), allocated, &needed);
             if (!NT_SUCCESS(st)) {
                 return false;
             }
 
-            if (needed < sizeof(boot_logo_info)) {
+            if (needed < sizeof(boot_logo_info) || needed > buffer.size()) {
                 return false;
             }
 
             const auto* info = reinterpret_cast<const boot_logo_info*>(buffer.data());
-            if (info->bitmap_offset >= needed) {
+            if (info->bitmap_offset < sizeof(boot_logo_info) || info->bitmap_offset >= needed) {
                 return false;
             }
 
@@ -10260,25 +10270,29 @@ public:
             }
 
             const off_t size = lseek(fd, 0, SEEK_END);
-            if (size <= 0) {
+            constexpr off_t max_file_size = 0x04000000; /* 64 MB cap */
+            if (size <= 0 || size > max_file_size) {
                 vma_debug("BOOT_LOGO: failed to seek to the end");
                 close(fd);
                 return false;
             }
 
-            lseek(fd, 0, SEEK_SET);
+            if (lseek(fd, 0, SEEK_SET) < 0) {
+                close(fd);
+                return false;
+            }
 
-            std::vector<u8> buffer(size);
+            std::vector<u8> buffer(static_cast<size_t>(size));
             ssize_t read_size = 0;
             size_t off = 0;
             for (;;) {
-                read_size = read(fd, buffer.data() + off, size - off);
-                if (read_size <= 0) { 
-                    break; 
+                read_size = read(fd, buffer.data() + off, static_cast<size_t>(size) - off);
+                if (read_size <= 0) {
+                    break;
                 }
                 off += static_cast<size_t>(read_size);
-                if (off >= static_cast<size_t>(size)) { 
-                    break; 
+                if (off >= static_cast<size_t>(size)) {
+                    break;
                 }
             }
 
@@ -10293,11 +10307,11 @@ public:
 
         const u32 hash = util::hash::crc32c(0xFFFFFFFFu, bmp, size) ^ 0xFFFFFFFFu;
 
-        #if (VMAWARE_WINDOWS)
-            vma_debug("BOOT_LOGO: size=", needed, ", flags=", info->flags, ", offset=", info->bitmap_offset, ", crc=0x", std::hex, hash);
-        #else
-            vma_debug("BOOT_LOGO: size=", size, ", crc=0x", std::hex, hash);
-        #endif
+    #if (VMAWARE_WINDOWS)
+        vma_debug("BOOT_LOGO: size=", needed, ", flags=", info->flags, ", offset=", info->bitmap_offset, ", crc=0x", std::hex, hash);
+    #else
+        vma_debug("BOOT_LOGO: size=", size, ", crc=0x", std::hex, hash);
+    #endif
 
         switch (hash) {
             case 0x110350C5: return core::add(brand_enum::QEMU); /* TianoCore EDK2 */
@@ -10328,8 +10342,8 @@ public:
             }
             return (string::to_lower(str[0]) == 'q' &&
                 string::to_lower(str[1]) == 'm' &&
-                string::starts_with(str + 2, "0000"));
-        };
+                str[2] == '0' && str[3] == '0' && str[4] == '0' && str[5] == '0');
+         };
 
         /*
          * Helper to detect VirtualBox instances
@@ -10373,6 +10387,9 @@ public:
         #endif
 
         auto strnlen = [](const char* s, const size_t max) noexcept -> size_t {
+            if (!s) {
+                return 0;
+            }
             const void* p = std::memchr(s, 0, max);
             if (!p) {
                 return max;
@@ -10382,7 +10399,7 @@ public:
 
         constexpr u16 MAX_PHYSICAL_DRIVES = 256;
         constexpr size_t MAX_DESCRIPTOR_SIZE = 64 * 1024;
-        u8 successful_opens = 0;
+        u16 successful_opens = 0; // u16 to prevent overflow at 256, althought it would be extremely weird for a disk to have 256 drives
 
         const HMODULE ntdll = memory::get_module(true);
         if (!ntdll) {
@@ -10396,7 +10413,8 @@ public:
             "NtAllocateVirtualMemory",
             "NtFreeVirtualMemory",
             "NtFlushInstructionCache",
-            "NtClose"
+            "NtClose",
+            "NtWaitForSingleObject"
         };
         void* functions[ARRAYSIZE(function_names)] = {};
         memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
@@ -10407,6 +10425,7 @@ public:
         using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
         using ntclose_fn = NTSTATUS(__stdcall*)(HANDLE);
         using rtl_init_unicode_string_fn = void(__stdcall*)(PUNICODE_STRING, PCWSTR);
+        using nt_wait_for_single_object_fn = NTSTATUS(__stdcall*)(HANDLE, BOOLEAN, PLARGE_INTEGER);
 
         const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_fn>(functions[0]);
         const auto nt_open_file = reinterpret_cast<ntopenfile_fn>(functions[1]);
@@ -10414,19 +10433,21 @@ public:
         const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[3]);
         const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[4]);
         const auto nt_close = reinterpret_cast<ntclose_fn>(functions[6]);
+        const auto nt_wait_for_single_object = reinterpret_cast<nt_wait_for_single_object_fn>(functions[7]);
 
         if (!rtl_init_unicode_string || !nt_open_file || !nt_device_io_control_file ||
-            !nt_allocate_virtual_memory || !nt_free_virtual_memory || !nt_close) {
+            !nt_allocate_virtual_memory || !nt_free_virtual_memory || !nt_close ||
+            !nt_wait_for_single_object) {
             return result;
         }
 
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
+        const HANDLE current_process = reinterpret_cast<HANDLE>(static_cast<INT_PTR>(-1));
 
-        /* NVMe heuristic checks */     
+        /* NVMe heuristic checks */
         auto check_nvme_heuristics = [&](HANDLE dev) noexcept -> bool {
-        #pragma pack(push, 1)
-            struct ProtocolQuery {
-                STORAGE_PROPERTY_QUERY query;
+            struct protocol_descriptor {
+                DWORD Version;
+                DWORD Size;
                 struct {
                     DWORD ProtocolType;
                     DWORD DataType;
@@ -10437,12 +10458,31 @@ public:
                     DWORD FixedProtocolReturnData;
                     DWORD Reserved[3];
                 } protocol_data;
-            } qpacket{};
-        #pragma pack(pop)
+            };
 
             auto query_protocol = [&](const STORAGE_PROPERTY_ID prop_id, const DWORD data_type, const DWORD req_val, const DWORD req_sub_val, void* out_buf, const DWORD out_size) noexcept -> bool {
-                qpacket.query.PropertyId = prop_id;
-                qpacket.query.QueryType = PropertyStandardQuery;
+                const size_t header_size = sizeof(protocol_descriptor);
+                if (!out_buf || out_size == 0 || out_size > (MAX_DESCRIPTOR_SIZE - header_size)) {
+                    return false;
+                }
+
+                struct protocol_query {
+                    STORAGE_PROPERTY_ID PropertyId;
+                    STORAGE_QUERY_TYPE QueryType;
+                    struct {
+                        DWORD ProtocolType;
+                        DWORD DataType;
+                        DWORD ProtocolDataRequestValue;
+                        DWORD ProtocolDataRequestSubValue;
+                        DWORD ProtocolDataOffset;
+                        DWORD ProtocolDataLength;
+                        DWORD FixedProtocolReturnData;
+                        DWORD Reserved[3];
+                    } protocol_data;
+                } qpacket{};
+
+                qpacket.PropertyId = prop_id;
+                qpacket.QueryType = PropertyStandardQuery;
                 qpacket.protocol_data.ProtocolType = ProtocolTypeNvme;
                 qpacket.protocol_data.DataType = data_type;
                 qpacket.protocol_data.ProtocolDataRequestValue = req_val;
@@ -10450,7 +10490,6 @@ public:
                 qpacket.protocol_data.ProtocolDataOffset = sizeof(qpacket.protocol_data);
                 qpacket.protocol_data.ProtocolDataLength = out_size;
 
-                const size_t header_size = sizeof(ProtocolQuery);
                 const size_t total_size = header_size + out_size;
 
                 PVOID allocation_base = nullptr;
@@ -10461,7 +10500,7 @@ public:
                 }
 
                 RtlZeroMemory(allocation_base, total_size);
-                *reinterpret_cast<ProtocolQuery*>(allocation_base) = qpacket;
+                *reinterpret_cast<protocol_query*>(allocation_base) = qpacket;
 
                 IO_STATUS_BLOCK query_iosb{};
                 query_st = nt_device_io_control_file(dev, nullptr, nullptr, nullptr, &query_iosb,
@@ -10469,13 +10508,46 @@ public:
                     allocation_base, static_cast<ULONG>(total_size),
                     allocation_base, static_cast<ULONG>(total_size));
 
+                /* If STATUS_PENDING wait fails */
+                if (query_st == static_cast<NTSTATUS>(0x00000103L)) {
+                    NTSTATUS wait_st = nt_wait_for_single_object(dev, FALSE, nullptr);
+                    if (NT_SUCCESS(wait_st)) {
+                        query_st = query_iosb.Status;
+                    }
+                    else {
+                        query_st = static_cast<NTSTATUS>(0xC0000001L); // STATUS_UNSUCCESSFUL
+                    }
+                }
+
                 bool success = false;
                 if (NT_SUCCESS(query_st)) {
-                    BYTE* payload = reinterpret_cast<BYTE*>(allocation_base) + header_size;
-                    if (query_iosb.Information >= header_size + out_size) {
-                        std::memcpy(out_buf, payload, out_size);
-                        success = true;
-                    }   
+                    const size_t valid_len = (query_iosb.Information < total_size)
+                        ? static_cast<size_t>(query_iosb.Information)
+                        : total_size;
+
+                    if (valid_len >= header_size) {
+                        const auto* desc = reinterpret_cast<const protocol_descriptor*>(allocation_base);
+                        const size_t data_offset = desc->protocol_data.ProtocolDataOffset;
+                        const size_t reported_len = desc->protocol_data.ProtocolDataLength;
+
+                        if (reported_len >= out_size) {
+                            size_t payload_offset = 0;
+                            if (data_offset >= header_size) {
+                                payload_offset = data_offset;
+                            }
+                            else if (data_offset >= sizeof(desc->protocol_data)) {
+                                payload_offset = 8 + data_offset;
+                            }
+
+                            if (payload_offset >= header_size &&
+                                payload_offset <= valid_len &&
+                                out_size <= (valid_len - payload_offset)) {
+                                const BYTE* payload = reinterpret_cast<const BYTE*>(allocation_base) + payload_offset;
+                                std::memcpy(out_buf, payload, out_size);
+                                success = true;
+                            }
+                        }
+                    }
                 }
 
                 SIZE_T free_size = 0;
@@ -10483,11 +10555,12 @@ public:
                 return success;
             };
 
-            /* Verify dynamic virtualization & mamespace support without device self-test support */
+            /* Verify dynamic virtualization & namespace support without device self-test support */
             BYTE identify_ctrl[4096];
             RtlZeroMemory(identify_ctrl, sizeof(identify_ctrl));
             if (query_protocol(StorageAdapterProtocolSpecificProperty, 1, 0x01, 0, identify_ctrl, sizeof(identify_ctrl))) {
-                const u16 oacs = *reinterpret_cast<const u16*>(&identify_ctrl[256]);
+                u16 oacs = 0;
+                std::memcpy(&oacs, &identify_ctrl[256], sizeof(oacs));
                 const bool supports_virtualization_mgmt = (oacs & (1 << 8)) != 0;
                 const bool supports_namespace_mgmt = (oacs & (1 << 3)) != 0;
                 const bool lacks_self_test = (oacs & (1 << 4)) == 0;
@@ -10498,7 +10571,7 @@ public:
                 }
             }
 
-            /* Verify if the drive supports exactly 8 formats containing metadata, enabled logical sectors  */
+            /* Verify if the drive supports exactly 8 formats containing metadata, enabled logical sectors */
             BYTE identify_ns[4096];
             RtlZeroMemory(identify_ns, sizeof(identify_ns));
             if (query_protocol(StorageDeviceProtocolSpecificProperty, 1, 0x00, 1, identify_ns, sizeof(identify_ns))) {
@@ -10506,8 +10579,9 @@ public:
                 if (nlbaf == 7) { /* 8 available formats */
                     bool has_metadata_option = false;
                     for (int i = 0; i < 8; ++i) {
-                        const size_t entry_offset = 128 + (static_cast<size_t>(i) * 4); /* LBA Format Table starts at offset 128 */
-                        const u16 ms = *reinterpret_cast<const u16*>(&identify_ns[entry_offset]);
+                        const size_t entry_offset = 128 + (static_cast<size_t>(i) * 4);
+                        u16 ms = 0;
+                        std::memcpy(&ms, &identify_ns[entry_offset], sizeof(ms));
                         if (ms != 0) {
                             has_metadata_option = true;
                             break;
@@ -10521,7 +10595,7 @@ public:
             }
 
             return false;
-        };
+         };
 
         /* Iterate through all physical drives, we put 256 as the physical limit */
         for (u16 drive = 0; drive < MAX_PHYSICAL_DRIVES; ++drive) {
@@ -10538,14 +10612,13 @@ public:
             object_attributes.Attributes = OBJ_CASE_INSENSITIVE;
             object_attributes.RootDirectory = nullptr;
 
-            IO_STATUS_BLOCK iosb;
+            IO_STATUS_BLOCK iosb{};
             HANDLE device = nullptr;
 
             constexpr ACCESS_MASK desired_access = SYNCHRONIZE | FILE_READ_ATTRIBUTES;
             constexpr ULONG share_access = FILE_SHARE_READ | FILE_SHARE_WRITE;
             constexpr ULONG open_options = FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT;
 
-            /* Attempt to open the physical drive directly using Native API */
             NTSTATUS st = nt_open_file(&device, desired_access, &object_attributes, &iosb, share_access, open_options);
             if (!NT_SUCCESS(st) || device == nullptr) {
                 continue;
@@ -10558,11 +10631,7 @@ public:
                 return true;
             }
 
-            /*
-             * Stack buffer attempt
-             * we first try to read the storage properties into a small stack buffer to avoid heap
-             */
-            BYTE stack_buffer[512] = { 0 };
+            alignas(STORAGE_DEVICE_DESCRIPTOR) BYTE stack_buffer[512] = { 0 };
             const STORAGE_DEVICE_DESCRIPTOR* descriptor = reinterpret_cast<STORAGE_DEVICE_DESCRIPTOR*>(stack_buffer);
 
             STORAGE_PROPERTY_QUERY query{};
@@ -10576,21 +10645,32 @@ public:
                 &query, sizeof(query),
                 stack_buffer, sizeof(stack_buffer));
 
+            /* We need to handle STATUS_PENDING synchronously */
+            if (st == static_cast<NTSTATUS>(0x00000103L)) {
+                NTSTATUS wait_st = nt_wait_for_single_object(device, FALSE, nullptr);
+                if (NT_SUCCESS(wait_st)) {
+                    st = iosb.Status;
+                }
+                else {
+                    st = static_cast<NTSTATUS>(0xC0000001L);
+                }
+            }
+
             BYTE* allocated_buffer = nullptr;
             SIZE_T allocated_size = 0;
 
-            /*
-             * If the stack buffer was too small (NtDeviceIoControlFile failed), we fall back
-             * to allocating memory dynamically using NtAllocateVirtualMemory
-             */
-            if (!NT_SUCCESS(st)) {
-                DWORD reported_size = 0;
-                if (descriptor && descriptor->Size > 0) {
-                    reported_size = descriptor->Size;
-                }
+            const bool has_initial_descriptor = (iosb.Information >= sizeof(STORAGE_DEVICE_DESCRIPTOR));
+            const bool is_overflow = (st == static_cast<NTSTATUS>(0x80000005L));
+            const bool need_realloc = has_initial_descriptor && (
+                (is_overflow && descriptor->Size >= sizeof(STORAGE_DEVICE_DESCRIPTOR)) ||
+                (NT_SUCCESS(st) && descriptor->Size > sizeof(stack_buffer))
+            );
 
-                /* This branch just ensures the requested size is reasonable before allocating */
-                if (reported_size > 0 && reported_size < static_cast<DWORD>(MAX_DESCRIPTOR_SIZE) && reported_size >= sizeof(STORAGE_DEVICE_DESCRIPTOR)) {
+            if (need_realloc) {
+                const DWORD reported_size = descriptor->Size;
+                if (reported_size >= sizeof(STORAGE_DEVICE_DESCRIPTOR) &&
+                    reported_size <= static_cast<DWORD>(MAX_DESCRIPTOR_SIZE)) {
+
                     allocated_size = static_cast<SIZE_T>(reported_size);
                     PVOID allocation_base = nullptr;
                     SIZE_T region_size = allocated_size;
@@ -10601,12 +10681,22 @@ public:
                     }
                     allocated_buffer = reinterpret_cast<BYTE*>(allocation_base);
 
-                    /* Retry the query with the larger allocated buffer */
+                    iosb = {};
                     st = nt_device_io_control_file(device, nullptr, nullptr, nullptr, &iosb, ioctl, &query, sizeof(query), allocated_buffer, static_cast<ULONG>(allocated_size));
+                    if (st == static_cast<NTSTATUS>(0x00000103L)) {
+                        NTSTATUS wait_st = nt_wait_for_single_object(device, FALSE, nullptr);
+                        if (NT_SUCCESS(wait_st)) {
+                            st = iosb.Status;
+                        }
+                        else {
+                            st = static_cast<NTSTATUS>(0xC0000001L);
+                        }
+                    }
                     if (!NT_SUCCESS(st)) {
                         PVOID free_base = reinterpret_cast<PVOID>(allocated_buffer);
                         SIZE_T free_size = 0;
                         nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
+                        allocated_buffer = nullptr;
                         nt_close(device);
                         continue;
                     }
@@ -10617,43 +10707,60 @@ public:
                     continue;
                 }
             }
-
-            /* Determine the physical boundary of the buffer currently in use */
-            const size_t current_buffer_size = allocated_buffer ? allocated_size : sizeof(stack_buffer);
-
-            /* This part is just to validate the structure size returned by the driver to prevent out-of-bounds reads */
-            {
-                const DWORD reported_size = descriptor->Size;
-                if (reported_size < sizeof(STORAGE_DEVICE_DESCRIPTOR) ||
-                    static_cast<SIZE_T>(reported_size) > MAX_DESCRIPTOR_SIZE ||
-                    static_cast<SIZE_T>(reported_size) > current_buffer_size) { // Bound reported size to current physical buffer size
-                    if (allocated_buffer) {
-                        PVOID free_base = reinterpret_cast<PVOID>(allocated_buffer);
-                        SIZE_T free_size = 0;
-                        nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
-                        allocated_buffer = nullptr;
-                    }
-                    nt_close(device);
-                    continue;
-                }
+            else if (!NT_SUCCESS(st)) {
+                nt_close(device);
+                continue;
             }
 
-            /* Restrict validation and scanning limits strictly to the active initialized portion */
-            const size_t active_size = (static_cast<size_t>(descriptor->Size) < current_buffer_size)
-                ? static_cast<size_t>(descriptor->Size)
-                : current_buffer_size;
+            const size_t current_buffer_size = allocated_buffer ? allocated_size : sizeof(stack_buffer);
 
-            /* Serial number string within the descriptor structure */
+            /* Validate that the full descriptor was successfully populated */
+            if (iosb.Information < sizeof(STORAGE_DEVICE_DESCRIPTOR)) {
+                if (allocated_buffer) {
+                    PVOID free_base = reinterpret_cast<PVOID>(allocated_buffer);
+                    SIZE_T free_size = 0;
+                    nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
+                    allocated_buffer = nullptr;
+                }
+                nt_close(device);
+                continue;
+            }
+
+            const DWORD reported_size = descriptor->Size;
+            if (reported_size < sizeof(STORAGE_DEVICE_DESCRIPTOR) ||
+                static_cast<SIZE_T>(reported_size) > MAX_DESCRIPTOR_SIZE ||
+                static_cast<SIZE_T>(reported_size) > current_buffer_size) {
+                if (allocated_buffer) {
+                    PVOID free_base = reinterpret_cast<PVOID>(allocated_buffer);
+                    SIZE_T free_size = 0;
+                    nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
+                    allocated_buffer = nullptr;
+                }
+                nt_close(device);
+                continue;
+            }
+
+            const size_t valid_bytes = (static_cast<size_t>(iosb.Information) < current_buffer_size)
+                ? static_cast<size_t>(iosb.Information)
+                : current_buffer_size;
+            const size_t active_size = (static_cast<size_t>(descriptor->Size) < valid_bytes)
+                ? static_cast<size_t>(descriptor->Size)
+                : valid_bytes;
+
             const u32 serial_offset = descriptor->SerialNumberOffset;
-            if (serial_offset > 0 && static_cast<size_t>(serial_offset) < active_size) {
+            if (serial_offset >= sizeof(STORAGE_DEVICE_DESCRIPTOR) && static_cast<size_t>(serial_offset) < active_size) {
                 const char* serial = reinterpret_cast<const char*>(descriptor) + serial_offset;
                 const size_t max_avail = active_size - static_cast<size_t>(serial_offset);
                 const size_t serialLen = strnlen(serial, max_avail);
 
-                vma_debug("DISK_SERIAL: ", serial);
+                char safe_serial[256] = {};
+                const size_t copy_len = (serialLen < sizeof(safe_serial) - 1) ? serialLen : sizeof(safe_serial) - 1;
+                std::memcpy(safe_serial, serial, copy_len);
+                safe_serial[copy_len] = '\0';
 
-                /* Check the retrieved serial number against known VM artifacts */
-                if (is_qemu_serial(serial, serialLen) || is_vbox_serial(serial, serialLen)) {
+                vma_debug("DISK: ", safe_serial);
+
+                if (is_qemu_serial(safe_serial, copy_len) || is_vbox_serial(safe_serial, copy_len)) {
                     if (allocated_buffer) {
                         PVOID free_base = reinterpret_cast<PVOID>(allocated_buffer);
                         SIZE_T free_size = 0;
@@ -10665,7 +10772,6 @@ public:
                 }
             }
 
-            /* Cleanup for the current iteration if no VM was detected on this drive */
             if (allocated_buffer) {
                 PVOID free_base = reinterpret_cast<PVOID>(allocated_buffer);
                 SIZE_T free_size = 0;
@@ -10675,13 +10781,12 @@ public:
             nt_close(device);
         }
 
-        /* If we couldn't open any physical drives (not even read permissions) it's weird so we flag it. */
         if (successful_opens == 0) {
-            vma_debug("DISK_SERIAL: No physical drives detected");
+            vma_debug("DISK: No physical drives detected");
             return true;
         }
     #else
-        struct DirDeleter {
+        struct dir_deleter {
             void operator()(DIR* d) const {
                 if (d != nullptr) {
                     closedir(d);
@@ -10689,7 +10794,7 @@ public:
             }
         };
 
-        std::unique_ptr<DIR, DirDeleter> dir(opendir("/sys/block"));
+        std::unique_ptr<DIR, dir_deleter> dir(opendir("/sys/block"));
         if (!dir) {
             return false;
         }
@@ -10710,9 +10815,11 @@ public:
                 const char sys_block_str[] = "/sys/block/";
                 const char device_serial_str[] = "/device/serial";
 
-                /* /sys/block/%s/device/serial */
-                char buf[sizeof(dirent::d_name) + sizeof(sys_block_str) + sizeof(device_serial_str)];
-                snprintf(buf, sizeof(buf), "%s%s%s", sys_block_str, name, device_serial_str);
+                char buf[512];
+                int written = snprintf(buf, sizeof(buf), "%s%s%s", sys_block_str, name, device_serial_str);
+                if (written < 0 || static_cast<size_t>(written) >= sizeof(buf)) {
+                    continue;
+                }
 
                 const int fd = open(buf, O_RDONLY);
                 if (fd < 0) {
@@ -10722,19 +10829,24 @@ public:
                 char serial[1024] = {};
                 const ssize_t rsize = read(fd, serial, sizeof(serial) - 1);
                 close(fd);
-                if (rsize < 0) {
+                if (rsize <= 0) {
                     continue;
                 }
 
-                vma_debug("DISK_SERIAL: ", (const char*)serial);
-                if (is_qemu_serial(serial, static_cast<size_t>(rsize)) || is_vbox_serial(serial, static_cast<size_t>(rsize))) {
+                serial[static_cast<size_t>(rsize)] = '\0';
+                size_t valid_len = static_cast<size_t>(rsize);
+                while (valid_len > 0 && (serial[valid_len - 1] == '\n' || serial[valid_len - 1] == '\r' || serial[valid_len - 1] == ' ')) {
+                    serial[--valid_len] = '\0';
+                }
+
+                vma_debug("DISK: ", static_cast<const char*>(serial));
+                if (is_qemu_serial(serial, valid_len) || is_vbox_serial(serial, valid_len)) {
                     result = true;
+                    break;
                 }
             }
         }
-
-        dir.reset();
-    #endif
+        #endif
         return result;
     }
 #endif
