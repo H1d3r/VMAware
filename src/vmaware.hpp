@@ -11517,24 +11517,37 @@ public:
             return false;
         }
 
-        auto is_inside_vpc = [](PEXCEPTION_POINTERS ep) noexcept -> DWORD {
-            if (ep && ep->ExceptionRecord && ep->ContextRecord) {
-                if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ILLEGAL_INSTRUCTION) {
-                    const u8* ip = reinterpret_cast<const u8*>(ep->ExceptionRecord->ExceptionAddress);
+        auto is_inside_vpc = [](PEXCEPTION_POINTERS ep) noexcept -> LONG {
+            if (!ep ||
+                !ep->ExceptionRecord ||
+                !ep->ContextRecord ||
+                ep->ExceptionRecord->ExceptionCode != EXCEPTION_ILLEGAL_INSTRUCTION) {
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
 
-                    __try {
-                        if (ip && ip[0] == 0x0F && ip[1] == 0x3F && ip[2] == 0x07 && ip[3] == 0x0B) {
-                            PCONTEXT ctx = ep->ContextRecord;
-                            ctx->Ebx = static_cast<DWORD>(-1); /* Not running VPC */
-                            ctx->Eip += 4; /* skip past the 4-byte invalid instruction */
-                            return EXCEPTION_CONTINUE_EXECUTION;
-                        }
-                    }
-                    __except (EXCEPTION_EXECUTE_HANDLER) {
-                        return EXCEPTION_CONTINUE_SEARCH;
-                    }
+            const DWORD eip = ep->ContextRecord->Eip;
+            const auto* ip = reinterpret_cast<const u8*>(static_cast<std::uintptr_t>(eip));
+
+            if (reinterpret_cast<std::uintptr_t>(
+                ep->ExceptionRecord->ExceptionAddress) != eip) {
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
+
+            __try {
+                if (eip > 0xFFFFFFFFu - 4) {
+                    return EXCEPTION_CONTINUE_SEARCH;
+                }
+
+                if (ip[0] == 0x0F && ip[1] == 0x3F && ip[2] == 0x07 && ip[3] == 0x0B) {
+                    ep->ContextRecord->Ebx = 0xFFFFFFFFu;
+                    ep->ContextRecord->Eip = eip + 4;
+                    return EXCEPTION_CONTINUE_EXECUTION;
                 }
             }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
+
             return EXCEPTION_CONTINUE_SEARCH;
         };
 
@@ -11584,12 +11597,15 @@ public:
         }
 
         u16 tr = 0;
-        __asm {
-            str ax
-            mov tr, ax
-        }
+        #if (VMAWARE_MSVC)
+            __asm {
+                str tr
+            }
+        #elif (VMAWARE_GCC || VMAWARE_CLANG)
+            __asm__ __volatile__("str %0" : "=m"(tr));
+        #endif
 
-        if ((tr & 0xFF) == 0x00 && ((tr >> 8) & 0xFF) == 0x40) {
+        if (tr == 0x4000) {
             return core::add(brand_enum::VMWARE);
         }
 
@@ -11630,41 +11646,41 @@ public:
         }
 
         auto try_mutex_name = [&](const wchar_t* base_name) noexcept -> bool {
+            const size_t name_len = wcslen(base_name);
+            // UNICODE_STRING Length is USHORT (bytes); protect against 16-bit integer truncation
+            if (name_len == 0 || name_len > 32766) {
+                return false;
+            }
+
             constexpr wchar_t prefix[] = L"\\BaseNamedObjects\\";
             constexpr size_t prefix_len = (sizeof(prefix) / sizeof(wchar_t)) - 1;
-            wchar_t full_path[260];
+            wchar_t full_path[260] = {};
 
-            /* Memcpy as it is faster than wcscpy/wcscat */
-            std::memcpy(full_path, prefix, sizeof(prefix)); 
-
-            const size_t name_len = wcslen(base_name);
-            if (prefix_len + name_len < 260) {
+            if (prefix_len + name_len < (sizeof(full_path) / sizeof(wchar_t))) {
+                std::memcpy(full_path, prefix, prefix_len * sizeof(wchar_t));
                 std::memcpy(full_path + prefix_len, base_name, (name_len + 1) * sizeof(wchar_t));
-            }
-            else {
-                /* Should not happen for standard VM artifacts */
-                full_path[0] = L'\0';
             }
 
             const wchar_t* attempts[] = { full_path, base_name };
 
             for (const wchar_t* path : attempts) {
-                if (*path == L'\0') continue;
+                if (!path || *path == L'\0') {
+                    continue;
+                }
 
                 UNICODE_STRING u_name;
                 rtl_init_unicode_string(&u_name, path);
 
-                OBJECT_ATTRIBUTES obj_attr;
-                std::memset(&obj_attr, 0, sizeof(obj_attr));
-                obj_attr.Length = sizeof(obj_attr);
-                obj_attr.ObjectName = &u_name;
-                obj_attr.Attributes = OBJ_CASE_INSENSITIVE;
+                OBJECT_ATTRIBUTES obj_attr{};
+                InitializeObjectAttributes(&obj_attr, &u_name, OBJ_CASE_INSENSITIVE, nullptr, nullptr);
 
                 HANDLE h_mutant = nullptr;
                 const NTSTATUS st = nt_open_mutant(&h_mutant, MUTANT_QUERY_STATE, &obj_attr);
 
                 if (NT_SUCCESS(st)) {
-                    if (h_mutant) nt_close(h_mutant);
+                    if (h_mutant && h_mutant != INVALID_HANDLE_VALUE) {
+                        nt_close(h_mutant);
+                    }
                     return true;
                 }
             }
@@ -11737,8 +11753,8 @@ public:
             /* Cuckoo Pipe */
             {
                 L"\\??\\pipe\\cuckoo",
-                FILE_READ_DATA | FILE_READ_ATTRIBUTES,
-                0,
+                FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
                 FILE_OPEN | FILE_SYNCHRONOUS_IO_NONALERT
             }
         };
@@ -11747,21 +11763,26 @@ public:
             UNICODE_STRING path;
             rtl_init_unicode_string(&path, target.path);
 
-            OBJECT_ATTRIBUTES object_attributes;
-            ZeroMemory(&object_attributes, sizeof(object_attributes));
-            object_attributes.Length = sizeof(object_attributes);
-            object_attributes.ObjectName = &path;
-            object_attributes.Attributes = OBJ_CASE_INSENSITIVE;
+            OBJECT_ATTRIBUTES object_attributes{};
+            InitializeObjectAttributes(&object_attributes, &path, OBJ_CASE_INSENSITIVE, nullptr, nullptr);
 
             IO_STATUS_BLOCK iosb{};
             HANDLE handle = nullptr;
 
-            const NTSTATUS st = nt_open_file(&handle, target.desired_access, &object_attributes, &iosb, target.share_access, target.open_options);
+            const NTSTATUS st = nt_open_file(
+                &handle,
+                target.desired_access,
+                &object_attributes,
+                &iosb,
+                target.share_access,
+                target.open_options
+            );
+
             if (NT_SUCCESS(st)) {
                 if (handle) {
                     nt_close(handle);
                 }
-                return core::add(brand_enum::CUCKOO);
+                return true;
             }
         }
 
@@ -11776,16 +11797,15 @@ public:
      */
     [[nodiscard]] static bool display() {
         const HDC hdc = GetDC(nullptr);
+        if (!hdc) {
+            return false;
+        }
+
         const int bpp = GetDeviceCaps(hdc, BITSPIXEL) * GetDeviceCaps(hdc, PLANES);
         const int logpix = GetDeviceCaps(hdc, LOGPIXELSX);
         ReleaseDC(nullptr, hdc);
 
-        /* Physical monitors are almost always 32bpp and 96–144 DPI */
-        if (bpp != 32 || logpix < 90) {
-            return true;
-        }
-
-        return false;
+        return (bpp != 32 || logpix < 90);
     }
 
 
@@ -12221,30 +12241,37 @@ public:
         constexpr const char* function_names[] = { "NtOpenKey", "NtQueryObject", "NtClose" };
         void* functions[ARRAYSIZE(function_names)] = {};
         memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
-    
+
+        using POBJECT_ATTRIBUTES = OBJECT_ATTRIBUTES*;
         using POBJECT_NAME_INFORMATION = OBJECT_NAME_INFORMATION*;
         using nt_open_key_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
         using nt_query_object_fn = NTSTATUS(__stdcall*)(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+        using nt_close_fn = NTSTATUS(__stdcall*)(HANDLE);
 
         const auto nt_open_key = reinterpret_cast<nt_open_key_fn>(functions[0]);
         const auto nt_query_object = reinterpret_cast<nt_query_object_fn>(functions[1]);
-        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[2]);
+        const auto nt_close = reinterpret_cast<nt_close_fn>(functions[2]);
 
         if (!nt_open_key || !nt_query_object || !nt_close) {
             return false;
         }
 
         /* Prepare to open the root USER registry hive */
-        UNICODE_STRING key_path{};
-        key_path.Buffer = const_cast<PWSTR>(L"\\REGISTRY\\USER");
-        key_path.Length = static_cast<USHORT>(wcslen(key_path.Buffer) * sizeof(WCHAR));
-        key_path.MaximumLength = key_path.Length + sizeof(WCHAR);
+        constexpr wchar_t raw_target[] = L"\\REGISTRY\\USER";
+        constexpr USHORT target_char_count = static_cast<USHORT>((sizeof(raw_target) / sizeof(wchar_t)) - 1);
+        constexpr USHORT target_byte_length = target_char_count * sizeof(wchar_t);
 
+        UNICODE_STRING key_path{};
+        key_path.Buffer = const_cast<PWSTR>(raw_target);
+        key_path.Length = target_byte_length;
+        key_path.MaximumLength = target_byte_length + sizeof(wchar_t);
+
+        constexpr ULONG obj_case_insensitive = 0x00000040L;
         OBJECT_ATTRIBUTES object_attributes = {
             sizeof(OBJECT_ATTRIBUTES),
             nullptr,
             &key_path,
-            0x00000040L,  /* OBJ_CASE_INSENSITIVE */
+            obj_case_insensitive,
             nullptr,
             nullptr
         };
@@ -12254,7 +12281,7 @@ public:
          * but the underlying handle will point to a virtualized container, not the real OS path
          */
         HANDLE key = nullptr;
-        NTSTATUS status = nt_open_key(&key, KEY_READ, reinterpret_cast<POBJECT_ATTRIBUTES>(&object_attributes));
+        NTSTATUS status = nt_open_key(&key, KEY_READ, &object_attributes);
         if (!(((NTSTATUS)(status)) >= 0)) {
             return false;
         }
@@ -12270,23 +12297,50 @@ public:
         status = nt_query_object(key, ObjectNameInformation, buffer, sizeof(buffer), &returned_length);
         nt_close(key);
 
+        /*
+         * STATUS_INFO_LENGTH_MISMATCH (0xC0000004) or STATUS_BUFFER_OVERFLOW (0x80000005)
+         * The authentic "\REGISTRY\USER" requires < 50 bytes. If 1024 bytes is insufficient,
+         * the path has definitively been redirected
+         */
+        if (status == static_cast<NTSTATUS>(0xC0000004L) || status == static_cast<NTSTATUS>(0x80000005L)) {
+            return core::add(brand_enum::SANDBOXIE);
+        }
+
         if (!(((NTSTATUS)(status)) >= 0)) {
             return false;
         }
+
+        if (returned_length < sizeof(OBJECT_NAME_INFORMATION)) {
+            return false;
+        }
+
         const auto object_name = reinterpret_cast<POBJECT_NAME_INFORMATION>(buffer);
 
-        UNICODE_STRING expected_name{};
-        expected_name.Buffer = const_cast<PWSTR>(L"\\REGISTRY\\USER");
-        expected_name.Length = static_cast<USHORT>(wcslen(expected_name.Buffer) * sizeof(WCHAR));
+        if (object_name->Name.Buffer == nullptr || object_name->Name.Length == 0) {
+            return false;
+        }
+
+        const auto buf_start = reinterpret_cast<uintptr_t>(buffer);
+        const auto valid_end = buf_start + returned_length;
+        const auto str_start = reinterpret_cast<uintptr_t>(object_name->Name.Buffer);
+
+        if (str_start < buf_start || str_start >= valid_end ||
+            object_name->Name.Length >(valid_end - str_start)) {
+            return false;
+        }
 
         /*
          * Compare the requested name vs the actual kernel object name
          * If they don't match, we have been redirected, confirming the presence of Sandboxie
          */
-        const bool mismatch = 
-            (object_name->Name.Length != expected_name.Length) ||
-            (object_name->Name.Buffer == nullptr) ||
-            (std::memcmp(object_name->Name.Buffer, expected_name.Buffer, expected_name.Length) != 0);
+        bool mismatch = false;
+
+        if (object_name->Name.Length != target_byte_length) {
+            mismatch = true;
+        }
+        else {
+            mismatch = (_wcsnicmp(object_name->Name.Buffer, raw_target, target_char_count) != 0);
+        }
 
         return mismatch ? core::add(brand_enum::SANDBOXIE) : false;
     }
