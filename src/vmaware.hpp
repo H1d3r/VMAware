@@ -12066,19 +12066,21 @@ public:
                 return false;
             }
 
-            // if the driver cannot adjust the display gamma ramp dynamically but only in full-screen mode—via the IDirect3DDevice9::SetGammaRamp API
+            // If the driver cannot adjust the display gamma ramp dynamically but only in full-screen mode—via the IDirect3DDevice9::SetGammaRamp API 
             return !(caps.Caps2 & D3DCAPS2_FULLSCREENGAMMA);
         */
 
         const HDC hdc = GetDC(nullptr);
         if (!hdc) {
-            return true;
+            /* Headless environments cannot open a DC, so we return false to avoid false positives */
+            return false;
         }
 
         const int color_caps = GetDeviceCaps(hdc, COLORMGMTCAPS);
         ReleaseDC(nullptr, hdc);
 
-        return !(color_caps & CM_GAMMA_RAMP) || color_caps == 0;
+        /* If GetDeviceCaps failed or does not have dynamic gamma support */
+        return !(color_caps & CM_GAMMA_RAMP);
     }
 
 
