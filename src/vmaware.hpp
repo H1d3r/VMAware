@@ -11644,6 +11644,10 @@ public:
         }
 
         auto try_mutex_name = [&](const wchar_t* base_name) noexcept -> bool {
+            if (!base_name) {
+                return false;
+            }
+
             const size_t name_len = wcslen(base_name);
             // UNICODE_STRING Length is USHORT (bytes); protect against 16-bit integer truncation
             if (name_len == 0 || name_len > 32766) {
@@ -11830,9 +11834,6 @@ public:
             _SYSTEM_MODULE_INFORMATION Module[1];
         };
 
-        using SYSTEM_MODULE_INFORMATION = _SYSTEM_MODULE_INFORMATION;
-        using PSYSTEM_MODULE_INFORMATION = _SYSTEM_MODULE_INFORMATION*;
-        using SYSTEM_MODULE_INFORMATION_EX = _SYSTEM_MODULE_INFORMATION_EX;
         using PSYSTEM_MODULE_INFORMATION_EX = _SYSTEM_MODULE_INFORMATION_EX*;
 
         typedef struct _KEY_FULL_INFORMATION {
@@ -11847,20 +11848,12 @@ public:
             ULONG         MaxValueNameLen;
             ULONG         MaxValueDataLen;
             WCHAR         Class[1];
-        } KEY_FULL_INFORMATION, * PKEY_FULL_INFORMATION;
+        } KEY_FULL_INFORMATION;
 
         typedef enum _KEY_INFORMATION_CLASS {
             KeyBasicInformation,
             KeyNodeInformation,
-            KeyFullInformation,
-            KeyNameInformation,
-            KeyCachedInformation,
-            KeyFlagsInformation,
-            KeyVirtualizationInformation,
-            KeyHandleTagsInformation,
-            KeyTrustInformation,
-            KeyLayerInformation,
-            MaxKeyInfoClass
+            KeyFullInformation
         } KEY_INFORMATION_CLASS;
 
         constexpr ULONG system_module_information = 11;
@@ -11878,95 +11871,110 @@ public:
             "NtQueryKey",
             "NtClose"
         };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        constexpr size_t num_functions = sizeof(function_names) / sizeof(function_names[0]);
+        void* functions[num_functions] = {};
+        memory::get_function(ntdll, function_names, functions, static_cast<ULONG>(num_functions));
 
-        using nt_query_system_information_fn = NTSTATUS(__stdcall*)(ULONG SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength);
-        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(
-            HANDLE ProcessHandle,
-            PVOID* BaseAddress,
-            ULONG_PTR ZeroBits,
-            PSIZE_T RegionSize,
-            ULONG AllocationType,
-            ULONG Protect
-        );
-        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE ProcessHandle, PVOID* BaseAddress, PSIZE_T RegionSize, ULONG FreeType);
+        using nt_query_system_information_fn = NTSTATUS(__stdcall*)(ULONG, PVOID, ULONG, PULONG);
+        using nt_allocate_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
+        using nt_free_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG);
+        using rtl_init_unicode_string_fn = void(__stdcall*)(PUNICODE_STRING, PCWSTR);
+        using nt_open_key_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+        using nt_query_key_fn = NTSTATUS(__stdcall*)(HANDLE, KEY_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+        using nt_close_fn = NTSTATUS(__stdcall*)(HANDLE);
 
         const auto nt_query_system_information = reinterpret_cast<nt_query_system_information_fn>(functions[0]);
         const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[1]);
         const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[2]);
-        const auto rtl_init_unicode_string = reinterpret_cast<void(__stdcall*)(PUNICODE_STRING, PCWSTR)>(functions[3]);
-        const auto nt_open_key = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[4]);
-        const auto nt_query_key = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, KEY_INFORMATION_CLASS, PVOID, ULONG, PULONG)>(functions[5]);
-        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[6]);
+        const auto rtl_init_unicode_string = reinterpret_cast<rtl_init_unicode_string_fn>(functions[3]);
+        const auto nt_open_key = reinterpret_cast<nt_open_key_fn>(functions[4]);
+        const auto nt_query_key = reinterpret_cast<nt_query_key_fn>(functions[5]);
+        const auto nt_close = reinterpret_cast<nt_close_fn>(functions[6]);
 
-        if (nt_query_system_information == nullptr || nt_allocate_virtual_memory == nullptr || nt_free_virtual_memory == nullptr ||
-            rtl_init_unicode_string == nullptr || nt_open_key == nullptr || nt_query_key == nullptr || nt_close == nullptr) { 
+        if (!nt_query_system_information || !nt_allocate_virtual_memory || !nt_free_virtual_memory ||
+            !rtl_init_unicode_string || !nt_open_key || !nt_query_key || !nt_close) {
             return false;
         }
+
+        const HANDLE current_process = reinterpret_cast<HANDLE>(static_cast<LONG_PTR>(-1));
+        brand_enum detected_brand = brand_enum::NULL_BRAND;
 
         ULONG ul_size = 0;
         NTSTATUS status = nt_query_system_information(system_module_information, nullptr, 0, &ul_size);
-        if (status != ((NTSTATUS)0xC0000004L)) {
-            return false;
-        }
 
-        const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-        PVOID allocated_memory = nullptr;
-        SIZE_T region_size = ul_size;
-        nt_allocate_virtual_memory(current_process, &allocated_memory, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (status == static_cast<NTSTATUS>(0xC0000004L) && ul_size > 0) {
+            /* 16KB padding to prevent race conditions if drivers load between calls */
+            ul_size += (4096 * 4);
 
-        const auto system_module_info_ex = reinterpret_cast<PSYSTEM_MODULE_INFORMATION_EX>(allocated_memory);
-        status = nt_query_system_information(system_module_information, system_module_info_ex, ul_size, &ul_size);
-        if (!(((NTSTATUS)(status)) >= 0)) {
-            region_size = 0;
-            nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
-            return false;
-        }
+            PVOID allocated_memory = nullptr;
+            SIZE_T region_size = ul_size;
 
-        constexpr size_t header_size = offsetof(_SYSTEM_MODULE_INFORMATION_EX, Module);
-        if (ul_size <= header_size) {
-            SIZE_T free_sz = 0;
-            nt_free_virtual_memory(current_process, &allocated_memory, &free_sz, MEM_RELEASE);
-            return false;
-        }
+            status = nt_allocate_virtual_memory(
+                current_process,
+                &allocated_memory,
+                0,
+                &region_size,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE
+            );
 
-        const size_t max_modules = (ul_size - header_size) / sizeof(_SYSTEM_MODULE_INFORMATION);
-        const ULONG number_of_modules = (system_module_info_ex->NumberOfModules < max_modules)
-            ? system_module_info_ex->NumberOfModules
-            : static_cast<ULONG>(max_modules);
+            if (NT_SUCCESS(status) && allocated_memory != nullptr) {
+                ULONG return_length = 0;
+                status = nt_query_system_information(
+                    system_module_information,
+                    allocated_memory,
+                    static_cast<ULONG>(region_size),
+                    &return_length
+                );
 
-        for (ULONG i = 0; i < number_of_modules; ++i) {
-            char driver_name[257] = { 0 };
-            std::memcpy(driver_name, system_module_info_ex->Module[i].ImageName, 256);
-            driver_name[256] = '\0';
+                constexpr size_t header_size = offsetof(_SYSTEM_MODULE_INFORMATION_EX, Module);
 
-            if (strstr(driver_name, "VBoxGuest") ||
-                strstr(driver_name, "VBoxMouse") ||
-                strstr(driver_name, "VBoxSF")) {
-                vma_debug("DRIVERS: Detected VBox driver: ", driver_name);
-                SIZE_T free_sz = 0;
-                nt_free_virtual_memory(current_process, &allocated_memory, &free_sz, MEM_RELEASE);
-                return core::add(brand_enum::VBOX);
+                if (NT_SUCCESS(status) && return_length > header_size) {
+                    const auto system_module_info_ex = reinterpret_cast<PSYSTEM_MODULE_INFORMATION_EX>(allocated_memory);
+                    const size_t max_modules = (return_length - header_size) / sizeof(_SYSTEM_MODULE_INFORMATION);
+                    const ULONG number_of_modules = (system_module_info_ex->NumberOfModules < max_modules)
+                        ? system_module_info_ex->NumberOfModules
+                        : static_cast<ULONG>(max_modules);
+
+                    for (ULONG i = 0; i < number_of_modules; ++i) {
+                        char driver_name[257] = { 0 };
+                        std::memcpy(driver_name, system_module_info_ex->Module[i].ImageName, 256);
+                        driver_name[256] = '\0';
+
+                        for (char* p = driver_name; *p != '\0'; ++p) {
+                            *p = static_cast<char>(tolower(static_cast<unsigned char>(*p)));
+                        }
+
+                        if (strstr(driver_name, "vboxguest") ||
+                            strstr(driver_name, "vboxmouse") ||
+                            strstr(driver_name, "vboxsf")) {
+                            vma_debug("DRIVERS: Detected VBox driver: ", driver_name);
+                            detected_brand = brand_enum::VBOX;
+                            break;
+                        }
+
+                        if (strstr(driver_name, "vmusbmouse") ||
+                            strstr(driver_name, "vmmemctl")) {
+                            vma_debug("DRIVERS: Detected VMware driver: ", driver_name);
+                            detected_brand = brand_enum::VMWARE;
+                            break;
+                        }
+                    }
+                }
+
+                SIZE_T free_size = 0;
+                nt_free_virtual_memory(current_process, &allocated_memory, &free_size, MEM_RELEASE);
+                allocated_memory = nullptr;
             }
-
-            if (
-                strstr(driver_name, "vmusbmouse") ||
-                strstr(driver_name, "vmmemctl")
-               ) {
-                vma_debug("DRIVERS: Detected VMware driver: ", driver_name);
-                region_size = 0;
-                nt_free_virtual_memory(current_process, &allocated_memory, &region_size, MEM_RELEASE);
-                return core::add(brand_enum::VMWARE);
-            }
         }
 
-        SIZE_T free_size = 0;
-        nt_free_virtual_memory(current_process, &allocated_memory, &free_size, MEM_RELEASE);
+        if (detected_brand != brand_enum::NULL_BRAND) {
+            return core::add(detected_brand);
+        }
 
         /*
          * Targeted GUIDs:
-         * 1. IVSHMEM (Inter-VM Shared Memory). Typically used in KVM/QEMU environments (like Looking Glass) to pass memory between host and guest.
+         * 1. IVSHMEM (Inter-VM Shared Memory) used in KVM/QEMU (e.g., Looking Glass).
          * 2. Looking Glass Indirect Display Driver (LGIdd).
          */
         constexpr GUID TARGETED_GUIDS[] = {
@@ -11974,30 +11982,38 @@ public:
             { 0x997b0b66, 0xb74c, 0x4017, { 0x9a, 0x89, 0xe4, 0xaa, 0xd4, 0x1d, 0x37, 0x80 } }
         };
 
-        for (const auto& guid : TARGETED_GUIDS) {
-            /*
-             * Construct the registry path for the DeviceClasses key
-             * We access the "DeviceClasses" registry hive directly to find hardware interfaces
-             */
+        constexpr size_t num_guids = sizeof(TARGETED_GUIDS) / sizeof(TARGETED_GUIDS[0]);
+
+        for (size_t g = 0; g < num_guids; ++g) {
+            const GUID& guid = TARGETED_GUIDS[g];
+
             wchar_t interface_class_path[256];
-            swprintf_s(
+            const int written = swprintf_s(
                 interface_class_path,
-                ARRAYSIZE(interface_class_path),
-                L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\DeviceClasses\\{%08lX-%04hX-%04hX-%02hhX%02hhX-%02hhX%02hhX%02hhX%02hhX%02hhX%02hhX}",
+                sizeof(interface_class_path) / sizeof(interface_class_path[0]),
+                L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\DeviceClasses\\{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
                 guid.Data1, guid.Data2, guid.Data3,
                 guid.Data4[0], guid.Data4[1], guid.Data4[2],
                 guid.Data4[3], guid.Data4[4], guid.Data4[5],
                 guid.Data4[6], guid.Data4[7]
             );
 
-            UNICODE_STRING unicode_path;
+            if (written <= 0) {
+                continue;
+            }
+
+            UNICODE_STRING unicode_path{};
             rtl_init_unicode_string(&unicode_path, interface_class_path);
 
-            OBJECT_ATTRIBUTES object_attributes;
-            RtlZeroMemory(&object_attributes, sizeof(object_attributes));
-            object_attributes.Length = sizeof(object_attributes);
-            object_attributes.ObjectName = &unicode_path;
-            object_attributes.Attributes = OBJ_CASE_INSENSITIVE;
+            constexpr ULONG obj_case_insensitive = 0x00000040L;
+            OBJECT_ATTRIBUTES object_attributes = {
+                sizeof(OBJECT_ATTRIBUTES),
+                nullptr,
+                &unicode_path,
+                obj_case_insensitive,
+                nullptr,
+                nullptr
+            };
 
             HANDLE key = nullptr;
             NTSTATUS st = nt_open_key(&key, KEY_READ, &object_attributes);
@@ -12005,24 +12021,21 @@ public:
                 continue;
             }
 
-            /*
-             * We query the "Full Information" of the key to get the count of subkeys
-             * The existence of the class key alone isn't enough cuz Windows might register the class but have no devices
-             * If SubKeys > 0, it means actual device instances (for ex. PCI devices) are registered under this interface
-             */
             BYTE info_buffer[512] = {};
             ULONG returned_len = 0;
             st = nt_query_key(key, KeyFullInformation, info_buffer, sizeof(info_buffer), &returned_len);
 
             DWORD number_of_subkeys = 0;
-            if (NT_SUCCESS(st) && returned_len >= sizeof(KEY_FULL_INFORMATION)) {
-                auto* kfi = reinterpret_cast<KEY_FULL_INFORMATION*>(info_buffer);
+            if ((NT_SUCCESS(st) || st == static_cast<NTSTATUS>(0x80000005L)) &&
+                returned_len >= sizeof(KEY_FULL_INFORMATION)) {
+                const auto* kfi = reinterpret_cast<const KEY_FULL_INFORMATION*>(info_buffer);
                 number_of_subkeys = static_cast<DWORD>(kfi->SubKeys);
             }
 
             nt_close(key);
 
             if (number_of_subkeys > 0) {
+                vma_debug("DRIVERS: Detected QEMU/KVM device class interface (IVSHMEM/Looking Glass)");
                 return core::add(brand_enum::QEMU);
             }
         }
@@ -12092,79 +12105,70 @@ public:
             return false;
         }
 
-        auto try_open_mutex = [&](const wchar_t* native_path) noexcept -> HANDLE {
-            UNICODE_STRING u_path{};
-            u_path.Buffer = const_cast<wchar_t*>(native_path);
-            const size_t len_bytes = wcslen(native_path) * sizeof(wchar_t);
-            u_path.Length = static_cast<USHORT>(len_bytes);
-            u_path.MaximumLength = static_cast<USHORT>(len_bytes + sizeof(wchar_t));
+        auto check_device_presence = [&](const wchar_t* native_path) noexcept -> bool {
+            if (!native_path) {
+                return false;
+            }
 
+            UNICODE_STRING u_path{};
+            rtl_init_unicode_string(&u_path, native_path);
+
+            constexpr ULONG obj_case_insensitive = 0x00000040L;
             OBJECT_ATTRIBUTES obj_attr = {
                 sizeof(OBJECT_ATTRIBUTES),
                 nullptr,
                 &u_path,
-                OBJ_CASE_INSENSITIVE,
+                obj_case_insensitive,
                 nullptr,
                 nullptr
             };
 
-            IO_STATUS_BLOCK iosb;
+            IO_STATUS_BLOCK iosb{};
             HANDLE h_file = nullptr;
 
-            constexpr ACCESS_MASK desired_access = FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
-            constexpr ULONG share_access = FILE_SHARE_READ;
-            constexpr ULONG open_options = FILE_OPEN | FILE_SYNCHRONOUS_IO_NONALERT;
+            constexpr ACCESS_MASK desired_access = FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+            constexpr ULONG share_access = FILE_SHARE_READ | FILE_SHARE_WRITE;
+            constexpr ULONG open_options = FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT;
 
             const NTSTATUS st = nt_open_file(&h_file, desired_access, &obj_attr, &iosb, share_access, open_options);
 
             if (NT_SUCCESS(st)) {
-                return h_file;
+                if (h_file && h_file != INVALID_HANDLE_VALUE) {
+                    nt_close(h_file);
+                }
+                return true;
             }
-            return INVALID_HANDLE_VALUE;
+
+            /* If access was denied, sharing violated, or pipe busy, the object definitively exists */
+            if (st == static_cast<NTSTATUS>(0xC0000022L) /* STATUS_ACCESS_DENIED */ ||
+                st == static_cast<NTSTATUS>(0xC0000043L) /* STATUS_SHARING_VIOLATION */ ||
+                st == static_cast<NTSTATUS>(0xC00000ADL) /* STATUS_PIPE_BUSY */) {
+                return true;
+            }
+
+            return false;
         };
 
-        constexpr const wchar_t* paths[] = {
-            L"\\??\\VBoxMiniRdrDN",    /* \\.\VBoxMiniRdrDN */
-            L"\\??\\pipe\\VBoxMiniRdDN",/* \\.\pipe\VBoxMiniRdDN */
-            L"\\??\\VBoxTrayIPC",      /* \\.\VBoxTrayIPC */
-            L"\\??\\pipe\\VBoxTrayIPC",/* \\.\pipe\VBoxTrayIPC */
-            L"\\??\\HGFS",             /* \\.\HGFS (VMware) */
-            L"\\??\\pipe\\cuckoo"      /* \\.\pipe\cuckoo (Cuckoo) */
+        constexpr const wchar_t* vbox_paths[] = {
+            L"\\??\\VBoxMiniRdrDN",     /* \\.\VBoxMiniRdrDN */
+            L"\\??\\pipe\\VBoxMiniRdDN", /* \\.\pipe\VBoxMiniRdDN */
+            L"\\??\\VBoxTrayIPC",       /* \\.\VBoxTrayIPC */
+            L"\\??\\pipe\\VBoxTrayIPC"  /* \\.\pipe\VBoxTrayIPC */
         };
 
-        const size_t path_count = sizeof(paths) / sizeof(paths[0]);
-        HANDLE handles[sizeof(paths) / sizeof(paths[0])] = {};
-
-        for (size_t i = 0; i < path_count; ++i) {
-            handles[i] = try_open_mutex(paths[i]);
-        }
-
-        const bool vbox = (handles[0] != INVALID_HANDLE_VALUE) ||
-            (handles[1] != INVALID_HANDLE_VALUE) ||
-            (handles[2] != INVALID_HANDLE_VALUE) ||
-            (handles[3] != INVALID_HANDLE_VALUE);
-
-        const bool vmware = (handles[4] != INVALID_HANDLE_VALUE);
-        const bool cuckoo = (handles[5] != INVALID_HANDLE_VALUE);
-
-        for (size_t i = 0; i < path_count; ++i) {
-            if (handles[i] != INVALID_HANDLE_VALUE) {
-                (void)nt_close(handles[i]);
-                handles[i] = INVALID_HANDLE_VALUE;
+        for (const wchar_t* path : vbox_paths) {
+            if (check_device_presence(path)) {
+                vma_debug("HANDLES: Detected VBox related device handle: ", path);
+                return core::add(brand_enum::VBOX);
             }
         }
 
-        if (vbox) {
-            vma_debug("HANDLES: Detected VBox related device handles");
-            return core::add(brand_enum::VBOX);
-        }
-
-        if (vmware) {
+        if (check_device_presence(L"\\??\\HGFS")) {
             vma_debug("HANDLES: Detected VMware related device (HGFS)");
             return core::add(brand_enum::VMWARE);
         }
 
-        if (cuckoo) {
+        if (check_device_presence(L"\\??\\pipe\\cuckoo")) {
             vma_debug("HANDLES: Detected Cuckoo related device (pipe)");
             return core::add(brand_enum::CUCKOO);
         }
@@ -12184,7 +12188,7 @@ public:
         __cpuid(regs, cpu::leaf::hypervisor);
 
         const u32 max_leaf = static_cast<u32>(regs[0]);
-        if (max_leaf < cpu::leaf::hv_processors) {
+        if (max_leaf < cpu::leaf::hv_processors || max_leaf > 0x400000FFu) {
             return false;
         }
 
@@ -12827,59 +12831,68 @@ public:
 
         constexpr u32 PW2 = 0xFEDCBA98U;
 
-        struct vmcall_info {
+        struct vmcall_info_t {
             u32 structsize;
             u32 level2pass;
             u32 command;
         };
 
-        vmcall_info vmcall_info = {};
-        u64 vmcall_result = 0;
-
         const bool is_amd = cpu::is_amd();
+        const HANDLE current_thread = reinterpret_cast<HANDLE>(static_cast<LONG_PTR>(-2));
 
-        const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
         const HMODULE ntdll = memory::get_module(true);
         if (!ntdll) {
             return false;
         }
 
         constexpr const char* function_names[] = { "NtGetContextThread", "NtSetContextThread" };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        constexpr size_t num_functions = sizeof(function_names) / sizeof(function_names[0]);
+        void* functions[num_functions] = {};
+        memory::get_function(ntdll, function_names, functions, static_cast<ULONG>(num_functions));
 
-        const auto nt_get_context_thread = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PCONTEXT)>(functions[0]);
-        const auto nt_set_context_thread = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PCONTEXT)>(functions[1]);
+        using nt_get_context_thread_fn = NTSTATUS(__stdcall*)(HANDLE, PCONTEXT);
+        using nt_set_context_thread_fn = NTSTATUS(__stdcall*)(HANDLE, PCONTEXT);
+
+        const auto nt_get_context_thread = reinterpret_cast<nt_get_context_thread_fn>(functions[0]);
+        const auto nt_set_context_thread = reinterpret_cast<nt_set_context_thread_fn>(functions[1]);
 
         if (!nt_get_context_thread || !nt_set_context_thread) {
             return false;
         }
 
         auto try_keys = [&]() noexcept -> bool {
-            /* Store forwarding */
-            vmcall_info.structsize = static_cast<u32>(sizeof(vmcall_info));
-            vmcall_info.level2pass = PW2;
-            vmcall_info.command = 0;
-            vmcall_result = 0;
-
             const void* target_stub = is_amd ? dbvm_amd_stub : dbvm_intel_stub;
+            if (!target_stub) {
+                return false;
+            }
+
+            vmcall_info_t vcall_info = {};
+            vcall_info.structsize = static_cast<u32>(sizeof(vcall_info));
+            vcall_info.level2pass = PW2;
+            vcall_info.command = 0;
+
+            u64 vmcall_result = 0;
 
             __try {
-                memory::execute(target_stub, &vmcall_info, &vmcall_result);
+                memory::execute(target_stub, &vcall_info, &vmcall_result);
             }
-            __except (EXCEPTION_EXECUTE_HANDLER) { /* EXCEPTION_ILLEGAL_INSTRUCTION normally, EXCEPTION_ACCESS_VIOLATION_READ on edge-cases */
+            __except (EXCEPTION_EXECUTE_HANDLER) {
                 vmcall_result = 0;
             }
 
-            return (((vmcall_result >> 24) & 0xFF) == 0xCE); /* the VM returns status in bits 24–31; Cheat Engine uses 0xCE here */
+            /* DBVM command 0 returns status 0xCE in bits 24–31 on valid authentication */
+            return (((vmcall_result >> 24) & 0xFF) == 0xCE);
         };
 
         /*
-         * Pure ICEBP RIP Advancement Check (Clean DR State)
-         * Verifies if the hypervisor correctly increments guest RIP when emulating ICEBP
+         * Verifies if the hypervisor correctly increments guest RIP when emulating ICEBP (0xF1)
          */
         auto try_icebp = [&]() noexcept -> bool {
-            CONTEXT ctx = {};
+            if (!dbvm_icebp_stub) {
+                return false;
+            }
+
+            alignas(16) CONTEXT ctx = {};
             ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
 
             if (!NT_SUCCESS(nt_get_context_thread(current_thread, &ctx))) {
@@ -12894,7 +12907,7 @@ public:
             const auto old_dr6 = ctx.Dr6;
             const auto old_dr7 = ctx.Dr7;
 
-            /* Clean all debug registers to ensure we test pure trap-class behavior */
+            /* Clean all debug registers to ensure pure trap-class behavior */
             ctx.Dr0 = 0;
             ctx.Dr1 = 0;
             ctx.Dr2 = 0;
@@ -12908,30 +12921,29 @@ public:
 
             bool rip_failed = false;
             bool step_triggered = false;
-            const u64 stub_base = reinterpret_cast<u64>(dbvm_icebp_stub);
+            const uintptr_t stub_base = reinterpret_cast<uintptr_t>(dbvm_icebp_stub);
 
             struct exception_handler {
                 static VMAWARE_NOINLINE LONG execute(
                     const EXCEPTION_POINTERS* ep,
                     DWORD exception_code,
-                    bool* rip_failed,
-                    bool* step_triggered,
-                    u64 stub_base_addr
+                    bool* rip_failed_out,
+                    bool* step_triggered_out,
+                    uintptr_t stub_base_addr
                 ) {
-                    if (exception_code == EXCEPTION_SINGLE_STEP && ep && ep->ContextRecord) {
-                        *step_triggered = true;
-                        const u64 exception_rip = ep->ContextRecord->Rip;
+                    if (exception_code != EXCEPTION_SINGLE_STEP) {
+                        return EXCEPTION_CONTINUE_SEARCH;
+                    }
 
-                        /*
-                         * Under DBVM, the exception context contains a RIP pointing directly
-                         * to the ICEBP instruction (stub_base_addr) instead of (stub_base_addr + 1)
-                         */
+                    if (ep && ep->ContextRecord) {
+                        *step_triggered_out = true;
+                        const uintptr_t exception_rip = static_cast<uintptr_t>(ep->ContextRecord->Rip);
+
                         if (exception_rip == stub_base_addr) {
-                            *rip_failed = true;
-                            /* Manually advance RIP past ICEBP (0xF1) to RET (0xC3) to avoid an infinite loop */
-                            ep->ContextRecord->Rip = stub_base_addr + 1;
+                            *rip_failed_out = true;
                         }
                     }
+
                     return EXCEPTION_EXECUTE_HANDLER;
                 }
             };
@@ -12945,11 +12957,8 @@ public:
                 &rip_failed,
                 &step_triggered,
                 stub_base
-            )) {
-                /* Handled */
-            }
+            )) { /* Execution resumes here upon single-step trap */ }
 
-            /* Restore original debug registers */
             ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
             ctx.Dr0 = old_dr0;
             ctx.Dr1 = old_dr1;
@@ -12961,7 +12970,7 @@ public:
 
             if (!step_triggered) {
                 vma_debug("DBVM: ICEBP exception didn't trigger #DB");
-                return true; /* Hypervisor swallowed the trap entirely, but should not happen */
+                return true; /* Hypervisor swallowed the trap entirely */
             }
 
             if (rip_failed) {
@@ -12972,14 +12981,15 @@ public:
             return false;
         };
 
-        const bool found_keys = try_keys();
-        const bool found_icebp = try_icebp();
-
-        if (found_keys) {
+        if (try_keys()) {
             return core::add(brand_enum::DBVM);
         }
 
-        return found_icebp;
+        if (try_icebp()) {
+            return true;
+        }
+
+        return false;
     #endif
     }
 
@@ -12995,13 +13005,8 @@ public:
         };
 
         using POBJECT_DIRECTORY_INFORMATION = OBJECT_DIRECTORY_INFORMATION*;
-        constexpr auto DIRECTORY_QUERY = 0x0001;
-        constexpr NTSTATUS NO_MORE_ENTRIES = 0x8000001A;
-
-        HANDLE dir = nullptr;
-        OBJECT_ATTRIBUTES object_attributes{};
-        UNICODE_STRING dir_name{};
-        NTSTATUS status;
+        constexpr ACCESS_MASK DIRECTORY_QUERY = 0x0001;
+        constexpr NTSTATUS STATUS_NO_MORE_ENTRIES = static_cast<NTSTATUS>(0x8000001AL);
 
         const HMODULE ntdll = memory::get_module(true);
         if (!ntdll) {
@@ -13009,12 +13014,17 @@ public:
         }
 
         constexpr const char* function_names[] = { "NtOpenDirectoryObject", "NtQueryDirectoryObject", "NtClose" };
-        void* functions[ARRAYSIZE(function_names)] = {};
-        memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
+        constexpr size_t num_functions = sizeof(function_names) / sizeof(function_names[0]);
+        void* functions[num_functions] = {};
+        memory::get_function(ntdll, function_names, functions, static_cast<ULONG>(num_functions));
 
-        const auto nt_open_directory_object = reinterpret_cast<NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES)>(functions[0]);
-        const auto nt_query_directory_object = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE, PVOID, ULONG, BOOLEAN, BOOLEAN, PULONG, PULONG)>(functions[1]);
-        const auto nt_close = reinterpret_cast<NTSTATUS(__stdcall*)(HANDLE)>(functions[2]);
+        using nt_open_directory_object_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+        using nt_query_directory_object_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, ULONG, BOOLEAN, BOOLEAN, PULONG, PULONG);
+        using nt_close_fn = NTSTATUS(__stdcall*)(HANDLE);
+
+        const auto nt_open_directory_object = reinterpret_cast<nt_open_directory_object_fn>(functions[0]);
+        const auto nt_query_directory_object = reinterpret_cast<nt_query_directory_object_fn>(functions[1]);
+        const auto nt_close = reinterpret_cast<nt_close_fn>(functions[2]);
 
         if (!nt_open_directory_object || !nt_query_directory_object || !nt_close) {
             return false;
@@ -13024,17 +13034,21 @@ public:
          * Prepare to open the root "\Device" directory in the Object Manager namespace
          * This is different from the file system and we are looking for kernel objects created by drivers
          */
-        constexpr const wchar_t* device_dir_path = L"\\Device";
-        dir_name.Buffer = (PWSTR)device_dir_path;
-        dir_name.Length = (USHORT)(wcslen(device_dir_path) * sizeof(wchar_t));
-        dir_name.MaximumLength = dir_name.Length + sizeof(wchar_t);
+        constexpr wchar_t device_dir_path[] = L"\\Device";
+        constexpr USHORT device_dir_bytes = static_cast<USHORT>((sizeof(device_dir_path) / sizeof(wchar_t) - 1) * sizeof(wchar_t));
 
+        UNICODE_STRING dir_name{};
+        dir_name.Buffer = const_cast<PWSTR>(device_dir_path);
+        dir_name.Length = device_dir_bytes;
+        dir_name.MaximumLength = static_cast<USHORT>(device_dir_bytes + sizeof(wchar_t));
+
+        OBJECT_ATTRIBUTES object_attributes{};
         InitializeObjectAttributes(&object_attributes, &dir_name, OBJ_CASE_INSENSITIVE, nullptr, nullptr);
 
         /* Open the directory object so we can enumerate its contents */
-        status = nt_open_directory_object(&dir, DIRECTORY_QUERY, &object_attributes);
-
-        if (!NT_SUCCESS(status)) {
+        HANDLE dir = nullptr;
+        NTSTATUS status = nt_open_directory_object(&dir, DIRECTORY_QUERY, &object_attributes);
+        if (!NT_SUCCESS(status) || !dir) {
             return false;
         }
 
@@ -13047,143 +13061,100 @@ public:
         ULONG context = 0;
         ULONG returned_length = 0;
 
+        bool detected = false;
+        brand_enum detected_brand = brand_enum::NULL_BRAND;
+
+        constexpr wchar_t target_vmgen[] = L"VmGenerationCounter";
+        constexpr size_t target_vmgen_len = (sizeof(target_vmgen) / sizeof(wchar_t)) - 1;
+
+        constexpr wchar_t target_vmgid[] = L"VmGid";
+        constexpr size_t target_vmgid_len = (sizeof(target_vmgid) / sizeof(wchar_t)) - 1;
+
         while (true) {
-            /*
-             * Query the next single object in the directory
-             * 'ReturnSingleEntry' is TRUE to simplify buffer parsing logic
-             */
             status = nt_query_directory_object(
                 dir,
                 buffer.data(),
                 static_cast<ULONG>(buffer.size()),
-                TRUE,
-                FALSE,
+                TRUE,  /* ReturnSingleEntry */
+                FALSE, /* RestartScan */
                 &context,
                 &returned_length
             );
 
             /* Stop if we have iterated through all objects */
-            if (status == NO_MORE_ENTRIES) {
+            if (status == STATUS_NO_MORE_ENTRIES) {
                 break;
             }
 
-            /*
-             * Handle buffer sizing. If the buffer is too small, the kernel tells us how much it needs
-             * We resize and retry, but impose a sanity cap to prevent memory issues
-             */
             if (!NT_SUCCESS(status)) {
                 if (returned_length > buffer.size()) {
                     size_t new_size = static_cast<size_t>(returned_length);
-                    if (new_size > MAX_DIR_BUFFER) new_size = MAX_DIR_BUFFER;
+                    if (new_size > MAX_DIR_BUFFER) {
+                        new_size = MAX_DIR_BUFFER;
+                    }
                     if (new_size <= buffer.size()) {
-                        nt_close(dir);
-                        return false;
+                        break;
                     }
                     try {
                         buffer.resize(new_size);
                     }
                     catch (...) {
-                        nt_close(dir);
-                        return false;
+                        break;
                     }
                     continue;
                 }
-                nt_close(dir);
-                return false;
+                break;
             }
 
             if (returned_length < sizeof(OBJECT_DIRECTORY_INFORMATION) || returned_length > buffer.size()) {
-                nt_close(dir);
-                return false;
+                break;
             }
 
-            const size_t used_len = static_cast<size_t>(returned_length);
-            const POBJECT_DIRECTORY_INFORMATION object_directory_information = reinterpret_cast<POBJECT_DIRECTORY_INFORMATION>(buffer.data());
+            const auto* object_dir_info = reinterpret_cast<const OBJECT_DIRECTORY_INFORMATION*>(buffer.data());
+            const size_t name_bytes = static_cast<size_t>(object_dir_info->Name.Length);
+            const uintptr_t name_ptr = reinterpret_cast<uintptr_t>(object_dir_info->Name.Buffer);
 
-            /* Memory boundaries just for safe pointer arithmetic */
+            if (name_bytes == 0 || (name_bytes % sizeof(wchar_t) != 0) || (name_ptr % sizeof(wchar_t) != 0)) {
+                continue; 
+            }
+
             const uintptr_t buf_base = reinterpret_cast<uintptr_t>(buffer.data());
-            const uintptr_t buf_end = buf_base + used_len;
+            const uintptr_t buf_end = buf_base + returned_length;
+            const uintptr_t min_valid_ptr = buf_base + sizeof(OBJECT_DIRECTORY_INFORMATION);
 
-            std::wstring object_name;
-            bool found_name = false;
+            if (name_ptr < min_valid_ptr || name_ptr >= buf_end || name_bytes >(buf_end - name_ptr)) {
+                continue; 
+            }
 
-            /*
-             * Extract the name using the explicit Name pointer in the structure
-             * Validate that the pointer falls within our allocated buffer to prevent crashes
-             */
-            const size_t nameBytes = static_cast<size_t>(object_directory_information->Name.Length);
-            const uintptr_t name_ptr = reinterpret_cast<uintptr_t>(object_directory_information->Name.Buffer);
+            const auto* wname = reinterpret_cast<const wchar_t*>(name_ptr);
+            const size_t wlen = name_bytes / sizeof(wchar_t);
+            size_t effective_len = wlen;
 
-            if (nameBytes > 0 && (nameBytes % sizeof(wchar_t) == 0)) {
-                const uintptr_t min_valid_ptr = buf_base + sizeof(OBJECT_DIRECTORY_INFORMATION);
-                if (name_ptr >= min_valid_ptr && (name_ptr + nameBytes) <= buf_end && (name_ptr % sizeof(wchar_t) == 0)) {
-                    const wchar_t* wname = reinterpret_cast<const wchar_t*>(name_ptr);
-                    const size_t wlen = nameBytes / sizeof(wchar_t);
-                    bool found_term = false;
-                    /* Scan for null terminator just in case */
-                    for (size_t i = 0; i < wlen; ++i) {
-                        if (wname[i] == L'\0') { 
-                            object_name.assign(wname, i); 
-                            found_term = true;
-                            break; 
-                        }
-                    }
-                    if (!found_term) {
-                        object_name.assign(wname, wlen);
-                    }
-                    found_name = true;
+            for (size_t i = 0; i < wlen; ++i) {
+                if (wname[i] == L'\0') {
+                    effective_len = i;
+                    break;
                 }
             }
 
-            /* If the explicit pointer was invalid, assume the string data immediately follows the structure */
-            if (!found_name) {
-                const uintptr_t altStart = buf_base + sizeof(OBJECT_DIRECTORY_INFORMATION);
-                if (altStart >= buf_end) {
-                    nt_close(dir);
-                    return false;
-                }
-                const size_t maxBytes = buf_end - altStart;
-                if (maxBytes < sizeof(wchar_t)) {
-                    nt_close(dir);
-                    return false;
-                }
-                const wchar_t* alt_ptr = reinterpret_cast<const wchar_t*>(buffer.data() + (altStart - buf_base));
-                const size_t max_chars = maxBytes / sizeof(wchar_t);
-
-                size_t realChars = 0;
-                for (; realChars < max_chars; ++realChars) {
-                    if (alt_ptr[realChars] == L'\0') {
-                        break;
-                    }
-                }
-                if (realChars == max_chars) {
-                    nt_close(dir);
-                    return false;
-                }
-                object_name.assign(alt_ptr, realChars);
-                found_name = true;
-            }
-
-            if (!found_name) {
-                nt_close(dir);
-                return false;
-            }
-
-            /* "VmGenerationCounter" and "VmGid" are created by the Hyper-V VM Bus provider */
-            if (object_name == L"VmGenerationCounter") {
-                nt_close(dir);
+            /* VmGenerationCounter and VmGid are created by the Hyper-V VM Bus provider */
+            if (effective_len == target_vmgen_len && _wcsnicmp(wname, target_vmgen, target_vmgen_len) == 0) {
                 vma_debug("KERNEL_OBJECTS: Detected VmGenerationCounter");
-                return core::add(brand_enum::HYPERV);
+                detected = true;
+                detected_brand = brand_enum::HYPERV;
+                break;
             }
-            if (object_name == L"VmGid") {
-                nt_close(dir);
+
+            if (effective_len == target_vmgid_len && _wcsnicmp(wname, target_vmgid, target_vmgid_len) == 0) {
                 vma_debug("KERNEL_OBJECTS: Detected VmGid");
-                return core::add(brand_enum::HYPERV);
+                detected = true;
+                detected_brand = brand_enum::HYPERV;
+                break;
             }
         }
 
         nt_close(dir);
-        return false;
+        return detected ? core::add(detected_brand) : false;
     }
 
 
@@ -14190,39 +14161,60 @@ public:
             static thread_local bool g_msr_faulted = false;
             static thread_local uintptr_t g_expected_fault_ip = 0;
             g_msr_faulted = false;
+            g_expected_fault_ip = 0;
 
-            const DWORD code = info->ExceptionRecord->ExceptionCode;
-            const uintptr_t fault_ip = reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress);
+            struct veh_read {
+                static LONG NTAPI handler(PEXCEPTION_POINTERS info) noexcept {
+                    if (!info || !info->ExceptionRecord || !info->ContextRecord) {
+                        return EXCEPTION_CONTINUE_SEARCH;
+                    }
 
-            auto veh_handler = [](PEXCEPTION_POINTERS info) noexcept -> LONG {
-                if (!info || !info->ExceptionRecord || !info->ContextRecord) {
+                    const DWORD code = info->ExceptionRecord->ExceptionCode;
+                    const uintptr_t fault_ip = reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress);
+
+                    if (fault_ip == g_expected_fault_ip && (code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_ACCESS_VIOLATION)) {
+                        g_msr_faulted = true;
+                        /* Skip the 'rdmsr' instruction (2 bytes: 0F 32) */
+                #if (VMAWARE_X86_64)
+                        info->ContextRecord->Rip += 2;
+                    #else
+                        info->ContextRecord->Eip += 2;
+                    #endif
+                        return EXCEPTION_CONTINUE_EXECUTION;
+                    }
                     return EXCEPTION_CONTINUE_SEARCH;
                 }
-
-                if (fault_ip == g_expected_fault_ip && (code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_ACCESS_VIOLATION)) {
-                    g_msr_faulted = true;
-                    /* Skip the 'rdmsr' instruction (2 bytes: 0F 32) */
-                #if (VMAWARE_X86_64)
-                    info->ContextRecord->Rip += 2;
-                #else
-                    info->ContextRecord->Eip += 2;
-                #endif
-                    return EXCEPTION_CONTINUE_EXECUTION;
-                }
-                return EXCEPTION_CONTINUE_SEARCH;
             };
 
-            const PVOID handle = rtl_add_vectored_exception_handler(1, veh_handler);
+            const PVOID handle = rtl_add_vectored_exception_handler(1, veh_read::handler);
+            if (!handle) {
+                return false;
+            }
 
             u32 low = 0, high = 0;
-            asm volatile (
-                "lea 1f(%%rip), %[fault_ip]\n\t"
-                "1:\n\t"
-                "rdmsr\n\t"
-                : "=a"(low), "=d"(high), [fault_ip] "=r"(g_expected_fault_ip)
-                : "c"(msr_index)
-                : "memory"
-            );
+            uintptr_t scratch = 0;
+
+            #if (VMAWARE_X86_64)
+                asm volatile (
+                    "lea 1f(%%rip), %[tmp]\n\t"
+                    "mov %[tmp], %[fault_ip]\n\t"
+                    "1:\n\t"
+                    "rdmsr\n\t"
+                    : "=a"(low), "=d"(high), [fault_ip] "=m"(g_expected_fault_ip), [tmp] "=&r"(scratch)
+                    : "c"(msr_index)
+                    : "memory"
+                );
+            #else
+                asm volatile (
+                    "mov $1f, %[tmp]\n\t"
+                    "mov %[tmp], %[fault_ip]\n\t"
+                    "1:\n\t"
+                    "rdmsr\n\t"
+                    : "=a"(low), "=d"(high), [fault_ip] "=m"(g_expected_fault_ip), [tmp] "=&r"(scratch)
+                    : "c"(msr_index)
+                    : "memory"
+                );
+            #endif
 
             rtl_remove_vectored_exception_handler(handle);
             g_expected_fault_ip = 0;
@@ -14242,33 +14234,66 @@ public:
             }
         #elif (VMAWARE_GCC || VMAWARE_CLANG)
             static thread_local bool g_msr_write_faulted = false;
+            static thread_local uintptr_t g_expected_write_fault_ip = 0;
             g_msr_write_faulted = false;
+            g_expected_write_fault_ip = 0;
 
-            auto veh_handler = [](PEXCEPTION_POINTERS info) noexcept -> LONG {
-                if (info->ExceptionRecord->ExceptionCode == EXCEPTION_PRIV_INSTRUCTION) {
-                    g_msr_write_faulted = true;
-                    /* Skip the 'wrmsr' instruction (2 bytes: 0F 30) */
-                #if (VMAWARE_X86_64)
-                    info->ContextRecord->Rip += 2;
-                #else
-                    info->ContextRecord->Eip += 2;
-                #endif
-                    return EXCEPTION_CONTINUE_EXECUTION;
+            struct veh_write {
+                static LONG NTAPI handler(PEXCEPTION_POINTERS info) noexcept {
+                    if (!info || !info->ExceptionRecord || !info->ContextRecord) {
+                        return EXCEPTION_CONTINUE_SEARCH;
+                    }
+
+                    const DWORD code = info->ExceptionRecord->ExceptionCode;
+                    const uintptr_t fault_ip = reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress);
+
+                    if (fault_ip == g_expected_write_fault_ip && (code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_ACCESS_VIOLATION)) {
+                        g_msr_write_faulted = true;
+                        /* Skip the 'wrmsr' instruction (2 bytes: 0F 30) */
+                    #if (VMAWARE_X86_64)
+                        info->ContextRecord->Rip += 2;
+                    #else
+                        info->ContextRecord->Eip += 2;
+                    #endif
+                        return EXCEPTION_CONTINUE_EXECUTION;
+                    }
+                    return EXCEPTION_CONTINUE_SEARCH;
                 }
-                return EXCEPTION_CONTINUE_SEARCH;
             };
 
-            const PVOID handle = rtl_add_vectored_exception_handler(1, veh_handler);
+            const PVOID handle = rtl_add_vectored_exception_handler(1, veh_write::handler);
+            if (!handle) {
+                return false;
+            }
 
             u32 low = static_cast<u32>(value & 0xFFFFFFFF);
             u32 high = static_cast<u32>(value >> 32);
-            asm volatile (
-                "wrmsr"
-                :
-            : "c"(msr_index), "a"(low), "d"(high)
-            );
+            uintptr_t scratch = 0;
+
+            #if (VMAWARE_X86_64)
+                asm volatile (
+                    "lea 1f(%%rip), %[tmp]\n\t"
+                    "mov %[tmp], %[fault_ip]\n\t"
+                    "1:\n\t"
+                    "wrmsr\n\t"
+                    : [fault_ip] "=m"(g_expected_write_fault_ip), [tmp] "=&r"(scratch)
+                    : "c"(msr_index), "a"(low), "d"(high)
+                    : "memory"
+                );
+            #else
+                asm volatile (
+                    "mov $1f, %[tmp]\n\t"
+                    "mov %[tmp], %[fault_ip]\n\t"
+                    "1:\n\t"
+                    "wrmsr\n\t"
+                    : [fault_ip] "=m"(g_expected_write_fault_ip), [tmp] "=&r"(scratch)
+                    : "c"(msr_index), "a"(low), "d"(high)
+                    : "memory"
+                );
+            #endif
 
             rtl_remove_vectored_exception_handler(handle);
+            g_expected_write_fault_ip = 0;
 
             return !g_msr_write_faulted;
         #endif
