@@ -4319,15 +4319,15 @@ public:
 
         /* Retrieves the addresses of specified functions from a loaded module using the export directory, manual implementation of GetProcAddress without PE export forwarding parsing */
         static void get_function(const HMODULE module, const char* const VMAWARE_RESTRICT names[], void** const VMAWARE_RESTRICT functions, const size_t count, const bool cache_result = true) {
-            VMAWARE_ASSUME(names != nullptr);
-            VMAWARE_ASSUME(functions != nullptr);
-
             using func_map = std::unordered_map<std::string, void*>;
             static std::unordered_map<HMODULE, func_map> function_cache;
 
-            if (VMAWARE_UNLIKELY(!functions || !names || count == 0)) {
+            if (VMAWARE_UNLIKELY(!functions || !names || count == 0 || count > (SIZE_MAX / sizeof(void*)))) {
                 return;
             }
+
+            VMAWARE_ASSUME(names != nullptr);
+            VMAWARE_ASSUME(functions != nullptr);
 
             std::memset(functions, 0, count * sizeof(void*));
 
@@ -4337,9 +4337,12 @@ public:
 
             BYTE* base = reinterpret_cast<BYTE*>(module);
 
-            size_t module_size = 0;        
+            size_t module_size = 0;
             MEMORY_BASIC_INFORMATION mbi = {};
             if (VirtualQuery(base, &mbi, sizeof(mbi))) {
+                if (mbi.State != MEM_COMMIT || mbi.AllocationBase != base) {
+                    return;
+                }
                 module_size = static_cast<size_t>(mbi.RegionSize);
             }
             else {
@@ -4351,14 +4354,16 @@ public:
             };
 
             auto cstr_from_rva = [&](DWORD rva) noexcept -> const char* {
-                if (!valid_range(static_cast<size_t>(rva), 1)) {
+                if (rva == 0 || !valid_range(static_cast<size_t>(rva), 1)) {
                     return nullptr;
                 }
 
                 const char* start = reinterpret_cast<const char*>(base + rva);
                 const size_t remaining = module_size - static_cast<size_t>(rva);
+                constexpr size_t MAX_NAME_SCAN = 512;
+                const size_t check_len = (remaining < MAX_NAME_SCAN) ? remaining : MAX_NAME_SCAN;
 
-                if (std::memchr(start, '\0', remaining)) {
+                if (std::memchr(start, '\0', check_len)) {
                     return start;
                 }
 
@@ -4375,10 +4380,23 @@ public:
             }
 
             /* e_lfanew -> NT headers */
-            if (VMAWARE_UNLIKELY(dosHeader->e_lfanew < 0)) {
+            if (VMAWARE_UNLIKELY(dosHeader->e_lfanew < 0 || (static_cast<size_t>(dosHeader->e_lfanew) % sizeof(DWORD)) != 0)) {
                 return;
             }
             const size_t e_lfanew = static_cast<size_t>(dosHeader->e_lfanew);
+
+            if (e_lfanew + sizeof(IMAGE_NT_HEADERS) > module_size) {
+                MEMORY_BASIC_INFORMATION nt_mbi = {};
+                if (VirtualQuery(base + e_lfanew, &nt_mbi, sizeof(nt_mbi))) {
+                    if (nt_mbi.State == MEM_COMMIT && nt_mbi.AllocationBase == base) {
+                        const size_t region_end = static_cast<size_t>(reinterpret_cast<BYTE*>(nt_mbi.BaseAddress) - base) + nt_mbi.RegionSize;
+                        if (e_lfanew + sizeof(IMAGE_NT_HEADERS) <= region_end) {
+                            module_size = region_end;
+                        }
+                    }
+                }
+            }
+
             if (VMAWARE_UNLIKELY(!valid_range(e_lfanew, sizeof(IMAGE_NT_HEADERS)))) {
                 return;
             }
@@ -4387,8 +4405,22 @@ public:
                 return;
             }
 
+        #if defined(_WIN64)
+            if (ntHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+                return;
+            }
+        #else
+            if (ntHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+                return;
+            }
+        #endif
+
             const size_t sizeOfImage = static_cast<size_t>(ntHeaders->OptionalHeader.SizeOfImage);
-            if (sizeOfImage != 0 && sizeOfImage > module_size) {
+            constexpr size_t MAX_MODULE_SIZE = 1024u * 1024u * 1024u;
+            if (sizeOfImage < sizeof(IMAGE_DOS_HEADER) + sizeof(IMAGE_NT_HEADERS) || sizeOfImage > MAX_MODULE_SIZE) {
+                return;
+            }
+            if (sizeOfImage > module_size) {
                 module_size = sizeOfImage;
             }
 
@@ -4424,6 +4456,9 @@ public:
             const DWORD addr_funcs = exportDir->AddressOfFunctions;
             const DWORD addr_ord = exportDir->AddressOfNameOrdinals;
 
+            if (addr_names == 0 || addr_funcs == 0 || addr_ord == 0) {
+                return;
+            }
             if (!valid_range(static_cast<size_t>(addr_names), static_cast<size_t>(nameCount) * sizeof(DWORD))) {
                 return;
             }
@@ -4462,7 +4497,7 @@ public:
                     const DWORD midNameRva = nameRvas[mid];
                     const char* midName = cstr_from_rva(midNameRva);
                     if (!midName) {
-                        lo = hi;
+                        lo = nameCount;
                         break;
                     }
 
@@ -4483,7 +4518,7 @@ public:
                             continue;
                         }
                         const DWORD funcRva = funcRvas[nameOrdinal];
-                        if (!valid_range(static_cast<size_t>(funcRva), 1)) {
+                        if (funcRva == 0 || !valid_range(static_cast<size_t>(funcRva), 1)) {
                             continue;
                         }
                         void* addr = reinterpret_cast<void*>(base + funcRva);
@@ -4593,7 +4628,7 @@ public:
                 memo::module::store_ntdll(res_ntdll);
             }
             if (res_k32) {
-                memo::module::store_ntdll(res_ntdll);
+                memo::module::store_ntdll(res_k32);
             }
 
             if (get_ntdll) {
@@ -12261,26 +12296,26 @@ public:
      * @implements VM::VIRTUAL_REGISTRY
      */
     [[nodiscard]] static bool virtual_registry() {
-        struct UNICODE_STRING {
+        struct custom_unicode_string {
             USHORT Length;
             USHORT MaximumLength;
             PWSTR  Buffer;
         };
-        struct OBJECT_ATTRIBUTES {
+        struct custom_object_attributes {
             ULONG Length;
             HANDLE RootDirectory;
-            UNICODE_STRING* ObjectName;
+            custom_unicode_string* ObjectName;
             ULONG Attributes;
             PVOID SecurityDescriptor;
             PVOID SecurityQualityOfService;
         };
-        enum OBJECT_INFORMATION_CLASS {
+        enum custom_object_information_class {
             ObjectBasicInformation = 0,
             ObjectNameInformation = 1,
             ObjectTypeInformation = 2
         };
-        struct OBJECT_NAME_INFORMATION {
-            UNICODE_STRING Name;
+        struct custom_object_name_information {
+            custom_unicode_string Name;
         };
 
         const HMODULE ntdll = memory::get_module(true);
@@ -12292,10 +12327,8 @@ public:
         void* functions[ARRAYSIZE(function_names)] = {};
         memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
 
-        using POBJECT_ATTRIBUTES = OBJECT_ATTRIBUTES*;
-        using POBJECT_NAME_INFORMATION = OBJECT_NAME_INFORMATION*;
-        using nt_open_key_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
-        using nt_query_object_fn = NTSTATUS(__stdcall*)(HANDLE, OBJECT_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+        using nt_open_key_fn = NTSTATUS(__stdcall*)(PHANDLE, ACCESS_MASK, custom_object_attributes*);
+        using nt_query_object_fn = NTSTATUS(__stdcall*)(HANDLE, custom_object_information_class, PVOID, ULONG, PULONG);
         using nt_close_fn = NTSTATUS(__stdcall*)(HANDLE);
 
         const auto nt_open_key = reinterpret_cast<nt_open_key_fn>(functions[0]);
@@ -12311,14 +12344,14 @@ public:
         constexpr USHORT target_char_count = static_cast<USHORT>((sizeof(raw_target) / sizeof(wchar_t)) - 1);
         constexpr USHORT target_byte_length = target_char_count * sizeof(wchar_t);
 
-        UNICODE_STRING key_path{};
+        custom_unicode_string key_path{};
         key_path.Buffer = const_cast<PWSTR>(raw_target);
         key_path.Length = target_byte_length;
         key_path.MaximumLength = target_byte_length + sizeof(wchar_t);
 
         constexpr ULONG obj_case_insensitive = 0x00000040L;
-        OBJECT_ATTRIBUTES object_attributes = {
-            sizeof(OBJECT_ATTRIBUTES),
+        custom_object_attributes object_attributes = {
+            sizeof(custom_object_attributes),
             nullptr,
             &key_path,
             obj_case_insensitive,
@@ -12360,11 +12393,11 @@ public:
             return false;
         }
 
-        if (returned_length < sizeof(OBJECT_NAME_INFORMATION)) {
+        if (returned_length < sizeof(custom_object_name_information) || returned_length > sizeof(buffer)) {
             return false;
         }
 
-        const auto object_name = reinterpret_cast<POBJECT_NAME_INFORMATION>(buffer);
+        const auto object_name = reinterpret_cast<custom_object_name_information*>(buffer);
 
         if (object_name->Name.Buffer == nullptr || object_name->Name.Length == 0) {
             return false;
@@ -12375,7 +12408,8 @@ public:
         const auto str_start = reinterpret_cast<uintptr_t>(object_name->Name.Buffer);
 
         if (str_start < buf_start || str_start >= valid_end ||
-            object_name->Name.Length >(valid_end - str_start)) {
+            object_name->Name.Length >(valid_end - str_start) ||
+            (str_start % alignof(wchar_t)) != 0) {
             return false;
         }
 
@@ -17633,6 +17667,8 @@ enum VM::brand_enum VM::memo::single_brand::brand_cache = brand_enum::NULL_BRAND
 char VM::memo::cpu_brand::brand_cache[128] = { 0 };
 char VM::memo::bios_info::manufacturer[256] = { 0 };
 char VM::memo::bios_info::model[256] = { 0 };
+bool VM::memo::bios_info::cached_manufacturer;
+bool VM::memo::bios_info::cached_model;
 bool VM::memo::single_brand::cached = false;
 bool VM::memo::multi_brand::cached = false;
 bool VM::memo::cpu_brand::cached = false;
