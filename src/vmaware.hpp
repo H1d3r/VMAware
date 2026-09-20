@@ -5477,7 +5477,8 @@ public:
                 }
 
                 ULONG needed = 0;
-                while (nt_query_system_information(0x16, buffer, size, &needed) == static_cast<NTSTATUS>(0xC0000004L)) {
+                NTSTATUS status;
+                while ((status = nt_query_system_information(0x16, buffer, size, &needed)) == static_cast<NTSTATUS>(0xC0000004L)) {
                     size = needed + 4096;
                     if (PVOID new_buffer = HeapReAlloc(heap, 0, buffer, size)) {
                         buffer = new_buffer;
@@ -5488,7 +5489,6 @@ public:
                     }
                 }
 
-                const NTSTATUS status = nt_query_system_information(0x16, buffer, size, &needed);
                 if (!NT_SUCCESS(status)) {
                     HeapFree(heap, 0, buffer);
                     return false;
@@ -5508,8 +5508,11 @@ public:
 
                     const ULONG safe_count = (info->Count < max_possible_count) ? info->Count : static_cast<ULONG>(max_possible_count);
 
+                    const auto* entries = reinterpret_cast<const entry_struct*>(reinterpret_cast<const char*>(info) + header_offset);
                     for (ULONG i = 0; i < safe_count; ++i) {
-                        if (info->TagInfo[i].Tag == 0x486C6148) { /* HalH */
+                        ULONG tag = 0;
+                        std::memcpy(&tag, &entries[i].Tag, sizeof(ULONG));
+                        if (tag == 0x486C6148) { /* HalH */
                             found = true;
                             break;
                         }
@@ -5518,23 +5521,23 @@ public:
 
                 HeapFree(heap, 0, buffer);
                 return found;
-            };
+           };
 
             auto is_log_present = []() -> bool {
-            #pragma pack(push, 1)
-                struct tcg_pcr_event_header {
-                    u8 pad[28];
-                    u32 event_data_size;
-                    u8 event_data[1];
-                };
-                struct tcg_efi_spec_id_event_struct_header {
-                    u8 pad[24];
-                    u32 number_of_algorithms;
-                };
-                struct tbs_context_params {
-                    u32 version;
-                };
-            #pragma pack(pop)
+                #pragma pack(push, 1)
+                    struct tcg_pcr_event_header {
+                        u8 pad[28];
+                        u32 event_data_size;
+                        u8 event_data[1];
+                    };
+                    struct tcg_efi_spec_id_event_struct_header {
+                        u8 pad[24];
+                        u32 number_of_algorithms;
+                    };
+                    struct tbs_context_params {
+                        u32 version;
+                    };
+                #pragma pack(pop)
 
                 using pfn_tbsi_get_tcg_log_ex = int(__stdcall*)(u32, u8*, u32*);
                 using pfn_tbsi_context_create = int(__stdcall*)(void*, void**);
@@ -5608,12 +5611,15 @@ public:
                     }
                     const auto* const first_event = reinterpret_cast<const tcg_pcr_event_header*>(log_buffer);
 
-                    if (first_event->event_data_size > log_size - 32) {
+                    u32 event_data_size = 0;
+                    std::memcpy(&event_data_size, &first_event->event_data_size, sizeof(u32));
+
+                    if (event_data_size > log_size - 32) {
                         parse_error = true;
                         break;
                     }
-                    const size_t first_event_size = static_cast<size_t>(32) + first_event->event_data_size;
-                    const bool crypto_agile = (first_event->event_data_size >= 16 && std::memcmp(first_event->event_data, "Spec ID Event03", 15) == 0);
+                    const size_t first_event_size = static_cast<size_t>(32) + event_data_size;
+                    const bool crypto_agile = (event_data_size >= 16 && std::memcmp(first_event->event_data, "Spec ID Event03", 15) == 0);
 
                     struct alg_size_pair {
                         u16 alg_id;
@@ -5630,13 +5636,20 @@ public:
                     size_t alg_count = 5;
 
                     if (crypto_agile) {
-                        if (first_event->event_data_size >= sizeof(tcg_efi_spec_id_event_struct_header)) {
+                        if (event_data_size >= sizeof(tcg_efi_spec_id_event_struct_header)) {
                             const auto* const spec_id = reinterpret_cast<const tcg_efi_spec_id_event_struct_header*>(first_event->event_data);
                             const u8* p_alg = first_event->event_data + sizeof(*spec_id);
-                            if (first_event->event_data_size - sizeof(*spec_id) >= static_cast<unsigned long long>(spec_id->number_of_algorithms) * 4) {
-                                for (u32 i = 0; i < spec_id->number_of_algorithms; ++i, p_alg += 4) {
-                                    const u16 alg_id = *reinterpret_cast<const u16*>(p_alg);
-                                    const u16 digest_size = *reinterpret_cast<const u16*>(p_alg + 2);
+
+                            u32 num_algorithms = 0;
+                            std::memcpy(&num_algorithms, &spec_id->number_of_algorithms, sizeof(u32));
+
+                            if (event_data_size - sizeof(*spec_id) >= static_cast<unsigned long long>(num_algorithms) * 4) {
+                                for (u32 i = 0; i < num_algorithms; ++i, p_alg += 4) {
+                                    u16 alg_id = 0;
+                                    u16 digest_size = 0;
+                                    std::memcpy(&alg_id, p_alg, sizeof(u16));
+                                    std::memcpy(&digest_size, p_alg + 2, sizeof(u16));
+
                                     bool updated = false;
                                     for (size_t j = 0; j < alg_count; ++j) {
                                         if (alg_sizes[j].alg_id == alg_id) {
@@ -5717,8 +5730,11 @@ public:
                                 parse_error = true;
                                 break;
                             }
-                            const u32 pcr = *reinterpret_cast<const u32*>(log_buffer + offset);
-                            const u32 digest_count = *reinterpret_cast<const u32*>(log_buffer + offset + 8);
+
+                            u32 pcr = 0;
+                            u32 digest_count = 0;
+                            std::memcpy(&pcr, log_buffer + offset, sizeof(u32));
+                            std::memcpy(&digest_count, log_buffer + offset + 8, sizeof(u32));
 
                             size_t temp = offset + 12;
                             bool alg_error = false;
@@ -5727,7 +5743,10 @@ public:
                                     alg_error = true;
                                     break;
                                 }
-                                const u16 alg_id = *reinterpret_cast<const u16*>(log_buffer + temp);
+
+                                u16 alg_id = 0;
+                                std::memcpy(&alg_id, log_buffer + temp, sizeof(u16));
+
                                 u16 digest_size = 0;
                                 bool alg_found = false;
                                 for (size_t j = 0; j < alg_count; ++j) {
@@ -5752,7 +5771,9 @@ public:
                                 parse_error = true;
                                 break;
                             }
-                            const u32 event_size = *reinterpret_cast<const u32*>(log_buffer + temp);
+
+                            u32 event_size = 0;
+                            std::memcpy(&event_size, log_buffer + temp, sizeof(u32));
 
                             if (event_size > log_size - temp - 4) {
                                 parse_error = true;
@@ -5771,8 +5792,11 @@ public:
                                 parse_error = true;
                                 break;
                             }
-                            const u32 pcr = *reinterpret_cast<const u32*>(log_buffer + offset);
-                            const u32 event_size = *reinterpret_cast<const u32*>(log_buffer + offset + 28);
+
+                            u32 pcr = 0;
+                            u32 event_size = 0;
+                            std::memcpy(&pcr, log_buffer + offset, sizeof(u32));
+                            std::memcpy(&event_size, log_buffer + offset + 28, sizeof(u32));
 
                             if (event_size > log_size - offset - 32) {
                                 parse_error = true;
@@ -5808,7 +5832,7 @@ public:
 
             hyperx_state state = HYPERV_UNKNOWN;
 
-            if (is_hyperv_nested()) {                            
+            if (is_hyperv_nested()) {
                 vma_debug("HYPER-X: Detected Hyper-V in nested state");
                 state = HYPERV_NESTED_VM;
             }
@@ -5827,7 +5851,7 @@ public:
                 else {
                     /* If we reach here, we do some sanity checks to ensure a hypervisor is not trying to spoof itself as Hyper-V, attempting to bypass some detections */
                     const char* brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
-                    bool is_hyper_v_host = (enlightenment_str && strcmp(brand_str, "Microsoft Hv") == 0);
+                    bool is_hyper_v_host = (enlightenment_str && brand_str && strcmp(brand_str, "Microsoft Hv") == 0);
 
                     if (util::is_windows_11()) {
                         const bool hal = is_halh_present();
@@ -5848,7 +5872,7 @@ public:
                         vma_debug("HYPER-X: Detected hypervisor trying to spoof itself as Hyper-V");
                         core::add(brand_enum::NULL_BRAND, 150);
                         state = HYPERV_SPOOFED;
-                    }               
+                    }
                 }
             }
 
@@ -5919,7 +5943,7 @@ public:
         #endif
         }
 
-        [[nodiscard]] static bool get_manufacturer_model(const char** out_manufacturer, const char** out_model) noexcept {
+        [[nodiscard]] static bool get_manufacturer_and_model(const char** out_manufacturer, const char** out_model) noexcept {
             if (out_manufacturer) {
                 *out_manufacturer = "";
             }
@@ -6125,7 +6149,7 @@ public:
             }
 
             /* Software fallback CRC32-C for a single byte */
-            static VMAWARE_CONSTEXPR u32 crc32c_byte_sw(u32 crc, const char data) noexcept {
+            static inline u32 crc32c_byte_sw(u32 crc, const char data) noexcept {
                 crc ^= static_cast<u8>(data);
                 for (int i = 0; i < 8; ++i) {
                     crc = (crc >> 1) ^ ((crc & 1) ? 0x82F63B78u : 0);
@@ -6139,9 +6163,9 @@ public:
         #endif
             static u32 crc32c_byte(u32 crc, const char data) noexcept {
                 #if (VMAWARE_X86)
-                if (has_sse42()) {
-                    return _mm_crc32_u8(crc, static_cast<u8>(data));
-                }
+                    if (has_sse42()) {
+                        return _mm_crc32_u8(crc, static_cast<u8>(data));
+                    }
                 #endif
                 return crc32c_byte_sw(crc, data);
             }
@@ -6150,31 +6174,39 @@ public:
             __attribute__((__target__("sse4.2")))
         #endif
             static u32 crc32c(u32 crc, const void* data, const size_t len) noexcept {
+                if (VMAWARE_UNLIKELY(!data || len == 0)) {
+                    return crc;
+                }
+
+            #if (VMAWARE_X86)
                 if (!has_sse42()) {
                     return crc32c_sw(crc, data, len);
                 }
 
-            #if (VMAWARE_X86)
-                const u8* ptr = reinterpret_cast<const u8*>(data);
+                const u8* ptr = static_cast<const u8*>(data);
                 size_t i = 0;
 
             #if (VMAWARE_X86_64)
                 const size_t qwords = len >> 3;
-                const u64* qptr = reinterpret_cast<const u64*>(data);
                 u64 crc64 = crc;
 
                 for (; i < qwords; ++i) {
-                    VMAWARE_PREFETCH(&qptr[i + 8], _MM_HINT_T0); /* hardware-level prefetch instructions on CPUs ignore invalid addresses without generating page faults */
-                    crc64 = _mm_crc32_u64(crc64, qptr[i]);
+                    if (i + 8 < qwords) {
+                        VMAWARE_PREFETCH(ptr + ((i + 8) * sizeof(u64)), _MM_HINT_T0); /* Hardware-level prefetch instructions on CPUs ignore invalid addresses without generating page faults */
+                    }
+                    u64 val;
+                    std::memcpy(&val, ptr + (i * sizeof(u64)), sizeof(val));
+                    crc64 = _mm_crc32_u64(crc64, val);
                 }
                 crc = static_cast<u32>(crc64);
                 i <<= 3; /* Convert QWord count to bytes */
             #else
                 const size_t dwords = len >> 2;
-                const u32* dptr = reinterpret_cast<const u32*>(data);
 
                 for (; i < dwords; ++i) {
-                    crc = _mm_crc32_u32(crc, dptr[i]);
+                    u32 val;
+                    std::memcpy(&val, ptr + (i * sizeof(u32)), sizeof(val));
+                    crc = _mm_crc32_u32(crc, val);
                 }
                 i <<= 2; /* Convert DWord count to bytes */
             #endif
@@ -6723,19 +6755,20 @@ public:
 
         if (intel) {
             /* Technique 1: not a valid brand */
-            if (strcmp(brand, "              Intel(R) Pentium(R) 4 CPU        ") == 0) {
+            if (brand && strcmp(brand, "              Intel(R) Pentium(R) 4 CPU        ") == 0) {
                 vma_debug("BOCHS_CPU: technique 1 found");
                 return core::add(brand_enum::BOCHS);
             }
-        } else if (amd) {
+        }
+        else if (amd) {
             /* Technique 2: "processor" should have a capital P */
-            if (strcmp(brand, "AMD Athlon(tm) processor") == 0) {
+            if (brand && strcmp(brand, "AMD Athlon(tm) processor") == 0) {
                 vma_debug("BOCHS_CPU: technique 2 found");
                 return core::add(brand_enum::BOCHS);
             }
 
             /* Technique 3: Check for absence of AMD easter egg for K7 and K8 CPUs */
-            if (!cpu::is_leaf_supported(cpu::leaf::amd_easter_egg)) {
+            if (!cpu::is_leaf_supported(cpu::leaf::features)) {
                 return false;
             }
 
@@ -6771,7 +6804,8 @@ public:
             cpu::cpuid(unused, unused, ecx_bochs, unused, cpu::leaf::amd_easter_egg);
 
             if (ecx_bochs == 0) {
-                return true;
+                vma_debug("BOCHS_CPU: technique 3 found");
+                return core::add(brand_enum::BOCHS);
             }
         }
 
@@ -6980,7 +7014,7 @@ public:
     #if (VMAWARE_WINDOWS && defined VMAWARE_DEBUG)
         const char* manufacturer = "";
         const char* device_model = "";
-        if (util::get_manufacturer_model(&manufacturer, &device_model)) {
+        if (util::get_manufacturer_and_model(&manufacturer, &device_model)) {
             vma_debug("{\"manufacturer\": \"", manufacturer, "\", \"model\": \"", device_model, "\"}");
         }
     #endif
@@ -9468,7 +9502,7 @@ public:
                         const char* mod = nullptr;
                         bool is_acer_aspire = false;
 
-                        if (util::get_manufacturer_model(&man, &mod)) {
+                        if (util::get_manufacturer_and_model(&man, &mod)) {
                             if (man && mod && string::find_ci(man, "Acer") && string::find_ci(mod, "Aspire")) {
                                 is_acer_aspire = true;
                             }
@@ -15307,28 +15341,28 @@ public:
 
         constexpr UINT32 MAX_TCG_LOG_SIZE = 16 * 1024 * 1024; /* 16 MB sanity boundary */
 
-    #pragma pack(push, 1)
-        struct VMAWARE_TBS_CONTEXT_PARAMS {
-            UINT32 version;
-        };
+        #pragma pack(push, 1)
+            struct VMAWARE_TBS_CONTEXT_PARAMS {
+                UINT32 version;
+            };
 
-        struct VMAWARE_TBS_CONTEXT_PARAMS2 {
-            UINT32 version;
-            UINT32 flags;
-        };
+            struct VMAWARE_TBS_CONTEXT_PARAMS2 {
+                UINT32 version;
+                UINT32 flags;
+            };
 
-        struct TCG_PCR_EVENT_HEADER {
-            u32 pcrIndex;
-            u32 eventType;
-            u8  digest[20];
-            u32 eventSize;
-        };
+            struct TCG_PCR_EVENT_HEADER {
+                u32 pcrIndex;
+                u32 eventType;
+                u8  digest[20];
+                u32 eventSize;
+            };
 
-        struct alg_size {
-            u16 algId;
-            u16 digestSize;
-        };
-    #pragma pack(pop)
+            struct alg_size {
+                u16 algId;
+                u16 digestSize;
+            };
+        #pragma pack(pop)
 
         static_assert(sizeof(VMAWARE_TBS_CONTEXT_PARAMS) == 4, "VMAWARE_TBS_CONTEXT_PARAMS must be exactly 4 bytes.");
         static_assert(sizeof(VMAWARE_TBS_CONTEXT_PARAMS2) == 8, "VMAWARE_TBS_CONTEXT_PARAMS2 must be exactly 8 bytes.");
@@ -15415,11 +15449,11 @@ public:
                     }
                 }
                 switch (algorithm_id) {
-                case 0x0004: return 20; /* SHA-1 */
-                case 0x000B: return 32; /* SHA-256 */
-                case 0x000C: return 48; /* SHA-384 */
-                case 0x000D: return 64; /* SHA-512 */
-                default:     return 0;
+                    case 0x0004: return 20; /* SHA-1 */
+                    case 0x000B: return 32; /* SHA-256 */
+                    case 0x000C: return 48; /* SHA-384 */
+                    case 0x000D: return 64; /* SHA-512 */
+                    default:     return 0;
                 }
             };
 
@@ -16121,7 +16155,7 @@ public:
         const char* manufacturer = nullptr;
         const char* model = nullptr;
 
-        if (util::get_manufacturer_model(&manufacturer, &model)) {
+        if (util::get_manufacturer_and_model(&manufacturer, &model)) {
             const bool is_lenovo = string::contains_ci(manufacturer, "LENOVO");
             const bool is_hp = string::contains_ci(manufacturer, "HP") || string::contains_ci(manufacturer, "Hewlett-Packard");
             const bool is_acer = string::contains_ci(manufacturer, "Acer");
