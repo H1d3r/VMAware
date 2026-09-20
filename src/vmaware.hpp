@@ -3351,14 +3351,14 @@ public:
             return;
         }
 
-        const char* const end = static_cast<const char*>(std::memchr(src, '\0', N));
-        const std::size_t copy_len = end ? static_cast<std::size_t>(end - src) : (N - 1);
-
-        std::memcpy(dest, src, copy_len);
+        std::size_t copy_len = 0;
+        while (copy_len < (N - 1) && src[copy_len] != '\0') {
+            dest[copy_len] = src[copy_len];
+            ++copy_len;
+        }
         dest[copy_len] = '\0';
     }
 
-    /* Memoization */
     struct memo {
         struct data_t {
             bool result;
@@ -3375,18 +3375,18 @@ public:
 
         static std::array<cache_entry, enum_size + 1> cache_table;
 
-        static VMAWARE_CONSTEXPR void cache_store(u16 flag, bool result, u8 points, const brand_enum brand = brand_enum::NULL_BRAND) noexcept {
+        static void cache_store(u16 flag, bool result, u8 points, const brand_enum brand = brand_enum::NULL_BRAND) noexcept {
             if (flag <= enum_size) {
                 VMAWARE_ASSUME(flag <= enum_size);
                 cache_table[flag] = { result, points, true, brand };
             }
         }
 
-        static constexpr bool is_cached(u16 flag) noexcept {
+        static bool is_cached(u16 flag) noexcept {
             return VMAWARE_LIKELY(flag <= enum_size) && cache_table[flag].has_value;
         }
 
-        static VMAWARE_CONSTEXPR data_t cache_fetch(u16 flag) noexcept {
+        static data_t cache_fetch(u16 flag) noexcept {
             if (VMAWARE_UNLIKELY(flag > enum_size)) {
                 return { false, 0, false, brand_enum::NULL_BRAND };
             }
@@ -3396,7 +3396,6 @@ public:
                 return { entry.result, entry.points, true, entry.brand_name };
             }
 
-            return { false, 0, false, brand_enum::NULL_BRAND };
             return { false, 0, false, brand_enum::NULL_BRAND };
         }
 
@@ -3412,11 +3411,11 @@ public:
             }
 
             static bool is_cached(const flagset& flags) noexcept {
-                return cached && (cached_flags == flags); 
+                return cached && (cached_flags == flags);
             }
-            
+
             static brand_enum fetch() noexcept {
-                return brand_cache; 
+                return brand_cache;
             }
         };
 
@@ -3426,16 +3425,19 @@ public:
             static bool cached;
 
             static void store(const std::string& s, const flagset& flags) noexcept {
-                brand_cache = s;
-                cached_flags = flags;
-                cached = true;
+                try {
+                    brand_cache = s;
+                    cached_flags = flags;
+                    cached = true;
+                }
+                catch (...) {}
             }
 
             static bool is_cached(const flagset& flags) noexcept {
                 return cached && (cached_flags == flags);
             }
 
-            static std::string fetch() noexcept {
+            static const std::string& fetch() noexcept {
                 return brand_cache;
             }
         };
@@ -3446,16 +3448,19 @@ public:
             static bool cached;
 
             static void store(const brand_list_t& list, const flagset& flags) noexcept {
-                cache = list;
-                cached_flags = flags;
-                cached = true;
+                try {
+                    cache = list;
+                    cached_flags = flags;
+                    cached = true;
+                }
+                catch (...) {}
             }
 
             static bool is_cached(const flagset& flags) noexcept {
                 return cached && (cached_flags == flags);
             }
 
-            static brand_list_t fetch() noexcept {
+            static const brand_list_t& fetch() noexcept {
                 return cache;
             }
         };
@@ -3477,7 +3482,7 @@ public:
             }
 
             static const char* fetch() noexcept {
-                return cache; 
+                return cache;
             }
         };
 
@@ -3486,22 +3491,23 @@ public:
             static bool cached;
 
             static void store(const char* s) noexcept {
-                str_copy(brand_cache, s); 
+                str_copy(brand_cache, s);
                 cached = true;
             }
 
             static bool is_cached() noexcept {
-                return cached; 
+                return cached;
             }
 
             static const char* fetch() noexcept {
-                return brand_cache; 
+                return brand_cache;
             }
         };
 
         struct thread_count {
             static u32 fetch() noexcept {
-                static const u32 cached_count = std::thread::hardware_concurrency();
+                static const u32 hw = std::thread::hardware_concurrency();
+                static const u32 cached_count = (hw != 0) ? hw : 1;
                 return cached_count;
             }
         };
@@ -3511,7 +3517,7 @@ public:
             static bool cached;
 
             static hyperx_state fetch() noexcept {
-                return state; 
+                return state;
             }
 
             static void store(const hyperx_state p_state) noexcept {
@@ -3524,17 +3530,17 @@ public:
             }
         };
 
-        struct leaf_entry { 
-            u32 leaf; 
+        struct leaf_entry {
+            u32 leaf;
             bool value;
-            bool has_value; 
+            bool has_value;
         };
 
         struct leaf_cache {
             static constexpr std::size_t CAPACITY = 128;
             static std::array<leaf_entry, CAPACITY> table;
-            static std::size_t count;      
-            static std::size_t next_index; 
+            static std::size_t count;
+            static std::size_t next_index;
 
             static bool fetch(u32 leaf, bool& out) noexcept {
                 for (std::size_t i = 0; i < count; ++i) {
@@ -3550,15 +3556,15 @@ public:
             static void store(u32 leaf, bool val) noexcept {
                 for (std::size_t i = 0; i < count; ++i) {
                     auto& entry = table[i];
-                    if (entry.leaf == leaf) {
+                    if (entry.has_value && entry.leaf == leaf) {
                         entry.value = val;
-                        entry.has_value = true;
                         return;
                     }
                 }
 
                 if (count < CAPACITY) {
-                    table[count++] = { leaf, val, true };
+                    table[count] = { leaf, val, true };
+                    ++count;
                     return;
                 }
 
@@ -3570,89 +3576,77 @@ public:
         struct bios_info {
             static char manufacturer[256];
             static char model[256];
-            static bool cached;
+            static bool cached_manufacturer;
+            static bool cached_model;
 
-            static constexpr const char* fetch_manufacturer() noexcept {
+            static const char* fetch_manufacturer() noexcept {
                 return manufacturer;
             }
 
-            static constexpr const char* fetch_model() noexcept {
+            static const char* fetch_model() noexcept {
                 return model;
             }
 
-            static VMAWARE_CONSTEXPR void store_manufacturer(const char* VMAWARE_RESTRICT s) noexcept {
-                if (!s) {
-                    manufacturer[0] = '\0';
-                    return;
-                }
-                const size_t cap = sizeof(manufacturer) - 1;
-
-                size_t n = 0;
-                while (n < cap && s[n] != '\0') {
-                    n++;
-                }
-
-                const size_t tocopy = n;
-                for (size_t i = 0; i < tocopy; ++i) {
-                    manufacturer[i] = s[i];
-                }
-                *(manufacturer + tocopy) = '\0';
-                cached = true;
+            static void store_manufacturer(const char* VMAWARE_RESTRICT s) noexcept {
+                str_copy(manufacturer, s);
+                cached_manufacturer = true;
             }
 
-            static VMAWARE_CONSTEXPR void store_model(const char* VMAWARE_RESTRICT s) noexcept {
-                if (!s) { 
-                    model[0] = '\0';
-                    return; 
-                }
-                const size_t cap = sizeof(model) - 1;
-
-                size_t n = 0;
-                while (n < cap && s[n] != '\0') {
-                    n++;
-                }
-
-                const size_t tocopy = n;
-                for (size_t i = 0; i < tocopy; ++i) {
-                    model[i] = s[i];
-                }
-                *(model + tocopy) = '\0';
-                cached = true;
+            static void store_model(const char* VMAWARE_RESTRICT s) noexcept {
+                str_copy(model, s);
+                cached_model = true;
             }
 
             static bool is_cached() noexcept {
-                return cached; 
+                return cached_manufacturer && cached_model;
             }
         };
 
     #if (VMAWARE_WINDOWS)
         struct module {
-            static HMODULE& fetch_ntdll() noexcept {
-                static HMODULE handle = nullptr;
-                return handle;
+            static HMODULE fetch_ntdll() noexcept {
+                return get_ntdll_handle();
             }
 
-            static HMODULE& fetch_kernel32() noexcept {
-                static HMODULE handle = nullptr;
-                return handle;
+            static HMODULE fetch_kernel32() noexcept {
+                return get_kernel32_handle();
             }
 
             static void store_ntdll(const HMODULE ntdll) noexcept {
-                fetch_ntdll() = ntdll;
-                is_ntdll_cached() = true;
+                get_ntdll_handle() = ntdll;
+                get_ntdll_cached() = true;
             }
 
             static void store_kernel32(const HMODULE kernel32) noexcept {
-                fetch_kernel32() = kernel32;
-                is_kernel32_cached() = true;
+                get_kernel32_handle() = kernel32;
+                get_kernel32_cached() = true;
             }
 
-            static bool& is_ntdll_cached() noexcept {
+            static bool is_ntdll_cached() noexcept {
+                return get_ntdll_cached();
+            }
+
+            static bool is_kernel32_cached() noexcept {
+                return get_kernel32_cached();
+            }
+
+        private:
+            static HMODULE& get_ntdll_handle() noexcept {
+                static HMODULE handle = nullptr;
+                return handle;
+            }
+
+            static HMODULE& get_kernel32_handle() noexcept {
+                static HMODULE handle = nullptr;
+                return handle;
+            }
+
+            static bool& get_ntdll_cached() noexcept {
                 static bool cached = false;
                 return cached;
             }
 
-            static bool& is_kernel32_cached() noexcept {
+            static bool& get_kernel32_cached() noexcept {
                 static bool cached = false;
                 return cached;
             }
@@ -5850,8 +5844,8 @@ public:
             }
 
             if (memo::bios_info::is_cached()) {
-                const char* man = memo::bios_info::fetch_manufacturer();
-                const char* mod = memo::bios_info::fetch_model();
+                const char* const man = memo::bios_info::fetch_manufacturer();
+                const char* const mod = memo::bios_info::fetch_model();
 
                 if (out_manufacturer) {
                     *out_manufacturer = man;
@@ -5868,7 +5862,7 @@ public:
                     return true;
                 }
 
-                return 
+                return
                     string::equals_ci(s, "System Product Name") ||
                     string::equals_ci(s, "To Be Filled By O.E.M.") ||
                     string::equals_ci(s, "Default string") ||
@@ -5899,6 +5893,8 @@ public:
                 if (st != ERROR_SUCCESS || wbuf[0] == L'\0') {
                     return false;
                 }
+
+                wbuf[(sizeof(wbuf) / sizeof(WCHAR)) - 1] = L'\0'; /* RegGetValueW with RRF_RT_REG_SZ typically ensures a null terminator but just to be safe */
 
                 const int conv = WideCharToMultiByte(
                     CP_UTF8,
@@ -5975,8 +5971,6 @@ public:
             else {
                 memo::bios_info::store_model("");
             }
-
-            memo::bios_info::cached = true;
 
             if (out_manufacturer) {
                 *out_manufacturer = memo::bios_info::fetch_manufacturer();
@@ -17642,7 +17636,6 @@ char VM::memo::bios_info::model[256] = { 0 };
 bool VM::memo::single_brand::cached = false;
 bool VM::memo::multi_brand::cached = false;
 bool VM::memo::cpu_brand::cached = false;
-bool VM::memo::bios_info::cached = false;
 bool VM::memo::hyperx::cached = false;
 bool VM::memo::brand_list::cached = false;
 
