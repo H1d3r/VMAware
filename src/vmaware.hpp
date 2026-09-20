@@ -10564,7 +10564,7 @@ public:
             return (string::to_lower(str[0]) == 'q' &&
                 string::to_lower(str[1]) == 'm' &&
                 str[2] == '0' && str[3] == '0' && str[4] == '0' && str[5] == '0');
-         };
+        };
 
         /*
          * Helper to detect VirtualBox instances
@@ -10619,8 +10619,10 @@ public:
         };
 
         constexpr u16 MAX_PHYSICAL_DRIVES = 256;
+        constexpr u16 MAX_CONSECUTIVE_MISSES = 4;
         constexpr size_t MAX_DESCRIPTOR_SIZE = 64 * 1024;
-        u16 successful_opens = 0; // u16 to prevent overflow at 256, althought it would be extremely weird for a disk to have 256 drives
+        u16 successful_opens = 0; /* u16 to prevent overflow at 256, althought it would be extremely weird for a disk to have 256 drives */
+        u16 consecutive_misses = 0;
 
         const HMODULE ntdll = memory::get_module(true);
         if (!ntdll) {
@@ -10633,7 +10635,6 @@ public:
             "NtDeviceIoControlFile",
             "NtAllocateVirtualMemory",
             "NtFreeVirtualMemory",
-            "NtFlushInstructionCache",
             "NtClose",
             "NtWaitForSingleObject"
         };
@@ -10653,8 +10654,8 @@ public:
         const auto nt_device_io_control_file = reinterpret_cast<nt_device_io_control_file_fn>(functions[2]);
         const auto nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[3]);
         const auto nt_free_virtual_memory = reinterpret_cast<nt_free_virtual_memory_fn>(functions[4]);
-        const auto nt_close = reinterpret_cast<ntclose_fn>(functions[6]);
-        const auto nt_wait_for_single_object = reinterpret_cast<nt_wait_for_single_object_fn>(functions[7]);
+        const auto nt_close = reinterpret_cast<ntclose_fn>(functions[5]);
+        const auto nt_wait_for_single_object = reinterpret_cast<nt_wait_for_single_object_fn>(functions[6]);
 
         if (!rtl_init_unicode_string || !nt_open_file || !nt_device_io_control_file ||
             !nt_allocate_virtual_memory || !nt_free_virtual_memory || !nt_close ||
@@ -10713,18 +10714,28 @@ public:
 
                 const size_t total_size = header_size + out_size;
 
+                /* Use local stack buffer to avoid expensive virtual memory syscalls */
+                alignas(protocol_descriptor) BYTE stack_query_buf[sizeof(protocol_descriptor) + 4096];
                 PVOID allocation_base = nullptr;
-                SIZE_T region_size = total_size;
-                NTSTATUS query_st = nt_allocate_virtual_memory(current_process, &allocation_base, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-                if (!NT_SUCCESS(query_st) || allocation_base == nullptr) {
-                    return false;
+                bool dynamic_allocated = false;
+
+                if (total_size <= sizeof(stack_query_buf)) {
+                    allocation_base = stack_query_buf;
+                }
+                else {
+                    SIZE_T region_size = total_size;
+                    NTSTATUS query_st = nt_allocate_virtual_memory(current_process, &allocation_base, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                    if (!NT_SUCCESS(query_st) || allocation_base == nullptr) {
+                        return false;
+                    }
+                    dynamic_allocated = true;
                 }
 
                 RtlZeroMemory(allocation_base, total_size);
                 *reinterpret_cast<protocol_query*>(allocation_base) = qpacket;
 
                 IO_STATUS_BLOCK query_iosb{};
-                query_st = nt_device_io_control_file(dev, nullptr, nullptr, nullptr, &query_iosb,
+                NTSTATUS query_st = nt_device_io_control_file(dev, nullptr, nullptr, nullptr, &query_iosb,
                     IOCTL_STORAGE_QUERY_PROPERTY,
                     allocation_base, static_cast<ULONG>(total_size),
                     allocation_base, static_cast<ULONG>(total_size));
@@ -10736,7 +10747,7 @@ public:
                         query_st = query_iosb.Status;
                     }
                     else {
-                        query_st = static_cast<NTSTATUS>(0xC0000001L); // STATUS_UNSUCCESSFUL
+                        query_st = static_cast<NTSTATUS>(0xC0000001L); /* STATUS_UNSUCCESSFUL */
                     }
                 }
 
@@ -10771,8 +10782,10 @@ public:
                     }
                 }
 
-                SIZE_T free_size = 0;
-                nt_free_virtual_memory(current_process, &allocation_base, &free_size, MEM_RELEASE);
+                if (dynamic_allocated) {
+                    SIZE_T free_size = 0;
+                    nt_free_virtual_memory(current_process, &allocation_base, &free_size, MEM_RELEASE);
+                }
                 return success;
             };
 
@@ -10816,7 +10829,7 @@ public:
             }
 
             return false;
-         };
+        };
 
         /* Iterate through all physical drives, we put 256 as the physical limit */
         for (u16 drive = 0; drive < MAX_PHYSICAL_DRIVES; ++drive) {
@@ -10842,17 +10855,17 @@ public:
 
             NTSTATUS st = nt_open_file(&device, desired_access, &object_attributes, &iosb, share_access, open_options);
             if (!NT_SUCCESS(st) || device == nullptr) {
+                ++consecutive_misses;
+                if (consecutive_misses >= MAX_CONSECUTIVE_MISSES) {
+                    break;
+                }
                 continue;
             }
+            consecutive_misses = 0;
             ++successful_opens;
 
-            /* Run NVMe heuristics first */
-            if (check_nvme_heuristics(device)) {
-                nt_close(device);
-                return true;
-            }
-
-            alignas(STORAGE_DEVICE_DESCRIPTOR) BYTE stack_buffer[512] = { 0 };
+            /* Query standard StorageDeviceProperty first to quickly evaluate serial number and bus type */
+            alignas(STORAGE_DEVICE_DESCRIPTOR) BYTE stack_buffer[1024] = { 0 };
             const STORAGE_DEVICE_DESCRIPTOR* descriptor = reinterpret_cast<STORAGE_DEVICE_DESCRIPTOR*>(stack_buffer);
 
             STORAGE_PROPERTY_QUERY query{};
@@ -10968,6 +10981,7 @@ public:
                 ? static_cast<size_t>(descriptor->Size)
                 : valid_bytes;
 
+            bool serial_detected = false;
             const u32 serial_offset = descriptor->SerialNumberOffset;
             if (serial_offset >= sizeof(STORAGE_DEVICE_DESCRIPTOR) && static_cast<size_t>(serial_offset) < active_size) {
                 const char* serial = reinterpret_cast<const char*>(descriptor) + serial_offset;
@@ -10982,16 +10996,11 @@ public:
                 vma_debug("DISK: ", safe_serial);
 
                 if (is_qemu_serial(safe_serial, copy_len) || is_vbox_serial(safe_serial, copy_len)) {
-                    if (allocated_buffer) {
-                        PVOID free_base = reinterpret_cast<PVOID>(allocated_buffer);
-                        SIZE_T free_size = 0;
-                        nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
-                        allocated_buffer = nullptr;
-                    }
-                    nt_close(device);
-                    return true;
+                    serial_detected = true;
                 }
             }
+
+            const STORAGE_BUS_TYPE bus_type = descriptor->BusType;
 
             if (allocated_buffer) {
                 PVOID free_base = reinterpret_cast<PVOID>(allocated_buffer);
@@ -10999,6 +11008,22 @@ public:
                 nt_free_virtual_memory(current_process, &free_base, &free_size, MEM_RELEASE);
                 allocated_buffer = nullptr;
             }
+
+            if (serial_detected) {
+                nt_close(device);
+                return true;
+            }
+
+            /* We only need to run NVMe heuristics only if serial didn't match and bus type is NVMe or Unknown */
+            constexpr STORAGE_BUS_TYPE bus_type_nvme = static_cast<STORAGE_BUS_TYPE>(17);
+            constexpr STORAGE_BUS_TYPE bus_type_unknown = static_cast<STORAGE_BUS_TYPE>(0);
+            if (bus_type == bus_type_nvme || bus_type == bus_type_unknown) {
+                if (check_nvme_heuristics(device)) {
+                    nt_close(device);
+                    return true;
+                }
+            }
+
             nt_close(device);
         }
 
@@ -11007,24 +11032,21 @@ public:
             return true;
         }
     #else
-        struct dir_deleter {
-            void operator()(DIR* d) const {
-                if (d != nullptr) {
-                    closedir(d);
-                }
-            }
-        };
-
-        std::unique_ptr<DIR, dir_deleter> dir(opendir("/sys/block"));
+        DIR* dir = opendir("/sys/block");
         if (!dir) {
             return false;
         }
 
         struct dirent* ent{};
 
-        while ((ent = readdir(dir.get()))) {
+        while ((ent = readdir(dir))) {
             const char* name = ent->d_name;
             if (name[0] == '.') {
+                continue;
+            }
+
+            const char first_ch = name[0];
+            if (first_ch != 'n' && first_ch != 's' && first_ch != 'h' && first_ch != 'v') {
                 continue;
             }
 
@@ -11047,7 +11069,7 @@ public:
                     continue;
                 }
 
-                char serial[1024] = {};
+                char serial[1024];
                 const ssize_t rsize = read(fd, serial, sizeof(serial) - 1);
                 close(fd);
                 if (rsize <= 0) {
@@ -11067,7 +11089,9 @@ public:
                 }
             }
         }
-        #endif
+
+        closedir(dir);
+    #endif
         return result;
     }
 #endif
