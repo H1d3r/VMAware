@@ -4628,7 +4628,7 @@ public:
                 memo::module::store_ntdll(res_ntdll);
             }
             if (res_k32) {
-                memo::module::store_ntdll(res_k32);
+                memo::module::store_kernel32(res_k32);
             }
 
             if (get_ntdll) {
