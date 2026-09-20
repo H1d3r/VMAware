@@ -4587,12 +4587,25 @@ public:
         #endif
 
             if (!peb || !peb->ldr) {
-                return GetModuleHandleW(get_ntdll ? L"ntdll.dll" : L"kernel32.dll");
+                HMODULE fallback = GetModuleHandleW(get_ntdll ? L"ntdll.dll" : L"kernel32.dll");
+                if (fallback) {
+                    if (get_ntdll) {
+                        memo::module::store_ntdll(fallback);
+                    }
+                    else {
+                        memo::module::store_kernel32(fallback);
+                    }
+                }
+                return fallback;
             }
 
-            auto matches = [](const wchar_t* s1, const wchar_t* s2, const unsigned short len) noexcept -> bool {
+            auto to_lower_ascii = [](const wchar_t c) noexcept -> wchar_t {
+                return (c >= L'A' && c <= L'Z') ? static_cast<wchar_t>(c + (L'a' - L'A')) : c;
+            };
+
+            auto matches = [&to_lower_ascii](const wchar_t* s1, const wchar_t* s2, const unsigned short len) noexcept -> bool {
                 for (unsigned short i = 0; i < len; ++i) {
-                    if ((s1[i] | 0x20) != (s2[i] | 0x20)) {
+                    if (to_lower_ascii(s1[i]) != to_lower_ascii(s2[i])) {
                         return false;
                     }
                 }
@@ -4604,22 +4617,28 @@ public:
 
             LIST_ENTRY* head = &peb->ldr->in_memory_list;
             for (LIST_ENTRY* cur = head->Flink; cur != nullptr && cur != head; cur = cur->Flink) {
-                auto* ent = reinterpret_cast<custom_ldr_entry*>(reinterpret_cast<char*>(cur) - (sizeof(void*) * 2));
-                if (!ent || !ent->base_name.buffer || ent->base_name.length == 0) {
+                auto* ent = reinterpret_cast<custom_ldr_entry*>(
+                    reinterpret_cast<char*>(cur) - offsetof(custom_ldr_entry, in_memory_links)
+                );
+
+                if (!ent->base_name.buffer || ent->base_name.length == 0) {
                     continue;
                 }
 
                 const unsigned short len_chars = ent->base_name.length / sizeof(wchar_t);
                 const wchar_t* buf = ent->base_name.buffer;
 
-                if ((len_chars == 9 && matches(buf, L"ntdll.dll", 9)) || (len_chars == 5 && matches(buf, L"ntdll", 5))) {
+                if (!res_ntdll && ((len_chars == 9 && matches(buf, L"ntdll.dll", 9)) || (len_chars == 5 && matches(buf, L"ntdll", 5)))) {
                     res_ntdll = reinterpret_cast<HMODULE>(ent->dll_base);
                 }
-                else if ((len_chars == 12 && matches(buf, L"kernel32.dll", 12)) || (len_chars == 8 && matches(buf, L"kernel32", 8))) {
+                else if (!res_k32 && ((len_chars == 12 && matches(buf, L"kernel32.dll", 12)) || (len_chars == 8 && matches(buf, L"kernel32", 8)))) {
                     res_k32 = reinterpret_cast<HMODULE>(ent->dll_base);
                 }
 
-                if (res_ntdll && res_k32) {
+                /* Break early if we satisfied the requested target and have no uncached secondary target pending */
+                const bool ntdll_done = res_ntdll != nullptr || memo::module::is_ntdll_cached();
+                const bool k32_done = res_k32 != nullptr || memo::module::is_kernel32_cached();
+                if (get_ntdll ? (res_ntdll != nullptr && k32_done) : (res_k32 != nullptr && ntdll_done)) {
                     break;
                 }
             }
@@ -4632,9 +4651,22 @@ public:
             }
 
             if (get_ntdll) {
-                return res_ntdll ? res_ntdll : GetModuleHandleW(L"ntdll.dll");
+                if (!res_ntdll) {
+                    res_ntdll = GetModuleHandleW(L"ntdll.dll");
+                    if (res_ntdll) {
+                        memo::module::store_ntdll(res_ntdll);
+                    }
+                }
+                return res_ntdll;
             }
-            return res_k32 ? res_k32 : GetModuleHandleW(L"kernel32.dll");
+
+            if (!res_k32) {
+                res_k32 = GetModuleHandleW(L"kernel32.dll");
+                if (res_k32) {
+                    memo::module::store_kernel32(res_k32);
+                }
+            }
+            return res_k32;
         }
     };
 #endif
@@ -4899,24 +4931,46 @@ public:
 
         /* Fetch the file but in binary form */
         [[nodiscard]] static std::vector<u8> read_file_binary(const char* file_path) {
-            VMAWARE_ASSUME(file_path != nullptr);
-            std::ifstream file(file_path, std::ios::binary);
+            if (!file_path) {
+                return {};
+            }
 
-            if (!file) {
+            std::ifstream file(file_path, std::ios::binary);
+            if (!file.is_open()) {
                 return {};
             }
 
             std::vector<u8> buffer;
-            std::istreambuf_iterator<char> it(file);
-            const std::istreambuf_iterator<char> end;
+            constexpr size_t chunk_size = 4096;
+            constexpr size_t max_safe_size = 16 * 1024 * 1024;
+            char chunk[chunk_size];
 
-            while (it != end) {
-                buffer.push_back(static_cast<u8>(*it));
-                ++it;
+            while (file.read(chunk, sizeof(chunk))) {
+                const std::streamsize count = file.gcount();
+                if (count <= 0) {
+                    break;
+                }
+                if (buffer.size() + static_cast<size_t>(count) > max_safe_size) {
+                    file.close();
+                    return {};
+                }
+                const u8* src = reinterpret_cast<const u8*>(chunk);
+                buffer.insert(buffer.end(), src, src + count);
+            }
+
+            const std::streamsize remaining = file.gcount();
+            if (remaining > 0) {
+                if (buffer.size() + static_cast<size_t>(remaining) <= max_safe_size) {
+                    const u8* src = reinterpret_cast<const u8*>(chunk);
+                    buffer.insert(buffer.end(), src, src + remaining);
+                }
+                else {
+                    file.close();
+                    return {};
+                }
             }
 
             file.close();
-
             return buffer;
         }
 
@@ -4932,29 +4986,24 @@ public:
 
         [[nodiscard]] static bool is_admin() noexcept {
         #if (VMAWARE_LINUX || VMAWARE_APPLE)
-            const uid_t uid = getuid();
-            const uid_t euid = geteuid();
-
-            return (
-                (uid != euid) ||
-                (euid == 0)
-            );
+            return (geteuid() == 0);
         #elif (VMAWARE_WINDOWS)
             bool is_admin = false;
-            HANDLE hToken = nullptr;
-            const HANDLE current_process = reinterpret_cast<HANDLE>(-1LL);
-            if (OpenProcessToken(current_process, TOKEN_QUERY, &hToken)) {
+            HANDLE token_handle = nullptr;
+            const HANDLE current_process = reinterpret_cast<HANDLE>(-1);
+            if (OpenProcessToken(current_process, TOKEN_QUERY, &token_handle)) {
                 TOKEN_ELEVATION elevation{};
-                DWORD dwSize;
-                if (GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &dwSize)) {
-                    if (elevation.TokenIsElevated)
+                DWORD size = sizeof(elevation);
+                if (GetTokenInformation(token_handle, TokenElevation, &elevation, sizeof(elevation), &size)) {
+                    if (elevation.TokenIsElevated != 0) {
                         is_admin = true;
+                    }
                 }
-                CloseHandle(hToken);
+                CloseHandle(token_handle);
             }
             return is_admin;
         #else
-            return true;
+            return false;
         #endif
         }
 
