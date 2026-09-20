@@ -663,6 +663,7 @@
         static const unsigned char vmload_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xDA, 0xC3 };
         static const unsigned char vmcall_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xC1, 0xC3 };
         static const unsigned char vmmcall_stub[] VMAWARE_SECTION = { 0x0F, 0x01, 0xD9, 0xC3 };
+        static const unsigned char ud_stub[] VMAWARE_SECTION = { 0x0F, 0x0B, 0xC3 }; /* ud2; ret */
         static const unsigned char cpuid_blockstep_stub[] VMAWARE_SECTION = {
             0x53,                                      /* 0:  push rbx/ebx (preserve non-volatile register) */
             0x31, 0xC0,                                /* 1:  xor eax, eax */
@@ -696,7 +697,53 @@
             0x9D,                                      /* 31: popfq/popfd */
             0xC3                                       /* 32: ret */
         };
-        static const unsigned char ud_stub[] VMAWARE_SECTION = { 0x0F, 0x0B, 0xC3 }; /* ud2; ret */
+        /* 15-byte boundary enforcement (15 prefixes + 1 byte NOP = 16-byte instruction) */
+        static const unsigned char limit_15_stub[] VMAWARE_SECTION = {
+            0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+            0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x90,
+            0xC3
+        };
+        static const unsigned char int3_stub[] VMAWARE_SECTION = {
+            0xCD, 0x03,  /* Two-byte software interrupt 3 (0xCD 0x03) */
+        };
+        /* Lazy condition code evaluation via INC (AF=1, PF=0) */
+        static const unsigned char alu_flags_stub[] VMAWARE_SECTION = {
+            0xB0, 0x0F, /* mov al, 0x0F */
+            0xFE, 0xC0, /* inc al -> AL = 0x10. AF = 1 (bit 4), PF = 0 (bit 2) */
+            0x9C,       /* pushf / pushfd / pushfq */
+            0x58,       /* pop eax / pop rax */
+            0xC3        /* ret */
+        };
+        /* x87 80-bit extended-precision storage integrity */
+        static const unsigned char x87_precision_stub[] VMAWARE_SECTION = {
+            0xE8, 0x0A, 0x00, 0x00, 0x00,                               /* call +10 forward */
+            0xFF, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xFF, 0x3F, /* 80-bit float data (exp=0x3FFF, mantissa=0x80000000000007FF) */
+            0x58,                                                       /* pop rax / pop eax (pointer to float data) */
+            0xDB, 0xE3,                                                 /* fninit */
+            0xDB, 0x28,                                                 /* fld tbyte ptr [rax/eax] */
+            0xD9, 0xE8,                                                 /* fld1 */
+            0xDE, 0xE9,                                                 /* fsubp st(1), st(0) -> diff = val - 1.0 */
+            0xD9, 0xE4,                                                 /* ftst (compare diff with 0.0) */
+            0xDF, 0xE0,                                                 /* fnstsw ax */
+            0xDB, 0xE3,                                                 /* fninit */
+            0xC3                                                        /* ret */
+        };
+        /* FPU Status Word stack fault (SF) and overflow condition (C1) */
+        static const unsigned char fpu_overflow_stub[] VMAWARE_SECTION = {
+            0xDB, 0xE3, /* fninit */
+            0xD9, 0xE8, /* fld1 */
+            0xD9, 0xE8, /* fld1 */
+            0xD9, 0xE8, /* fld1 */
+            0xD9, 0xE8, /* fld1 */
+            0xD9, 0xE8, /* fld1 */
+            0xD9, 0xE8, /* fld1 */
+            0xD9, 0xE8, /* fld1 */
+            0xD9, 0xE8, /* fld1 */
+            0xD9, 0xE8, /* fld1 (9th push causes stack overflow) */
+            0xDF, 0xE0, /* fnstsw ax */
+            0xDB, 0xE3, /* fninit */
+            0xC3        /* ret */
+        };
 
         #if (VMAWARE_X86_64)
             static const unsigned char cpuid_singlestep_stub[] VMAWARE_SECTION = {
@@ -784,6 +831,12 @@
                 0xC7, 0xB2,                               /* 16: db 0xC7, 0xB2 (invalid opcode) */
                 0xC3                                      /* 18: ret */
             };
+            /* Undocumented arbitrary radix division via AAM imm8 */
+            static const unsigned char aam_radix_stub[] VMAWARE_SECTION = {
+                0xB8, 0x10, 0x00, 0x00, 0x00, /* mov eax, 0x0010 (AL = 16) */
+                0xD4, 0x05,                   /* aam 5 -> AH = 16 / 5 = 3, AL = 16 % 5 = 1 -> AX = 0x0301 */
+                0xC3                          /* ret */
+            };
         #endif
     #elif (VMAWARE_ARM32)
         /* udf #0; bx lr, little-endian for 0xE7F000F0 and 0xE12FFF1E */
@@ -863,6 +916,7 @@ public:
         MEASURED_BOOT,
         TPM, 
         VCPU_SCHEDULING,
+        EMULATION,
 
         /* Linux and Windows */
         SYSTEM_REGISTERS,
@@ -3776,7 +3830,14 @@ public:
                         const DWORD c = GetActiveProcessorCount(g);
                         if (c >= 2) {
                             active_group_aff.Group = g;
-                            active_group_aff.Mask = (c >= 64) ? ~0ull : ((1ull << c) - 1ull);
+
+                            constexpr u32 mask_bits = static_cast<u32>(sizeof(KAFFINITY) * 8);
+                            if (c >= mask_bits) {
+                                active_group_aff.Mask = ~static_cast<KAFFINITY>(0);
+                            }
+                            else {
+                                active_group_aff.Mask = (static_cast<KAFFINITY>(1) << c) - static_cast<KAFFINITY>(1);
+                            }
                             break;
                         }
                     }
@@ -4306,6 +4367,20 @@ public:
         VMAWARE_NO_CFG static void execute(const void* pointer, void* vmcall_info, void* vmcall_result) noexcept {
             using func_t = void(*)(void*, void*);
             reinterpret_cast<func_t>(const_cast<void*>(pointer))(vmcall_info, vmcall_result);
+        }
+
+        VMAWARE_NO_CFG static u32 execute_ret(const void* pointer) noexcept {
+            using func_t = u32(*)();
+            return reinterpret_cast<func_t>(const_cast<void*>(pointer))();
+        }
+
+        inline static DWORD execute_ret_handler(const void* pointer, u32& result) noexcept {
+            DWORD exception_status = 0;
+            __try {
+                result = execute_ret(pointer);
+            }
+            __except (exception_status = GetExceptionCode(), EXCEPTION_EXECUTE_HANDLER) {}
+            return exception_status;
         }
 
         inline static DWORD execute_handler(const void* pointer) noexcept {
@@ -9115,7 +9190,7 @@ public:
 
         /* Windows - SGDT, SLDT, SIDT, SMSW */
     #elif (VMAWARE_WINDOWS && VMAWARE_X86)
-        const HANDLE current_thread = GetCurrentThread();
+        const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
 
         /* Iterating processors for SGDT, SLDT, and SIDT */
         GROUP_AFFINITY original_group_aff{};
@@ -9127,7 +9202,7 @@ public:
                     target_aff.Mask = static_cast<ULONG_PTR>(1) << i;
 
                     if (SetThreadGroupAffinity(current_thread, &target_aff, nullptr)) {
-                        /* Technique 1: SGDT(x86 & x64) */
+                        /* Technique 1: SGDT (x86 & x64) */
                         {
                         #if (VMAWARE_X86_64)
                             u8 gdtr[10] = { 0 };
@@ -9155,7 +9230,6 @@ public:
                             }
                             __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-                    #if (VMAWARE_X86_32)
                             if (sgdt_executed) {
                                 ULONG_PTR gdt_base = 0;
                                 std::memcpy(&gdt_base, &gdtr[2], sizeof(gdt_base));
@@ -9165,7 +9239,6 @@ public:
                                     found = true;
                                 }
                             }
-                        #endif
                         }
 
                         /* Technique 2: SLDT (x86_32 only) */
@@ -9230,7 +9303,6 @@ public:
                             }
                             __except (EXCEPTION_EXECUTE_HANDLER) {}
 
-                        #if (VMAWARE_X86_32)
                             if (sidt_executed) {
                                 ULONG_PTR idt_base = 0;
                                 std::memcpy(&idt_base, &idtr_buffer[2], sizeof(idt_base));
@@ -9241,7 +9313,6 @@ public:
                                     found = true;
                                 }
                             }
-                        #endif
                         }
                     }
                 }
@@ -10715,7 +10786,7 @@ public:
                 const size_t total_size = header_size + out_size;
 
                 /* Use local stack buffer to avoid expensive virtual memory syscalls */
-                alignas(protocol_descriptor) BYTE stack_query_buf[sizeof(protocol_descriptor) + 4096];
+                alignas(protocol_descriptor) BYTE stack_query_buf[sizeof(protocol_descriptor) + 4096]{};
                 PVOID allocation_base = nullptr;
                 bool dynamic_allocated = false;
 
@@ -12730,7 +12801,7 @@ public:
         volatile u8 hit_count = 0;
         alignas(16) CONTEXT original_context {};
         original_context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-        const HANDLE current_thread = GetCurrentThread();
+        const HANDLE current_thread = reinterpret_cast<HANDLE>(-2LL);
 
         if (!NT_SUCCESS(nt_get_context_thread(current_thread, &original_context))) {
             return false;
@@ -13117,10 +13188,6 @@ public:
          * Verifies if the hypervisor correctly increments guest RIP when emulating ICEBP (0xF1)
          */
         auto try_icebp = [&]() noexcept -> bool {
-            if (!dbvm_icebp_stub) {
-                return false;
-            }
-
             alignas(16) CONTEXT ctx = {};
             ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
 
@@ -13422,7 +13489,7 @@ public:
         nt_free_virtual_memory_fn nt_free_memory = nullptr;
         nt_query_system_environment_value_ex_fn nt_query_value = nullptr;
 
-        const HANDLE current_process_handle = GetCurrentProcess();
+        HANDLE current_process = reinterpret_cast<HANDLE>(-1);
 
         /*
          * -------------------------------------------------------------------------
@@ -13522,7 +13589,7 @@ public:
                 alloc_size = 0x1000;
             }
 
-            NTSTATUS status = nt_allocate_memory(current_process_handle, &allocation_base, 0, &alloc_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+            NTSTATUS status = nt_allocate_memory(current_process, &allocation_base, 0, &alloc_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
             if (status != 0 || !allocation_base) {
                 out_buf = nullptr;
                 out_len = 0;
@@ -13537,7 +13604,7 @@ public:
             }
 
             SIZE_T zero_s = 0;
-            nt_free_memory(current_process_handle, &allocation_base, &zero_s, 0x8000);
+            nt_free_memory(current_process, &allocation_base, &zero_s, 0x8000);
             out_buf = nullptr;
             out_len = 0;
             return false;
@@ -13549,7 +13616,7 @@ public:
          * -------------------------------------------------------------------------
          */
         do {
-            if (!OpenProcessToken(current_process_handle, TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token_handle)) {
+            if (!OpenProcessToken(current_process, TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token_handle)) {
                 break;
             }
             if (!LookupPrivilegeValue(nullptr, SE_SYSTEM_ENVIRONMENT_NAME, &luid_struct)) {
@@ -13598,13 +13665,13 @@ public:
             if (buffer_required_length != 0) {
                 SIZE_T enum_alloc_size = 0;
                 enum_alloc_size = static_cast<SIZE_T>(buffer_required_length);
-                alloc_status = nt_allocate_memory(current_process_handle, &enum_base_buffer, 0, &enum_alloc_size, static_cast<ULONG>(MEM_COMMIT | MEM_RESERVE), static_cast<ULONG>(PAGE_READWRITE));
+                alloc_status = nt_allocate_memory(current_process, &enum_base_buffer, 0, &enum_alloc_size, static_cast<ULONG>(MEM_COMMIT | MEM_RESERVE), static_cast<ULONG>(PAGE_READWRITE));
 
                 if (alloc_status == 0 && enum_base_buffer) {
                     alloc_status = nt_enumerate_values(static_cast<ULONG>(1), enum_base_buffer, &buffer_required_length);
                     if (alloc_status != 0) {
                         SIZE_T zero_size = 0;
-                        nt_free_memory(current_process_handle, &enum_base_buffer, &zero_size, 0x8000);
+                        nt_free_memory(current_process, &enum_base_buffer, &zero_size, 0x8000);
                         enum_base_buffer = nullptr;
                     }
                 }
@@ -13727,7 +13794,7 @@ public:
 
             /* Free enumeration buffer */
             SIZE_T z = 0;
-            nt_free_memory(current_process_handle, &enum_base_buffer, &z, 0x8000);
+            nt_free_memory(current_process, &enum_base_buffer, &z, 0x8000);
             enum_base_buffer = nullptr;
 
             /* Check for official red hat certs (QEMU/OVMF) */
@@ -13757,13 +13824,13 @@ public:
         if (pk_default_buf) {
             PVOID base = pk_default_buf;
             SIZE_T size = 0;
-            nt_free_memory(current_process_handle, &base, &size, 0x8000);
+            nt_free_memory(current_process, &base, &size, 0x8000);
             pk_default_buf = nullptr;
         }
         if (enum_base_buffer) {
             PVOID base = enum_base_buffer;
             SIZE_T size = 0;
-            nt_free_memory(current_process_handle, &base, &size, 0x8000);
+            nt_free_memory(current_process, &base, &size, 0x8000);
             enum_base_buffer = nullptr;
         }
 
@@ -14416,7 +14483,7 @@ public:
             g_expected_fault_ip = 0;
 
             struct veh_read {
-                static LONG NTAPI handler(PEXCEPTION_POINTERS info) noexcept {
+                static VMAWARE_NOINLINE LONG __stdcall handler(PEXCEPTION_POINTERS info) noexcept {
                     if (!info || !info->ExceptionRecord || !info->ContextRecord) {
                         return EXCEPTION_CONTINUE_SEARCH;
                     }
@@ -14491,7 +14558,7 @@ public:
             g_expected_write_fault_ip = 0;
 
             struct veh_write {
-                static LONG NTAPI handler(PEXCEPTION_POINTERS info) noexcept {
+                static VMAWARE_NOINLINE LONG __stdcall handler(PEXCEPTION_POINTERS info) noexcept {
                     if (!info || !info->ExceptionRecord || !info->ContextRecord) {
                         return EXCEPTION_CONTINUE_SEARCH;
                     }
@@ -14637,7 +14704,8 @@ public:
             "RtlAddVectoredExceptionHandler",
             "RtlRemoveVectoredExceptionHandler",
             "NtProtectVirtualMemory",
-            "NtFlushInstructionCache"
+            "NtFlushInstructionCache",
+            "NtClose"
         };
         void* functions[ARRAYSIZE(function_names)] = {};
         memory::get_function(ntdll, function_names, functions, ARRAYSIZE(function_names));
@@ -14650,6 +14718,7 @@ public:
         using rtl_remove_vectored_exception_handler_fn = ULONG(__stdcall*)(PVOID);
         using nt_protect_virtual_memory_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
         using nt_flush_instruction_cache_fn = NTSTATUS(__stdcall*)(HANDLE, PVOID, SIZE_T);
+        using ntclose_fn = NTSTATUS(__stdcall*)(HANDLE);
 
         /* Volatile ensures these are loaded from stack after SEH unwind when compiled with aggressive optimizations */
         nt_allocate_virtual_memory_fn volatile nt_allocate_virtual_memory = reinterpret_cast<nt_allocate_virtual_memory_fn>(functions[0]);
@@ -14660,10 +14729,11 @@ public:
         rtl_remove_vectored_exception_handler_fn volatile rtl_remove_vectored_exception_handler = reinterpret_cast<rtl_remove_vectored_exception_handler_fn>(functions[5]);
         nt_protect_virtual_memory_fn volatile nt_protect_virtual_memory = reinterpret_cast<nt_protect_virtual_memory_fn>(functions[6]);
         nt_flush_instruction_cache_fn volatile nt_flush_instruction_cache = reinterpret_cast<nt_flush_instruction_cache_fn>(functions[7]);
-
+        ntclose_fn volatile nt_close = reinterpret_cast<ntclose_fn>(functions[8]);
+        
         if (!nt_allocate_virtual_memory || !nt_free_virtual_memory || !nt_get_context_thread ||
             !nt_set_context_thread || !rtl_add_vectored_exception_handler || !rtl_remove_vectored_exception_handler ||
-            !nt_protect_virtual_memory || !nt_flush_instruction_cache) {
+            !nt_protect_virtual_memory || !nt_flush_instruction_cache || nt_close) {
             return false;
         }
 
@@ -14828,9 +14898,20 @@ public:
 
         restore_original_byte();
 
+        HANDLE target_thread = current_thread;
+        HANDLE real_thread_handle = nullptr;
+        /* For x86_32 running under Wow64, we can't pass a pseudo-handle to whNtSetContextThread, so we DuplicateHandle */
+        if (DuplicateHandle(current_process, current_thread, current_process, &real_thread_handle,
+            THREAD_SET_CONTEXT | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0)) {
+            target_thread = real_thread_handle;
+        }
+
         CONTEXT initial_dbg_ctx{};
         initial_dbg_ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-        if (nt_get_context_thread(current_thread, &initial_dbg_ctx) < 0) {
+        if (nt_get_context_thread(target_thread, &initial_dbg_ctx) < 0) {
+            if (real_thread_handle) {
+                nt_close(real_thread_handle);
+            }
             return hook_detected;
         }
 
@@ -14852,6 +14933,9 @@ public:
                 SIZE_T free_size = 0;
                 nt_free_virtual_memory(current_process, &dst_page, &free_size, MEM_RELEASE);
             }
+            if (real_thread_handle) {
+                nt_close(real_thread_handle);
+            }
             return hook_detected;
         }
 
@@ -14861,11 +14945,20 @@ public:
         static volatile bool ermsb_trap_detected = false;
         static DWORD ermsb_expected_tid = 0;
         ermsb_trap_detected = false;
-        ermsb_expected_tid = GetCurrentThreadId();
-
+    #if (VMAWARE_X86_64)
+        ermsb_expected_tid = static_cast<DWORD>(*reinterpret_cast<const ULONG64*>(__readgsqword(0x30) + 0x48));
+    #elif (VMAWARE_X86_32)
+        ermsb_expected_tid = static_cast<DWORD>(*reinterpret_cast<const ULONG32*>(__readfsdword(0x18) + 0x24));
+    #endif
         struct exception_handler {
             static VMAWARE_NOINLINE LONG __stdcall execute(const PEXCEPTION_POINTERS ctx) {
-                if (GetCurrentThreadId() == ermsb_expected_tid &&
+            #if (VMAWARE_X86_64)
+                const DWORD current_thread_id = static_cast<DWORD>(*reinterpret_cast<const ULONG64*>(__readgsqword(0x30) + 0x48));
+            #elif (VMAWARE_X86_32)
+                const DWORD current_thread_id = static_cast<DWORD>(*reinterpret_cast<const ULONG32*>(__readfsdword(0x18) + 0x24));
+            #endif
+
+                if (current_thread_id == ermsb_expected_tid &&
                     ctx && ctx->ExceptionRecord &&
                     ctx->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
                     ermsb_trap_detected = true;
@@ -14881,27 +14974,43 @@ public:
             nt_free_virtual_memory(current_process, &src_page, &free_size, MEM_RELEASE);
             free_size = 0;
             nt_free_virtual_memory(current_process, &dst_page, &free_size, MEM_RELEASE);
+            if (real_thread_handle) {
+                nt_close(real_thread_handle);
+            }
             return hook_detected;
         }
 
         CONTEXT ctx = initial_dbg_ctx;
+        ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
         /* DWORD_PTR is a must to support both x86-32 and x86-64 */
         ctx.Dr0 = static_cast<DWORD_PTR>(reinterpret_cast<uintptr_t>(src_page) + 0x1000);
 
         /*
-         * Dr7 = 0x30001
-         * bit 0      = 1
-         * bits 17:16 = 11b
-         * bits 19:18 = 00b
+         * Dr7 = 0x30401
+         * bit 0      = 1  (L0: local enable)
+         * bit 10     = 1  (must always be 1 on x86/x64)
+         * bits 17:16 = 11b (read/write data)
+         * bits 19:18 = 00b (1-byte length)
          */
-        ctx.Dr7 = 0x30001;
-        status = nt_set_context_thread(current_thread, &ctx);
+        ctx.Dr7 = 0x30401;
+
+        status = static_cast<NTSTATUS>(-1);
+        __try {
+            status = nt_set_context_thread(target_thread, &ctx);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            status = static_cast<NTSTATUS>(-1);
+        }
+
         if (status < 0) {
             rtl_remove_vectored_exception_handler(veh_handle);
             SIZE_T free_size = 0;
             nt_free_virtual_memory(current_process, &src_page, &free_size, MEM_RELEASE);
             free_size = 0;
             nt_free_virtual_memory(current_process, &dst_page, &free_size, MEM_RELEASE);
+            if (real_thread_handle) {
+                nt_close(real_thread_handle);
+            }
             return hook_detected;
         }
 
@@ -14914,7 +15023,15 @@ public:
 
         rtl_remove_vectored_exception_handler(veh_handle);
 
-        nt_set_context_thread(current_thread, &initial_dbg_ctx);
+        __try {
+            nt_set_context_thread(target_thread, &initial_dbg_ctx);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+
+        if (real_thread_handle) {
+            nt_close(real_thread_handle);
+        }
 
         SIZE_T free_size_cleanup = 0;
         nt_free_virtual_memory(current_process, &src_page, &free_size_cleanup, MEM_RELEASE);
@@ -16519,6 +16636,229 @@ public:
 
         return false;
     }
+
+
+    /**
+     * @brief Check whether the environment is emulated
+     * @category Windows, Linux, Apple
+     * @implements VM::EMULATION
+     */
+    [[nodiscard]] static bool emulation() noexcept {
+    #if (VMAWARE_X86)
+        /* 1. 15-byte instruction boundary enforcement */
+        auto check_15_byte_limit = []() noexcept -> bool {
+        #if (VMAWARE_WINDOWS)
+            /* Silicon raises #GP(0), but decoders looping prefixes without length check return 0 */
+            return (memory::execute_handler(limit_15_stub) == 0);
+        #elif (VMAWARE_LINUX || VMAWARE_APPLE)
+            static sigjmp_t env;
+            struct sigaction sa;
+            struct sigaction old_segv;
+            struct sigaction old_ill;
+            struct sigaction old_bus;
+
+            std::memset(&sa, 0, sizeof(sa));
+            sa.sa_handler = [](int) {
+                siglongjmp(env, 1);
+            };
+            sigemptyset(&sa.sa_mask);
+
+            sigaction(SIGSEGV, &sa, &old_segv);
+            sigaction(SIGILL, &sa, &old_ill);
+            sigaction(SIGBUS, &sa, &old_bus);
+
+            bool fault_occurred = false;
+            if (sigsetjmp(env, 1) == 0) {
+                memory::execute(limit_15_stub);
+            }
+            else {
+                fault_occurred = true;
+            }
+
+            sigaction(SIGSEGV, &old_segv, nullptr);
+            sigaction(SIGILL, &old_ill, nullptr);
+            sigaction(SIGBUS, &old_bus, nullptr);
+
+            return !fault_occurred;
+        #else
+            return false;
+        #endif
+        };
+
+        if (check_15_byte_limit()) {
+            vma_debug("EMULATION: Detected anomaly at 15-byte instruction boundary");
+            return true;
+        }
+
+        /* 2. Two-byte INT 3 (0xCD 0x03) */
+        auto check_two_byte_int3 = []() noexcept -> bool {
+        #if (VMAWARE_WINDOWS)
+            if (IsDebuggerPresent()) {
+                vma_debug("EMULATION: Debugger detected");
+                return false;
+            }
+            const DWORD status = memory::execute_handler(int3_stub);
+            /* Real hardware user-mode dispatch generates STATUS_BREAKPOINT */
+            return (status != 0x80000003L);
+        #elif (VMAWARE_LINUX || VMAWARE_APPLE)
+            #if (VMAWARE_LINUX)
+                const int fd = open("/proc/self/status", O_RDONLY);
+                if (fd >= 0) {
+                    char buf[512];
+                    const ssize_t n = read(fd, buf, sizeof(buf) - 1);
+                    close(fd);
+                    if (n > 0) {
+                        buf[n] = '\0';
+                        const char* p = std::strstr(buf, "TracerPid:");
+                        if (p) {
+                            p += 10;
+                            while (*p == ' ' || *p == '\t') p++;
+                            if (*p != '0') {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            #elif (VMAWARE_APPLE)
+                int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+                struct kinfo_proc info;
+                std::size_t size = sizeof(info);
+                std::memset(&info, 0, sizeof(info));
+                if (sysctl(mib, 4, &info, &size, nullptr, 0) == 0) {
+                    if ((info.kp_proc.p_flag & P_TRACED) != 0) {
+                        return false;
+                    }
+                }
+            #endif
+
+            static sigjmp_t env;
+            struct sigaction sa;
+            struct sigaction old_trap;
+            struct sigaction old_segv;
+            struct sigaction old_ill;
+
+            std::memset(&sa, 0, sizeof(sa));
+            sa.sa_handler = [](int sig) {
+                siglongjmp(env, sig);
+            };
+            sigemptyset(&sa.sa_mask);
+
+            sigaction(SIGTRAP, &sa, &old_trap);
+            sigaction(SIGSEGV, &sa, &old_segv);
+            sigaction(SIGILL, &sa, &old_ill);
+
+            const int sig_code = sigsetjmp(env, 1);
+            if (sig_code == 0) {
+                memory::execute(int3_stub);
+            }
+
+            sigaction(SIGTRAP, &old_trap, nullptr);
+            sigaction(SIGSEGV, &old_segv, nullptr);
+            sigaction(SIGILL, &old_ill, nullptr);
+
+            return (sig_code != SIGTRAP);
+        #else
+            return false;
+        #endif
+        };
+
+        if (check_two_byte_int3()) {
+            vma_debug("EMULATION: Breakpoint anomaly detected");
+            return true;
+        }
+
+        #if (VMAWARE_X86_32)
+            /* 3. Undocumented Radix Division via AAM */
+            auto check_legacy_radix = []() noexcept -> bool {
+            #if (VMAWARE_WINDOWS)
+                u32 res = 0;
+                if (memory::execute_ret_handler(aam_radix_stub, res) != 0) {
+                    /* Emulator raised #UD */
+                    return true;
+                }
+                return ((res & 0xFFFFu) != 0x0301u);
+            #elif (VMAWARE_LINUX || VMAWARE_APPLE)
+                static sigjmp_t env;
+                struct sigaction sa;
+                struct sigaction old_ill;
+
+                std::memset(&sa, 0, sizeof(sa));
+                sa.sa_handler = [](int) {
+                    siglongjmp(env, 1);
+                };
+                sigemptyset(&sa.sa_mask);
+                sigaction(SIGILL, &sa, &old_ill);
+
+                u32 res = 0;
+                bool illegal_insn = false;
+                if (sigsetjmp(env, 1) == 0) {
+                    res = memory::execute_ret(aam_radix_stub);
+                }
+                else {
+                    illegal_insn = true;
+                }
+
+                sigaction(SIGILL, &old_ill, nullptr);
+
+                if (illegal_insn) {
+                    /* Emulator raised #UD */
+                    return true;
+                }
+                return ((res & 0xFFFFu) != 0x0301u);
+            #else
+                const u32 res = memory::execute_ret(aam_radix_stub);
+                return ((res & 0xFFFFu) != 0x0301u);
+            #endif
+            };
+
+            if (check_legacy_radix()) {
+                vma_debug("EMULATION: Radix division not handled correctly");
+                return true;
+            }
+        #endif
+
+        /* 4. ALU parity and auxiliary flags evaluation */
+        auto check_alu_flags = []() noexcept -> bool {
+            const u32 flags = memory::execute_ret(alu_flags_stub);
+            const bool af_set = (flags & (1u << 4)) != 0;
+            const bool pf_set = (flags & (1u << 2)) != 0;
+            /* INC 0x0F produces 0x10 -> half-carry AF=1, odd parity PF=0 */
+            return (!af_set || pf_set);
+        };
+
+        if (check_alu_flags()) {
+            vma_debug("EMULATION: ALU flags not preserved");
+            return true;
+        }
+
+        /* 5. x87 80-Bit extended-precision storage integrity */
+        auto check_x87_precision = []() noexcept -> bool {
+            const u32 status = memory::execute_ret(x87_precision_stub);
+            /* If truncated to 64-bit double, lowest 11 bits are lost -> diff == 0.0 -> C3 (bit 14) is set */
+            return ((status & (1u << 14)) != 0);
+        };
+
+        if (check_x87_precision()) {
+            vma_debug("EMULATION: Detected emulation of x87 extended precision");
+            return true;
+        }
+
+        /* 6. FPU status word stack overflow & condition flags */
+        auto check_x87_overflow = []() noexcept -> bool {
+            const u32 sw = memory::execute_ret(fpu_overflow_stub);
+            /* Physical x87 sets IE (bit 0), SF (bit 6), and C1 (bit 9) -> mask 0x0241 */
+            const u32 expected_mask = (1u << 0) | (1u << 6) | (1u << 9);
+            return ((sw & expected_mask) != expected_mask);
+        };
+
+        if (check_x87_overflow()) {
+            vma_debug("EMULATION: Detected FPU overflow");
+            return true;
+        }
+
+    #endif
+        return false;
+    }
     /*
      * ADD NEW TECHNIQUE FUNCTION HERE
      */
@@ -17395,6 +17735,7 @@ public:
             case MEASURED_BOOT: return "MEASURED_BOOT";
             case TPM: return "TPM";
             case VCPU_SCHEDULING: return "VCPU_SCHEDULING";
+            case EMULATION: return "EMULATION";
             /* END OF TECHNIQUE LIST */
             case DEFAULT: return "DEFAULT"; 
             case ALL: return "ALL"; 
@@ -17839,6 +18180,7 @@ std::array<VM::core::technique, VM::enum_size + 1> VM::core::technique_table = [
             {VM::DRIVERS, {100, VM::drivers}},
             {VM::HANDLES, {100, VM::device_handles}},
             {VM::KERNEL_OBJECTS, {100, VM::kernel_objects}},
+            {VM::EMULATION, {100, VM::emulation}},
             {VM::DLL, {50, VM::dll}},
             {VM::DISPLAY, {25, VM::display}},
             {VM::VIRTUAL_REGISTRY, {90, VM::virtual_registry}},

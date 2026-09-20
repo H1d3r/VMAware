@@ -602,6 +602,7 @@ void general(bool high_threshold, bool all, bool dynamic, const char* output_fil
     checker(VM::TPM, "TPM");
     checker(VM::HYPERVISOR_HOOK, "EPT/NPT hooking");
     checker(VM::VCPU_SCHEDULING, "vCPU scheduling");
+    checker(VM::EMULATION, "instruction emulation");
     checker(VM::TIMER, "timing anomalies");
 
     const auto t2 = std::chrono::high_resolution_clock::now();
