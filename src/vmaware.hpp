@@ -1100,7 +1100,7 @@ public:
     static u16 technique_count; /* get total number of techniques */
 
     static std::vector<enum_flags> disabled_techniques;
-    static constexpr std::array<enum_flags, 1> experimental_techniques{ { FIRMWARE } };
+    static constexpr std::array<enum_flags, 2> experimental_techniques{ { VCPU_SCHEDULING, EMULATION } };
 
     using brand_score_t = i32;
 
