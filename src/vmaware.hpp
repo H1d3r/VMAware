@@ -5580,7 +5580,7 @@ public:
                 using nt_query_sysinfo_fn = NTSTATUS(__stdcall*)(ULONG, PVOID, ULONG, PULONG);
                 nt_query_sysinfo_fn nt_query_system_information = reinterpret_cast<nt_query_sysinfo_fn>(functions[0]);
                 if (!nt_query_system_information) {
-                    return false;
+                    return true;
                 }
 
                 struct entry_struct { ULONG Tag; ULONG PA; ULONG PF; SIZE_T PU; ULONG NPA; ULONG NPF; SIZE_T NPU; };
@@ -5608,13 +5608,13 @@ public:
 
                 if (!NT_SUCCESS(status)) {
                     HeapFree(heap, 0, buffer);
-                    return false;
+                    return true;
                 }
 
                 constexpr size_t header_offset = offsetof(info_struct, TagInfo);
                 if (needed < header_offset) {
                     HeapFree(heap, 0, buffer);
-                    return false;
+                    return true;
                 }
 
                 bool found = false;
