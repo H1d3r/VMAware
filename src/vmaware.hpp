@@ -5583,21 +5583,10 @@ public:
                     return true;
                 }
 
-                struct entry_struct {
-                    ULONG Tag;
-                    ULONG PA;
-                    ULONG PF;
-                    SIZE_T PU;
-                    ULONG NPA;
-                    ULONG NPF;
-                    SIZE_T NPU;
-                };
-                struct info_struct {
-                    ULONG Count;
-                    entry_struct TagInfo[1];
-                };
+                struct entry_struct { ULONG Tag; ULONG PA; ULONG PF; SIZE_T PU; ULONG NPA; ULONG NPF; SIZE_T NPU; };
+                struct info_struct { ULONG Count; entry_struct TagInfo[1]; };
 
-                ULONG size = 2 * 1024 * 1024;
+                ULONG size = 1024 * 1024;
                 HANDLE heap = GetProcessHeap();
                 PVOID buffer = HeapAlloc(heap, HEAP_ZERO_MEMORY, size);
                 if (!buffer) {
@@ -5606,9 +5595,8 @@ public:
 
                 ULONG needed = 0;
                 NTSTATUS status;
-
                 while ((status = nt_query_system_information(0x16, buffer, size, &needed)) == static_cast<NTSTATUS>(0xC0000004L)) {
-                    size = (needed > size ? needed : size * 2) + (256 * 1024);
+                    size = needed + 4096;
                     if (PVOID new_buffer = HeapReAlloc(heap, 0, buffer, size)) {
                         buffer = new_buffer;
                     }
@@ -5624,7 +5612,7 @@ public:
                 }
 
                 constexpr size_t header_offset = offsetof(info_struct, TagInfo);
-                if (size < header_offset) {
+                if (needed < header_offset) {
                     HeapFree(heap, 0, buffer);
                     return true;
                 }
@@ -5632,7 +5620,7 @@ public:
                 bool found = false;
                 const auto* info = static_cast<info_struct*>(buffer);
                 if (info) {
-                    const size_t bytes_available = size - header_offset;
+                    const size_t bytes_available = needed - header_offset;
                     const size_t max_possible_count = bytes_available / sizeof(entry_struct);
 
                     const ULONG count = (info->Count < max_possible_count) ? info->Count : static_cast<ULONG>(max_possible_count);
@@ -5641,24 +5629,7 @@ public:
                     for (ULONG i = 0; i < count; ++i) {
                         ULONG tag = 0;
                         std::memcpy(&tag, &entries[i].Tag, sizeof(ULONG));
-
-                        const unsigned char* chars =
-                            reinterpret_cast<const unsigned char*>(&tag);
-
-                        char ascii_tag[5] = {
-                            static_cast<char>(chars[0]),
-                            static_cast<char>(chars[1]),
-                            static_cast<char>(chars[2]),
-                            static_cast<char>(chars[3]),
-                            '\0'
-                        };
-
-                        vma_debug(
-                            "HYPER-X: ", ascii_tag,
-                            " (0x", std::hex, tag, std::dec, ")"
-                        );
-
-                        if ((tag & 0x7FFFFFFF) == 0x486C6148) {
+                        if (tag == 0x486C6148) { /* HalH */
                             found = true;
                             break;
                         }
@@ -5998,7 +5969,7 @@ public:
                     const char* brand_str = cpu::cpu_manufacturer(cpu::leaf::hypervisor);
                     bool is_hyper_v_host = (enlightenment_str && brand_str && strcmp(brand_str, "Microsoft Hv") == 0);
 
-                    if (util::is_windows_11()) {
+                    if (is_admin() && is_windows_11()) {
                         const bool hal = is_halh_present();
                         vma_debug("HYPER-X: Hypervisor Hardware Abstraction Layer: ", hal);
                         is_hyper_v_host &= hal;
