@@ -4,9 +4,13 @@
 #include <fstream>
 #include <cstdint>
 #include <cstddef>
+#include <climits>
 
 #if defined(_WIN32) || defined(_WIN64)
 #   define VMAWARE_WINDOWS 1
+#   ifndef NOMINMAX
+#       define NOMINMAX 1
+#   endif
 #endif
 
 #if defined(__APPLE__)
@@ -14,15 +18,16 @@
 #endif
 
 #if defined(VMAWARE_WINDOWS) || (defined(CLI_WINDOWS) && CLI_WINDOWS)
-#include <windows.h>
+#   include <windows.h>
 #elif defined(VMAWARE_APPLE) || (defined(CLI_APPLE) && CLI_APPLE)
-#include <mach-o/dyld.h>
-#include <climits>
-#include <cstdlib>
+#   include <mach-o/dyld.h>
+#   include <cstdlib>
 #else
-#include <unistd.h>
-#include <linux/limits.h>
-#include <cstdlib>
+#   include <unistd.h>
+#   include <cstdlib>
+#   if defined(__linux__)
+#       include <linux/limits.h>
+#   endif
 #endif
 
 using u8 = std::uint8_t;
@@ -57,23 +62,23 @@ constexpr u32 sha256::maj(const u32 x, const u32 y, const u32 z) noexcept {
     return (x & y) ^ (x & z) ^ (y & z);
 }
 
-u32 sha256::ep0(const u32 x) noexcept {
+constexpr u32 sha256::ep0(const u32 x) noexcept {
     return rotr(x, 2) ^ rotr(x, 13) ^ rotr(x, 22);
 }
 
-u32 sha256::ep1(const u32 x) noexcept {
+constexpr u32 sha256::ep1(const u32 x) noexcept {
     return rotr(x, 6) ^ rotr(x, 11) ^ rotr(x, 25);
 }
 
-u32 sha256::sig0(const u32 x) noexcept {
+constexpr u32 sha256::sig0(const u32 x) noexcept {
     return rotr(x, 7) ^ rotr(x, 18) ^ (x >> 3);
 }
 
-u32 sha256::sig1(const u32 x) noexcept {
+constexpr u32 sha256::sig1(const u32 x) noexcept {
     return rotr(x, 17) ^ rotr(x, 19) ^ (x >> 10);
 }
 
-void sha256::transform() {
+void sha256::transform() noexcept {
     static const u32 k[64] = {
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
         0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -254,7 +259,7 @@ std::string compute_self_sha256() {
 
     sha256 sha;
 
-    const size_t chunk_size = 64U * 1024U;
+    constexpr size_t chunk_size = 64U * 1024U;
     std::vector<char> chunk(chunk_size);
 
     while (ifs) {
@@ -281,7 +286,3 @@ std::string compute_self_sha256() {
 
     return out;
 }
-
-#if defined(_MSC_VER)
-#   pragma warning(pop)
-#endif

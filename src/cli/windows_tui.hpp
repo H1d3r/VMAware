@@ -45,7 +45,6 @@
             win_ansi_enabler_t(win_ansi_enabler_t&&) = delete;
             win_ansi_enabler_t& operator=(win_ansi_enabler_t&&) = delete;
         private:
-            win_ansi_enabler_t(win_ansi_enabler_t const&) = delete;
             bool m_set;
             DWORD m_old;
             HANDLE m_out;
@@ -53,10 +52,15 @@
 
         // safely trims and pads a string ensuring it fits perfectly within bounds
         // without leaking unclosed ANSI tags or overflowing text visually
-        inline std::string pad(const std::string& str, const size_t target_len) noexcept {
+        inline std::string pad(const std::string& str, const size_t target_len) {
             size_t vlen = 0;
             bool in_ansi = false;
             std::string result;
+
+            if (target_len < 4096) {
+                result.reserve(str.size() + target_len);
+            }
+
             for (const char c : str) {
                 if (c == '\x1B') {
                     in_ansi = true;
@@ -67,7 +71,8 @@
                         result += c;
                         vlen++;
                     }
-                } else {
+                }
+                else {
                     result += c;
                     if (c == 'm') {
                         in_ansi = false;
@@ -76,11 +81,12 @@
             }
 
             if (vlen < target_len) {
-                result += std::string(target_len - vlen, ' ');
+                const size_t pad_amount = target_len - vlen;
+                result.append(pad_amount, ' ');
             }
 
             if (vlen >= target_len) {
-                result += "\x1B[0m"; // ensure sequences are closed if string gets sliced
+                result += "\x1B[0m"; 
             }
 
             return result;
@@ -89,7 +95,7 @@
         inline size_t visible_length(const std::string& str) noexcept {
             size_t len = 0;
             bool in_ansi = false;
-            for (char c : str) {
+            for (const char c : str) {
                 if (c == '\x1B') {
                     in_ansi = true;
                 } else if (in_ansi && c == 'm') {
@@ -143,7 +149,7 @@
             u32 g_max_hyp = 0;
             u32 g_max_ext = 0;
 
-            bool set_cursor(SHORT x, SHORT y) const;
+            bool set_cursor(const SHORT x, const SHORT y) const noexcept;
             bool update_box_width(size_t incoming_len);
             void init();
             ~tui_manager();

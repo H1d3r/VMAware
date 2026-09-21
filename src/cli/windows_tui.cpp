@@ -23,7 +23,7 @@ tui_manager g_tui;
 // Tracks the deepest Y coordinate the right-hand boxes reach to prevent overlapping text at the end
 static SHORT g_right_bottom_y = 0;
 
-bool tui_manager::set_cursor(SHORT x, SHORT y) const noexcept {
+bool tui_manager::set_cursor(const SHORT x, const SHORT y) const noexcept {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     GetConsoleScreenBufferInfo(hOut, &csbi);
 
@@ -552,22 +552,25 @@ void tui_manager::draw_summary_box(const std::vector<std::string>& lines) {
         max_len = std::max(max_len, visible_length(l));
     }
 
-    SHORT box_width = static_cast<SHORT>(std::max(static_cast<size_t>(80), max_len + 4));
+    size_t box_width = std::max(static_cast<size_t>(80), max_len + 4);
 
-    if (box_width >= console_width - 2) {
-        box_width = std::max<SHORT>(40, static_cast<SHORT>(console_width - 2));
+    if (console_width > 2 && box_width >= static_cast<size_t>(console_width - 2)) {
+        const size_t max_allowed_width = static_cast<size_t>(console_width - 2);
+        box_width = std::max(static_cast<size_t>(40), max_allowed_width);
     }
 
     set_cursor(left_margin, draw_y++);
-    *raw_out << dim << "┌" << repeat_str("─", static_cast<size_t>(box_width)) << "┐" << ansi_exit << "\n";
+    *raw_out << dim << "┌" << repeat_str("─", box_width) << "┐" << ansi_exit << "\n";
+
+    const size_t content_width = (box_width >= 2) ? (box_width - 2) : 0;
 
     for (const auto& line : lines) {
         set_cursor(left_margin, draw_y++);
-        *raw_out << dim << "│ " << ansi_exit << pad(line, static_cast<size_t>(box_width - 2)) << dim << " │" << ansi_exit << "\n";
+        *raw_out << dim << "│ " << ansi_exit << pad(line, content_width) << dim << " │" << ansi_exit << "\n";
     }
 
     set_cursor(left_margin, draw_y++);
-    *raw_out << dim << "└" << repeat_str("─", static_cast<size_t>(box_width)) << "┘" << ansi_exit << "\n";
+    *raw_out << dim << "└" << repeat_str("─", box_width) << "┘" << ansi_exit << "\n";
 
     left_y = draw_y;
 }
@@ -722,9 +725,5 @@ LONG WINAPI exception_handler_logger(PEXCEPTION_POINTERS ep) {
 
     return EXCEPTION_CONTINUE_SEARCH;
 }
-
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
 
 #endif
