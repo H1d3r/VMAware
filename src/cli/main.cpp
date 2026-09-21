@@ -191,6 +191,10 @@ static void enable_crt_leak_check()
 #endif
 
 int main(int argc, char* argv[]) {
+    if (argv == nullptr || argc <= 0) {
+        return 1;
+    }
+
 #if (CLI_WINDOWS && !CLI_ARM)
     #ifdef VMAWARE_DEBUG
         enable_crt_leak_check();

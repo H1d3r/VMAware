@@ -5210,7 +5210,7 @@ public:
         static VMAWARE_CONSTEXPR void print_to_stream(std::ostringstream&) noexcept {}
 
         template <typename... Args>
-        static void print_to_stream(std::ostringstream& oss, Args&&... args) noexcept {
+        static void print_to_stream(std::ostringstream& oss, Args&&... args) {
             using expander = int[];
             (void)expander {
                 0,
@@ -10795,8 +10795,8 @@ public:
                 }
                 else {
                     SIZE_T region_size = total_size;
-                    NTSTATUS query_st = nt_allocate_virtual_memory(current_process, &allocation_base, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-                    if (!NT_SUCCESS(query_st) || allocation_base == nullptr) {
+                    NTSTATUS query_status = nt_allocate_virtual_memory(current_process, &allocation_base, 0, &region_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                    if (!NT_SUCCESS(query_status) || allocation_base == nullptr) {
                         return false;
                     }
                     dynamic_allocated = true;
@@ -10806,24 +10806,24 @@ public:
                 *reinterpret_cast<protocol_query*>(allocation_base) = qpacket;
 
                 IO_STATUS_BLOCK query_iosb{};
-                NTSTATUS query_st = nt_device_io_control_file(dev, nullptr, nullptr, nullptr, &query_iosb,
+                NTSTATUS query_status = nt_device_io_control_file(dev, nullptr, nullptr, nullptr, &query_iosb,
                     IOCTL_STORAGE_QUERY_PROPERTY,
                     allocation_base, static_cast<ULONG>(total_size),
                     allocation_base, static_cast<ULONG>(total_size));
 
                 /* If STATUS_PENDING wait fails */
-                if (query_st == static_cast<NTSTATUS>(0x00000103L)) {
+                if (query_status == static_cast<NTSTATUS>(0x00000103L)) {
                     NTSTATUS wait_st = nt_wait_for_single_object(dev, FALSE, nullptr);
                     if (NT_SUCCESS(wait_st)) {
-                        query_st = query_iosb.Status;
+                        query_status = query_iosb.Status;
                     }
                     else {
-                        query_st = static_cast<NTSTATUS>(0xC0000001L); /* STATUS_UNSUCCESSFUL */
+                        query_status = static_cast<NTSTATUS>(0xC0000001L); /* STATUS_UNSUCCESSFUL */
                     }
                 }
 
                 bool success = false;
-                if (NT_SUCCESS(query_st)) {
+                if (NT_SUCCESS(query_status)) {
                     const size_t valid_len = (query_iosb.Information < total_size)
                         ? static_cast<size_t>(query_iosb.Information)
                         : total_size;
@@ -11207,8 +11207,7 @@ public:
      * @category MacOS
      * @implements VM::HWMODEL
      */
-    [[nodiscard]] static bool hwmodel() {
-        
+    [[nodiscard]] static bool hwmodel() {      
         /* Hw.model strings are short (like for example MacBookPro16,1), 128 bytes is plenty */
         char buffer[128] = { 0 };
         size_t size = sizeof(buffer);

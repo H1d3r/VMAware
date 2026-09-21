@@ -26,7 +26,7 @@
         class win_ansi_enabler_t
         {
         public:
-            win_ansi_enabler_t() : m_set(FALSE), m_old(0), m_out(GetStdHandle(STD_OUTPUT_HANDLE))
+            win_ansi_enabler_t() noexcept : m_set(FALSE), m_old(0), m_out(GetStdHandle(STD_OUTPUT_HANDLE))
             {
                 if (m_out != nullptr && m_out != INVALID_HANDLE_VALUE) {
                     if (GetConsoleMode(m_out, &m_old) != FALSE) {
@@ -39,6 +39,11 @@
                     SetConsoleMode(m_out, m_old);
                 }
             }
+
+            win_ansi_enabler_t(const win_ansi_enabler_t&) = delete;
+            win_ansi_enabler_t& operator=(const win_ansi_enabler_t&) = delete;
+            win_ansi_enabler_t(win_ansi_enabler_t&&) = delete;
+            win_ansi_enabler_t& operator=(win_ansi_enabler_t&&) = delete;
         private:
             win_ansi_enabler_t(win_ansi_enabler_t const&) = delete;
             bool m_set;
@@ -48,11 +53,11 @@
 
         // safely trims and pads a string ensuring it fits perfectly within bounds
         // without leaking unclosed ANSI tags or overflowing text visually
-        inline std::string pad(const std::string& str, size_t target_len) noexcept {
+        inline std::string pad(const std::string& str, const size_t target_len) noexcept {
             size_t vlen = 0;
             bool in_ansi = false;
             std::string result;
-            for (char c : str) {
+            for (const char c : str) {
                 if (c == '\x1B') {
                     in_ansi = true;
                 }
@@ -81,7 +86,7 @@
             return result;
         }
 
-        inline size_t visible_length(const std::string& str) {
+        inline size_t visible_length(const std::string& str) noexcept {
             size_t len = 0;
             bool in_ansi = false;
             for (char c : str) {
