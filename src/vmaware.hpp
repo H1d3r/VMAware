@@ -9810,7 +9810,7 @@ public:
                             0x10, 0x12, 0x5C, 0x2E, 0x5F, 0x47, 0x50, 0x45, 0x08, 0x5F, 0x48, 0x49, 0x44, 0x0D, 'A', 'C', 'P', 'I', '0', '0', '0', '6'
                         };
                         /* Wildcard scope container pattern */
-                        if (find_pattern(reinterpret_cast<const char*>(&gpe_acpi0006[8]), 14)) {
+                        if (find_pattern(reinterpret_cast<const char*>(gpe_acpi0006 + 8), 14)) {
                             vma_debug("FIRMWARE: Detected QEMU ACPI0006 declaration directly in GPE scope");
                             return core::add(brand_enum::QEMU);
                         }
