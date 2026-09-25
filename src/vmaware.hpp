@@ -9825,6 +9825,104 @@ public:
                             return core::add(brand_enum::QEMU);
                         }
                     }
+
+                    /* PCI0._CRS I/O Port Exclusion & VGA MMIO Layout */
+                    {
+                        constexpr u8 qemu_pci0_crs_signature[] = {
+                            0x47, 0x01, 0xF8, 0x0C, 0xF8, 0x0C, 0x01, 0x08, // IO Port 0xCF8-0xCFF
+                            0x88, 0x0D, 0x00, 0x01, 0x0C, 0x03, 0x00, 0x00, // WordIO 0x0000-0x0CF7
+                            0x00, 0x00, 0xF7, 0x0C, 0x00, 0x00, 0xF8, 0x0C,
+                            0x88, 0x0D, 0x00, 0x01, 0x0C, 0x03, 0x00, 0x00, // WordIO 0x0D00-0xFFFF
+                            0x00, 0x0D, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xF3,
+                            0x87, 0x17, 0x00, 0x00, 0x0C, 0x03, 0x00, 0x00, // DWordMemory 0x000A0000-0x000BFFFF
+                            0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0xFF, 0xFF,
+                            0x0B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                            0x02, 0x00
+                        };
+
+                        if (find_pattern(reinterpret_cast<const char*>(qemu_pci0_crs_signature), sizeof(qemu_pci0_crs_signature))) {
+                            vma_debug("FIRMWARE: Detected QEMU PCI0._CRS I/O exclusion and VGA MMIO layout");
+                            return core::add(brand_enum::QEMU);
+                        }
+                    }
+
+                    /* Synthetic GSI Link Devices (GSIA-GSIH) with empty _DIS/_SRS and fixed GSI descriptors */
+                    {
+                        /* Extended Interrupt Descriptor for GSI 16 (0x10): Len 6, Active-High/Level, IRQ 16 */
+                        constexpr u8 gsi16_descriptor[] = {
+                            0x89, 0x06, 0x00, 0x09, 0x01, 0x10, 0x00, 0x00, 0x00, 0x79, 0x00
+                        };
+                        /* Empty _DIS stub: MethodOp, PkgLen 0x06, '_DIS', Flags 0x00 */
+                        constexpr u8 empty_dis_stub[] = { 0x14, 0x06, 0x5F, 0x44, 0x49, 0x53, 0x00 };
+                        /* Empty _SRS stub: MethodOp, PkgLen 0x07, '_SRS', Flags 0x01 */
+                        constexpr u8 empty_srs_stub[] = { 0x14, 0x07, 0x5F, 0x53, 0x52, 0x53, 0x01 };
+
+                        if (find_pattern(reinterpret_cast<const char*>(gsi16_descriptor), sizeof(gsi16_descriptor)) &&
+                            find_pattern(reinterpret_cast<const char*>(empty_dis_stub), sizeof(empty_dis_stub)) &&
+                            find_pattern(reinterpret_cast<const char*>(empty_srs_stub), sizeof(empty_srs_stub))) {
+                            vma_debug("FIRMWARE: Detected QEMU synthetic GSI link device structure (GSIA-GSIH)");
+                            return core::add(brand_enum::QEMU);
+                        }
+                    }
+
+                    /* PCIe Root Bridge _OSC Capability Masking (Local0 &= 0x1F and CDW1 |= 0x10) */
+                    {
+                        /* Host Bridge UUID: 33db4d5b-1ff7-401c-9657-7441c03dd766 */
+                        constexpr u8 pci_host_bridge_uuid[] = {
+                            0x5B, 0x4D, 0xDB, 0x33, 0xF7, 0x1F, 0x1C, 0x40,
+                            0x96, 0x57, 0x74, 0x41, 0xC0, 0x3D, 0xD7, 0x66
+                        };
+                        /* AndOp (0x7B), CDW3, BytePrefix (0x0A), 0x1F, Local0 (0x60) */
+                        constexpr u8 osc_and_mask_sig[] = {
+                            0x7B, 0x43, 0x44, 0x57, 0x33, 0x0A, 0x1F, 0x60
+                        };
+
+                        if (find_pattern(reinterpret_cast<const char*>(pci_host_bridge_uuid), sizeof(pci_host_bridge_uuid)) &&
+                            find_pattern(reinterpret_cast<const char*>(osc_and_mask_sig), sizeof(osc_and_mask_sig))) {
+                            vma_debug("FIRMWARE: Detected QEMU PCIe _OSC capability masking implementation");
+                            return core::add(brand_enum::QEMU);
+                        }
+                    }
+
+                    /* 5-argument EDSM PCI Device-Labeling Helper Method */
+                    {
+                        /* MethodOp (0x14), length wildcard skipped, 'E', 'D', 'S', 'M', Flags 0x05 (5 args, serialized) */
+                        constexpr u8 edsm_decl[] = { 'E', 'D', 'S', 'M', 0x05 };
+                        /* Device Labeling UUID: e5c937d0-3553-4d7a-9117-ea4d19c3434d */
+                        constexpr u8 device_labeling_uuid[] = {
+                            0xD0, 0x37, 0xC9, 0xE5, 0x53, 0x35, 0x7A, 0x4D,
+                            0x91, 0x17, 0xEA, 0x4D, 0x19, 0xC3, 0x43, 0x4D
+                        };
+
+                        if (find_pattern(reinterpret_cast<const char*>(edsm_decl), sizeof(edsm_decl)) &&
+                            find_pattern(reinterpret_cast<const char*>(device_labeling_uuid), sizeof(device_labeling_uuid))) {
+                            vma_debug("FIRMWARE: Detected QEMU EDSM device-labeling helper method");
+                            return core::add(brand_enum::QEMU);
+                        }
+                    }
+
+                    /* PIRQ Link Devices _PRS Descriptor (Fixed IRQs 5, 10, 11) */
+                    {
+                        /* Extended Interrupt Descriptor: Length 14, 3 interrupts: 5, 10, 11 */
+                        constexpr u8 pirq_prs_irqs[] = {
+                            0x89, 0x0E, 0x00, 0x09, 0x03,
+                            0x05, 0x00, 0x00, 0x00,
+                            0x0A, 0x00, 0x00, 0x00,
+                            0x0B, 0x00, 0x00, 0x00,
+                            0x79, 0x00
+                        };
+
+                        /* OperationRegion (PIRQ, PCI_Config, 0x60, 0x0C) */
+                        constexpr u8 pirq_opregion[] = {
+                            0x5B, 0x80, 'P', 'I', 'R', 'Q', 0x02, 0x0A, 0x60, 0x0A, 0x0C
+                        };
+
+                        if (find_pattern(reinterpret_cast<const char*>(pirq_prs_irqs), sizeof(pirq_prs_irqs)) &&
+                            find_pattern(reinterpret_cast<const char*>(pirq_opregion), sizeof(pirq_opregion))) {
+                            vma_debug("FIRMWARE: Detected QEMU PIRQ router OperationRegion and fixed IRQ 5/10/11 _PRS descriptor");
+                            return core::add(brand_enum::QEMU);
+                        }
+                    }
                 }
             }
 
@@ -10989,7 +11087,7 @@ public:
                 const bool lacks_self_test = (oacs & (1 << 4)) == 0;
 
                 if (supports_virtualization_mgmt && supports_namespace_mgmt && lacks_self_test) {
-                    vma_debug("NVME_HEURISTIC: Virtual OACS signature detected");
+                    vma_debug("DISK: Virtual OACS signature detected");
                     return true;
                 }
             }
@@ -11011,7 +11109,7 @@ public:
                         }
                     }
                     if (has_metadata_option) {
-                        vma_debug("NVME_HEURISTIC: Synthetic LBA structure with metadata option detected");
+                        vma_debug("DISK: Synthetic LBA structure with metadata option detected");
                         return core::add(brand_enum::QEMU);
                     }
                 }
