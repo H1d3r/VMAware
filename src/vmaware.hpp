@@ -11095,7 +11095,7 @@ public:
             /* Verify if the drive supports exactly 8 formats containing metadata, enabled logical sectors */
             BYTE identify_ns[4096];
             RtlZeroMemory(identify_ns, sizeof(identify_ns));
-            if (query_protocol(StorageDeviceProtocolSpecificProperty, 1, 0x00, 1, identify_ns, sizeof(identify_ns))) {
+            if (query_protocol(StorageAdapterProtocolSpecificProperty, 1, 0x00, 1, identify_ns, sizeof(identify_ns))) {
                 const u8 nlbaf = identify_ns[25]; /* Number of LBA Formats (0 - based) */
                 if (nlbaf == 7) { /* 8 available formats */
                     bool has_metadata_option = false;
