@@ -3831,7 +3831,7 @@ public:
 
                 /* Ensure target group has at least 2 active CPUs */
                 if (util::popcount(static_cast<u64>(active_group_aff.Mask)) < 2) {
-                    const WORD group_count = GetActiveProcessorGroupCount();
+                    const WORD group_count = GetActiveProcessorCount(0) ? GetActiveProcessorGroupCount() : 0;
                     for (WORD g = 0; g < group_count; ++g) {
                         const DWORD c = GetActiveProcessorCount(g);
                         if (c >= 2) {
@@ -3905,7 +3905,7 @@ public:
                 while (offset + sizeof(LOGICAL_PROCESSOR_RELATIONSHIP) + sizeof(DWORD) <= len) {
                     auto* ptr = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(
                         raw_topo_buffer + offset
-                    );
+                        );
 
                     if (ptr->Size == 0 || offset + ptr->Size > len) {
                         break;
@@ -4190,8 +4190,13 @@ public:
                     }
                 }
 
-                DWORD best_logical = 0xFFFFFFFFu;
-                int best_score = (std::numeric_limits<int>::min)();
+                struct candidate_entry {
+                    DWORD logical = 0xFFFFFFFFu;
+                    int score = 0;
+                };
+
+                candidate_entry candidates[64]{};
+                DWORD candidate_count = 0;
 
                 for (DWORD i = 0; i < active_cpu_count; ++i) {
                     const DWORD logical = idxs[i];
@@ -4252,14 +4257,118 @@ public:
                         score -= 50;
                     }
 
-                    if (score > best_score) {
-                        best_score = score;
-                        best_logical = logical;
+                    candidates[candidate_count].logical = logical;
+                    candidates[candidate_count].score = score;
+                    candidate_count++;
+                }
+
+                if (candidate_count == 0) {
+                    return {};
+                }
+
+                for (DWORD i = 0; i < candidate_count - 1; ++i) {
+                    for (DWORD j = i + 1; j < candidate_count; ++j) {
+                        if (candidates[j].score > candidates[i].score) {
+                            const auto tmp = candidates[i];
+                            candidates[i] = candidates[j];
+                            candidates[j] = tmp;
+                        }
                     }
                 }
 
-                if (best_logical == 0xFFFFFFFFu) {
-                    return {};
+                DWORD best_logical = candidates[0].logical;
+
+                if (candidate_count > 1) {
+                    const DWORD probe_count = (candidate_count < 4) ? candidate_count : 4;
+
+                    alignas(64) struct {
+                        volatile u64 counter{ 0 };
+                        std::atomic<bool> start{ false };
+                        std::atomic<bool> done{ false };
+                    } calibration_state;
+
+                    GROUP_AFFINITY calib_counter_aff{};
+                    calib_counter_aff.Group = target_group;
+                    calib_counter_aff.Mask = static_cast<KAFFINITY>(1ull << counter_logical);
+
+                    std::thread calibration_thread([&]() noexcept {
+                        SetThreadGroupAffinity(current_thread, &calib_counter_aff, nullptr);
+                        SetThreadPriority(current_thread, THREAD_PRIORITY_HIGHEST);
+                        SetThreadPriorityBoost(current_thread, TRUE);
+
+                        while (!calibration_state.start.load(std::memory_order_acquire)) {}
+
+                        u64 local_c = 0;
+                        while (!calibration_state.done.load(std::memory_order_relaxed)) {
+                            local_c++; calibration_state.counter = local_c;
+                            local_c++; calibration_state.counter = local_c;
+                            local_c++; calibration_state.counter = local_c;
+                            local_c++; calibration_state.counter = local_c;
+                            local_c++; calibration_state.counter = local_c;
+                            local_c++; calibration_state.counter = local_c;
+                            local_c++; calibration_state.counter = local_c;
+                            local_c++; calibration_state.counter = local_c;
+                        }
+                    });
+
+                    calibration_state.start.store(true, std::memory_order_release);
+
+                    GROUP_AFFINITY orig_thread_aff{};
+                    GetThreadGroupAffinity(current_thread, &orig_thread_aff);
+                    if (!orig_thread_aff.Mask) {
+                        orig_thread_aff = active_group_aff;
+                    }
+
+                    u64 best_metric = (std::numeric_limits<u64>::max)();
+                    volatile const u64* const c_ptr = &calibration_state.counter;
+
+                    for (DWORD c = 0; c < probe_count; ++c) {
+                        const DWORD cand_logical = candidates[c].logical;
+                        GROUP_AFFINITY cand_aff{};
+                        cand_aff.Group = target_group;
+                        cand_aff.Mask = static_cast<KAFFINITY>(1ull << cand_logical);
+                        SetThreadGroupAffinity(current_thread, &cand_aff, nullptr);
+
+                        u64 min_d = (std::numeric_limits<u64>::max)();
+                        u64 max_d = 0;
+                        size_t samples = 0;
+
+                        for (int p = 0; p < 32; ++p) {
+                            u64 sync = *c_ptr;
+                            size_t spins = 0;
+                            while (*c_ptr == sync && ++spins < 1000000);
+                            sync = *c_ptr;
+                            spins = 0;
+                            while (*c_ptr == sync && ++spins < 1000000);
+
+                            u64 t0 = *c_ptr;
+                            std::atomic_signal_fence(std::memory_order_acq_rel);
+                            _mm_lfence();
+                            std::atomic_signal_fence(std::memory_order_acq_rel);
+                            u64 t1 = *c_ptr;
+
+                            if (t1 > t0) {
+                                const u64 d = t1 - t0;
+                                if (d < min_d) min_d = d;
+                                if (d > max_d) max_d = d;
+                                samples++;
+                            }
+                        }
+
+                        if (samples >= 16) {
+                            const u64 jitter = max_d - min_d;
+                            const u64 metric = jitter + min_d;
+                            if (metric < best_metric) {
+                                best_metric = metric;
+                                best_logical = cand_logical;
+                            }
+                        }
+                    }
+
+                    calibration_state.done.store(true, std::memory_order_release);
+                    calibration_thread.join();
+
+                    SetThreadGroupAffinity(current_thread, &orig_thread_aff, nullptr);
                 }
 
                 vma_debug("TIMER: Measurement thread -> CPU ", best_logical, " | Counter thread -> CPU ", counter_logical);
